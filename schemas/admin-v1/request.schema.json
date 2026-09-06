@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/watchdog-admin-v1/request.schema.json",
+  "title": "watchdog-admin-v1 request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "request_id", "idempotency_key", "capability", "token", "deadline_ms", "command"],
+  "properties": {
+    "contract": {"const": "watchdog-admin-v1"},
+    "request_id": {"type": "string", "format": "uuid", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:/-]+$"},
+    "capability": {"enum": ["read", "admin"]},
+    "token": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[\\x21-\\x7e]+$"},
+    "deadline_ms": {"type": "integer", "minimum": 1, "maximum": 30000},
+    "command": {"$ref": "#/$defs/command"}
+  },
+  "$defs": {
+    "empty": {"type": "object", "additionalProperties": false},
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:/-]+$"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "command": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "status"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "start"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "pause"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "resume"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "drain"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "stop"}, "params": {"$ref": "#/$defs/empty"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "jobs"}, "params": {"type": "object", "additionalProperties": false, "properties": {"filter": {"enum": ["all", "queued", "running", "completed", "failed", "quarantined"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "attempt"}, "params": {"type": "object", "additionalProperties": false, "required": ["attempt_id"], "properties": {"attempt_id": {"$ref": "#/$defs/id"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "quarantine"}, "params": {"type": "object", "additionalProperties": false, "required": ["attempt_id", "reason"], "properties": {"attempt_id": {"$ref": "#/$defs/id"}, "reason": {"type": "string", "minLength": 1, "maxLength": 512}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "retry"}, "params": {"type": "object", "additionalProperties": false, "required": ["attempt_id", "policy"], "properties": {"attempt_id": {"$ref": "#/$defs/id"}, "policy": {"enum": ["requeue", "reconstruction"]}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "reconcile"}, "params": {"type": "object", "additionalProperties": false, "required": ["target"], "properties": {"target": {"enum": ["deployment", "component", "job", "attempt"]}, "id": {"$ref": "#/$defs/id"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "backup"}, "params": {"type": "object", "additionalProperties": false, "required": ["backup_id"], "properties": {"backup_id": {"$ref": "#/$defs/id"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "restore"}, "params": {"type": "object", "additionalProperties": false, "required": ["backup_id", "rekey"], "properties": {"backup_id": {"$ref": "#/$defs/id"}, "rekey": {"const": true}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "release_inspect"}, "params": {"type": "object", "additionalProperties": false, "required": ["release_id"], "properties": {"release_id": {"$ref": "#/$defs/id"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "release_activate"}, "params": {"type": "object", "additionalProperties": false, "required": ["release_id", "expected_release_digest"], "properties": {"release_id": {"$ref": "#/$defs/id"}, "expected_release_digest": {"$ref": "#/$defs/digest"}}}}}
+      ]
+    }
+  }
+}
