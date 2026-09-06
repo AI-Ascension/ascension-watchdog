@@ -23,6 +23,30 @@ project settings are not represented as validated merely because schema generati
 accepted a command. The daemon version probe found no control socket; this does
 not mean the native active agents stopped.
 
+Confirmed subsequently: a bounded non-inference `codex --strict-config ...
+app-server --stdio` initialization and `config/read` returned enabled agents,
+thread limit 12, inherited max depth 3, default model `gpt-5.6-luna` and default
+effort `max`. The project default keys are supported. This diagnostic did not
+launch a model thread or change the current session's configuration.
+
+Capability failure: the architecture lead's actual available child tool surface
+does not expose the collaboration namespace. Its attempt to access spawning
+through the in-process tools object returned `TypeError: ...spawn_agent is not a
+function`. Only root-native depth-1 delegation is currently demonstrated. No
+alternate clients/providers or ancestry resets are permitted. Three descendant
+levels and depth-4 rejection are unmet, and full assignment completion cannot be
+claimed even if independent implementation succeeds.
+
+The project configuration and explicit lead/coordinator/leaf role files were
+parsed by the installed client. A fresh `config/read` with layers reports the
+project layer disabled because this newly created repository is not individually
+trusted. The effective diagnostic configuration therefore remains the global
+50-thread default. No trust, hook, permission or approval setting was changed to
+force loading. Native root spawn arguments still independently establish Luna/max;
+the root registry bounds actual descendants. Custom role selection is not exposed
+by the current root spawn schema, so the leaf's `agents.enabled = false` setting
+is prepared configuration, not observed leaf-tool enforcement.
+
 The original objective is preserved with a final newline added; no semantic text
 was changed. Original SHA-256:
 `ab09c59be36fe978ffb1122d9052fa3027bb4be60888e899f3484917bb3921f3`.

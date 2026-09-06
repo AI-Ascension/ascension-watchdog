@@ -1,0 +1,17 @@
+{
+  "classification": "confirmed",
+  "source": "native thread metadata and executed turn contexts, not agent self-description",
+  "root_thread_id": "01a078a4-d17d-7101-afa1-9e68655beedd",
+  "maximum_reserved_descendants": 12,
+  "observed_maximum_depth": 1,
+  "required_depth": 3,
+  "nested_status": "unmet: native spawning not exposed to descendants",
+  "agents": [
+    {"path":"/root/architecture","thread_id":"01a078b8-4e3d-75d2-aceb-ac70801cf138","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/verification","thread_id":"01a078bb-b469-7ed1-845e-d4cc92b57c5f","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/watchdog","thread_id":"01a078be-e26e-7970-bc65-f6cb983bd315","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/platform","thread_id":"01a078bf-27c6-71e1-b10c-c65510dd9c4c","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/gateway_host","thread_id":"01a078c3-052c-7330-a55b-bd72bbba52b9","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/harness_mcp","thread_id":"01a078c3-613f-7fb3-aa5c-cc8fd507ec2e","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true}
+  ]
+}
