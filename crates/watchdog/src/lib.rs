@@ -30,6 +30,7 @@ pub mod preflight;
 pub mod process;
 pub mod release;
 pub mod runtime;
+pub mod service;
 pub mod storage;
 
 pub use config::{ComponentConfig, DesiredMode, WatchdogConfig};

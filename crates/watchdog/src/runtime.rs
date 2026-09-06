@@ -667,6 +667,11 @@ impl Supervisor {
     }
 
     /// Run until durable stop is observed and all children have been removed.
+    pub(crate) fn has_no_owned_children(&self) -> bool {
+        self.children.is_empty()
+    }
+
+    /// Run until durable stop is observed and all children have been removed.
     pub fn run_until_stopped(&mut self) -> Result<()> {
         self.acquire_lock()?;
         loop {

@@ -229,12 +229,13 @@ fn daemon_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<S
         )));
     }
     let config = WatchdogConfig::from_file(config_path)?;
+    let probe_interval = std::time::Duration::from_millis(config.probe_interval_ms);
     let mut supervisor = Supervisor::open(config)?;
     if once {
         let report = supervisor.reconcile_once(now_unix_ms())?;
         return Ok(Some(serde_json::to_string(&report)?));
     }
-    supervisor.run_until_stopped()?;
+    crate::service::ServiceLoop::new(supervisor, probe_interval)?.run_until_stopped()?;
     Ok(None)
 }
 
