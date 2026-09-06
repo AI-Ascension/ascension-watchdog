@@ -28,6 +28,11 @@ is 1 GiB. A passing probe does not reserve space, authorize host testing, verify
 filesystem durability, or install/start a service. Recheck immediately before
 bounded staging/backup operations; no files are automatically reclaimed.
 
+`watchdog release inspect --manifest PATH --root PATH` checks a release document
+and exact artifact bytes without activating them. Its reported manifest digest
+covers the original input bytes, including whitespace. It returns nonzero on
+tampering or malformed input; inspection alone grants no launch authority.
+
 Core tests include synthetic subprocess restart and persisted stop, not native
 service recovery. Administrative IPC, platform containment, exact companion
 integration and protected release activation remain separate delivery gates.

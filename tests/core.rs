@@ -9,8 +9,9 @@ use ascension_watchdog::policy::{
 use ascension_watchdog::runtime::Supervisor;
 use ascension_watchdog::storage::{JobStatus, SingletonLock, Store};
 use serde_json::json;
+use std::path::PathBuf;
 #[cfg(unix)]
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 use tempfile::TempDir;
 
 fn config(temp: &TempDir) -> WatchdogConfig {

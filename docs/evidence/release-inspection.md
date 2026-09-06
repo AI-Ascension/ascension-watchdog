@@ -9,11 +9,15 @@ bounded manifest/artifact sizes and bounded-memory hashing. It rejects unknown
 and duplicate struct fields, duplicate revisions/roles/paths, traversal, alternate
 Windows path syntax, symlinks/reparse points and byte tampering.
 
-Ten release tests passed with Rust 1.97.1 after integration into the core
+Eleven release tests passed with Rust 1.97.1 after integration into the core
 workspace, together with eight core tests and disk-preflight tests. Locked offline
 tests and Clippy with warnings denied passed. Earlier isolated-module validation
 was rerun against the integrated source, but this is not a companion release-set
 build or service activation test.
+
+The eleventh test invokes the operational `release inspect` command against a
+staged synthetic release, checks the exact manifest digest, then tampers with an
+artifact and asserts a nonzero exit. No activation or store creation occurs.
 
 Independent review found ancestor-link and dot-identity gaps. Regression tests now
 cover ancestor links, canonical portable paths and Windows case/device aliases,

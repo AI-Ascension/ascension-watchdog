@@ -38,6 +38,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "init"
                 | "doctor"
                 | "preflight"
+                | "release"
                 | "status"
                 | "start"
                 | "pause"
@@ -70,6 +71,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "init" => init_command(&mut args, &config_path),
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
+        "release" => release_command(&mut args),
         "status" => status_command(&config_path),
         "start" => mode_command(&config_path, DesiredMode::Running),
         "pause" => mode_command(&config_path, DesiredMode::Paused),
@@ -123,6 +125,31 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
     }
     let supervisor = Supervisor::initialize(config.clone())?;
     Ok(Some(serde_json::to_string(&supervisor.status()?)?))
+}
+
+fn release_command(args: &mut Vec<String>) -> Result<Option<String>> {
+    if args.first().map(String::as_str) != Some("inspect") {
+        return Err(WatchdogError::InvalidInput(
+            "release requires inspect".to_owned(),
+        ));
+    }
+    args.remove(0);
+    let manifest = take_option(args, "--manifest").ok_or_else(|| {
+        WatchdogError::InvalidInput("release inspect requires --manifest".to_owned())
+    })?;
+    let root = take_option(args, "--root")
+        .ok_or_else(|| WatchdogError::InvalidInput("release inspect requires --root".to_owned()))?;
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected release inspect argument".to_owned(),
+        ));
+    }
+    let inspection = crate::release::ReleaseManifest::inspect_document(
+        std::fs::File::open(manifest)?,
+        Path::new(&root),
+    )
+    .map_err(WatchdogError::InvalidInput)?;
+    Ok(Some(serde_json::to_string(&inspection)?))
 }
 
 fn preflight_command(args: &mut Vec<String>) -> Result<Option<String>> {
@@ -296,5 +323,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit|list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit|list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

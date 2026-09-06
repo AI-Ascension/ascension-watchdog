@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/watchdog"]
+members = ["crates/watchdog", "crates/fault-fixture"]
+default-members = ["crates/watchdog"]
 resolver = "2"
 
 [workspace.package]

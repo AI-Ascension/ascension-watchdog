@@ -105,6 +105,34 @@ fn exact_release_bytes_pass_and_single_byte_tampering_fails()
 }
 
 #[test]
+fn release_inspection_cli_checks_exact_bytes_without_activating()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let release = manifest();
+    stage(temporary.path(), &release)?;
+    let document = serde_json::to_vec_pretty(&release)?;
+    let path = temporary.path().join("release.json");
+    fs::write(&path, &document)?;
+    let invoke = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_watchdog"))
+            .args(["release", "inspect", "--manifest"])
+            .arg(&path)
+            .arg("--root")
+            .arg(temporary.path())
+            .output()
+    };
+    let result = invoke()?;
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout)?;
+    assert_eq!(value["manifest_sha256"], hex_digest(&document));
+    assert_eq!(fs::read_dir(temporary.path())?.count(), 7);
+    fs::write(temporary.path().join("gateway"), b"tampered")?;
+    assert!(!invoke()?.status.success());
+    assert_eq!(fs::read_dir(temporary.path())?.count(), 7);
+    Ok(())
+}
+
+#[test]
 fn original_manifest_digest_preserves_exact_approved_artifact_bytes()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
