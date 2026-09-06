@@ -105,6 +105,26 @@ fn exact_release_bytes_pass_and_single_byte_tampering_fails()
 }
 
 #[test]
+fn original_manifest_digest_preserves_exact_approved_artifact_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let release = manifest();
+    stage(temporary.path(), &release)?;
+    let compact = serde_json::to_vec(&release)?;
+    let pretty = serde_json::to_vec_pretty(&release)?;
+    let compact_inspection =
+        ReleaseManifest::inspect_document(compact.as_slice(), temporary.path())?;
+    let pretty_inspection = ReleaseManifest::inspect_document(pretty.as_slice(), temporary.path())?;
+    assert_eq!(compact_inspection.manifest_sha256, hex_digest(&compact));
+    assert_eq!(pretty_inspection.manifest_sha256, hex_digest(&pretty));
+    assert_ne!(
+        compact_inspection.manifest_sha256,
+        pretty_inspection.manifest_sha256
+    );
+    Ok(())
+}
+
+#[test]
 fn closed_manifest_rejects_unknown_duplicate_and_oversized_fields()
 -> Result<(), Box<dyn std::error::Error>> {
     let bytes = serde_json::to_vec(&manifest())?;
@@ -131,6 +151,9 @@ fn source_role_path_and_migration_duplicates_fail_closed() {
     release.artifacts[1].path = release.artifacts[0].path.clone();
     assert!(release.validate().is_err());
     release = manifest();
+    release.artifacts[1].path = "WATCHDOG".into();
+    assert!(release.validate().is_err());
+    release = manifest();
     release.compatibility.stores[1].owner = "watchdog".to_owned();
     assert!(release.validate().is_err());
     release = manifest();
@@ -148,12 +171,38 @@ fn portable_path_escape_variants_are_rejected() {
         "bin\\gateway",
         "gateway:stream",
         "./gateway",
+        "bin//gateway",
+        "gateway/",
+        "gateway.",
+        "NUL.exe",
+        "COM1",
         "",
     ] {
         let mut release = manifest();
         release.artifacts[1].path = path.into();
         assert!(release.validate().is_err(), "accepted path {path}");
     }
+}
+
+#[test]
+fn relative_release_ids_and_unapproved_repository_extensions_are_rejected() {
+    for id in [".", "..", "release."] {
+        let mut release = manifest();
+        release.release_id = id.to_owned();
+        assert!(release.validate().is_err());
+    }
+    let mut release = manifest();
+    release.revisions.push(Revision {
+        repository: "unapproved-companion".to_owned(),
+        commit: "a".repeat(40),
+    });
+    assert!(release.validate().is_err());
+    release.revisions.pop();
+    release.revisions.push(Revision {
+        repository: "ai-agent-observability".to_owned(),
+        commit: "b".repeat(40),
+    });
+    assert!(release.validate().is_ok());
 }
 
 #[test]
@@ -181,9 +230,13 @@ fn symlinked_artifacts_and_intermediate_directories_are_rejected()
     let indirect = temporary.path().join("indirect");
     fs::create_dir(&source)?;
     symlink(&source, &indirect)?;
+    let nested = source.join("release");
+    fs::create_dir(&nested)?;
     let mut release = manifest();
     stage(&source, &release)?;
+    stage(&nested, &release)?;
     assert!(release.inspect(&indirect).is_err());
+    assert!(release.inspect(&indirect.join("release")).is_err());
     symlink(source.join("gateway"), source.join("gateway-link"))?;
     release.artifacts[1].path = "gateway-link".into();
     assert!(release.inspect(&source).is_err());

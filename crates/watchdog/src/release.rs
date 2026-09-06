@@ -20,6 +20,12 @@ const REQUIRED_REPOSITORIES: [&str; 6] = [
     "sts2-game-mod",
     "sts2-protocol",
 ];
+const OPTIONAL_REPOSITORIES: [&str; 4] = [
+    "sts2-game-core",
+    "ai-agent-observability",
+    ".github",
+    "AI-Ascension.github.io",
+];
 
 /// Exact original-source revision, independently of artifact byte identity.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -100,20 +106,27 @@ pub struct ReleaseInspection {
 }
 
 impl ReleaseManifest {
+    /// Inspect artifacts and retain the digest of the exact input manifest bytes,
+    /// including its original whitespace. This is the release-contract entrypoint.
+    ///
+    /// # Errors
+    /// Rejects invalid or oversized documents, missing or mismatched artifacts
+    /// and indirect filesystem paths. It never activates a release.
+    pub fn inspect_document(reader: impl Read, root: &Path) -> Result<ReleaseInspection, String> {
+        let bytes = bounded_document(reader)?;
+        let manifest = Self::read(bytes.as_slice())?;
+        let mut inspection = manifest.inspect(root)?;
+        inspection.manifest_sha256 = digest_hex(&Sha256::digest(&bytes));
+        Ok(inspection)
+    }
+
     /// Read and validate at most 64 KiB without allocating from an input length.
     /// Duplicate struct fields and unknown fields are rejected by deserialization.
     ///
     /// # Errors
     /// Rejects I/O failures, oversized or malformed JSON and invalid manifests.
     pub fn read(reader: impl Read) -> Result<Self, String> {
-        let mut bytes = Vec::new();
-        reader
-            .take((MAX_MANIFEST_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("release manifest read failed: {error}"))?;
-        if bytes.len() > MAX_MANIFEST_BYTES {
-            return Err("release manifest exceeds byte bound".to_owned());
-        }
+        let bytes = bounded_document(reader)?;
         let manifest: Self = serde_json::from_slice(&bytes)
             .map_err(|error| format!("invalid release manifest: {error}"))?;
         manifest.validate()?;
@@ -142,6 +155,8 @@ impl ReleaseManifest {
         let mut repositories = BTreeSet::new();
         for revision in &self.revisions {
             if !identity(&revision.repository)
+                || !(REQUIRED_REPOSITORIES.contains(&revision.repository.as_str())
+                    || OPTIONAL_REPOSITORIES.contains(&revision.repository.as_str()))
                 || !hex(&revision.commit, 40)
                 || !repositories.insert(revision.repository.as_str())
             {
@@ -169,7 +184,7 @@ impl ReleaseManifest {
                 || artifact.bytes == 0
                 || artifact.bytes > MAX_ARTIFACT_BYTES
                 || !roles.insert(artifact.role)
-                || !paths.insert(&artifact.path)
+                || !paths.insert(artifact.path.to_string_lossy().to_ascii_lowercase())
             {
                 return Err("invalid or duplicate release artifact".to_owned());
             }
@@ -180,13 +195,15 @@ impl ReleaseManifest {
     /// Inspect current bytes without changing release or runtime state. Symlinks
     /// and reparse points are rejected. This check is not a TOCTOU guarantee:
     /// callers must enforce protected immutable directories during activation.
+    /// The manifest digest here covers this struct's generated JSON encoding.
+    /// Use `inspect_document` when inspecting an existing manifest artifact.
     ///
     /// # Errors
     /// Rejects invalid manifests, missing or indirect paths, mismatched artifact
     /// bytes and filesystem errors without changing release selection.
     pub fn inspect(&self, root: &Path) -> Result<ReleaseInspection, String> {
         self.validate()?;
-        require_real_directory(root)?;
+        require_real_root(root)?;
         let mut total_bytes = 0_u64;
         for artifact in &self.artifacts {
             inspect_artifact(root, artifact)?;
@@ -203,6 +220,18 @@ impl ReleaseManifest {
             manifest_sha256: digest_hex(&Sha256::digest(canonical)),
         })
     }
+}
+
+fn bounded_document(reader: impl Read) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take((MAX_MANIFEST_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("release manifest read failed: {error}"))?;
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err("release manifest exceeds byte bound".to_owned());
+    }
+    Ok(bytes)
 }
 
 impl Compatibility {
@@ -243,6 +272,8 @@ impl Compatibility {
 
 fn identity(value: &str) -> bool {
     !value.is_empty()
+        && !matches!(value, "." | "..")
+        && !value.ends_with('.')
         && value.len() <= 128
         && value
             .bytes()
@@ -273,12 +304,61 @@ fn relative_path(path: &Path) -> bool {
     let Some(value) = path.to_str() else {
         return false;
     };
-    !value.is_empty()
-        && value.len() <= 240
-        && !value.contains(['\\', ':', '\0'])
-        && path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
+    !value.is_empty() && value.len() <= 240 && value.split('/').all(portable_component)
+}
+
+fn portable_component(value: &str) -> bool {
+    if !identity(value) {
+        return false;
+    }
+    let stem = value
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    !matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn require_real_root(root: &Path) -> Result<(), String> {
+    if !root.is_absolute() {
+        return Err("release root must be absolute".to_owned());
+    }
+    let mut ancestor = PathBuf::new();
+    for component in root.components() {
+        if matches!(component, Component::ParentDir | Component::CurDir) {
+            return Err("release root contains a relative component".to_owned());
+        }
+        ancestor.push(component.as_os_str());
+        // A Windows drive prefix alone is not an absolute filesystem root.
+        if !matches!(component, Component::Prefix(_)) {
+            require_real_directory(&ancestor)?;
+        }
+    }
+    Ok(())
 }
 
 fn require_real_directory(path: &Path) -> Result<(), String> {

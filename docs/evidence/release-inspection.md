@@ -9,10 +9,16 @@ bounded manifest/artifact sizes and bounded-memory hashing. It rejects unknown
 and duplicate struct fields, duplicate revisions/roles/paths, traversal, alternate
 Windows path syntax, symlinks/reparse points and byte tampering.
 
-Seven tests passed with Rust 1.97.1 in a separate validation harness that imports
+Nine tests passed with Rust 1.97.1 in a separate validation harness that imports
 the exact module and test source. Locked offline tests and Clippy with warnings
 denied passed. This temporary harness is not a product dependency or integrated
 release build. Root must rerun these tests after the core workspace is integrated.
+
+Independent review found ancestor-link and dot-identity gaps. Regression tests now
+cover ancestor links, canonical portable paths and Windows case/device aliases,
+parent identities, unapproved companion repositories, and exact original manifest
+byte digests. `inspect_document` hashes the original approved artifact bytes;
+struct inspection documents that its digest covers generated JSON encoding.
 
 The inspector intentionally returns an inspection record, not launch authority.
 Immutable protected storage, durable activation intent, actual schema checks,
