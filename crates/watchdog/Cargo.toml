@@ -1,0 +1,29 @@
+[package]
+name = "ascension-watchdog"
+version = "0.1.0"
+description = "Deterministic, crash-resilient deployment supervision for AI-Ascension"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "ascension_watchdog"
+path = "src/lib.rs"
+
+[[bin]]
+name = "watchdog"
+path = "src/main.rs"
+
+[dependencies]
+fs2 = "0.4.3"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+uuid = { version = "1.24.0", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
