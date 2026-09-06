@@ -7,11 +7,17 @@
   "tasks": [
     {"id":"A1","workstream":"architecture","status":"audit-complete-contract-active","reserved_threads":1,"writes":["schemas/recovery-v1","docs/recovery-contract.md","docs/threat-model.md"],"depends_on":[]},
     {"id":"V1","workstream":"independent-verification","status":"release-review-active","reserved_threads":1,"writes":[],"depends_on":[]},
-    {"id":"W1","workstream":"watchdog","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable stop, real subprocess restart and completion deduplication"},
+    {"id":"W1","workstream":"watchdog","status":"core-committed-integrated-review-pending","commit":"7e72b828c0eb4cc0d5dbf32471963f725344e5f3","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable stop, real subprocess restart and completion deduplication"},
     {"id":"G1","workstream":"gateway-host","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable boot fence and operation reconciliation in actual runtime"},
     {"id":"H1","workstream":"harness-mcp","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable resume, accounting and reconstruction handoff"},
     {"id":"P1","workstream":"platform-operations","status":"audit-active","reserved_threads":1,"depends_on":[],"acceptance":"native adapters, packaging and release operations"},
-    {"id":"I1","workstream":"root-integration","status":"pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
+    {"id":"A4","workstream":"architecture","status":"committed-root-revalidation-pending","commit":"2a30eb96240f579eea9c776b3291d31a3bd9ac38","reserved_threads":0,"depends_on":["A1"],"acceptance":"exact RCJ digests and duplicate-key conformance"},
+    {"id":"G2","workstream":"host-admission","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable admission and execution-time fencing"},
+    {"id":"H2","workstream":"mcp-recovery","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"real thin authenticated recovery transport"},
+    {"id":"P3","workstream":"observability","status":"active","reserved_threads":1,"depends_on":[],"acceptance":"bounded persistent export and backend volumes"},
+    {"id":"W2","workstream":"admin-control","status":"active","reserved_threads":1,"depends_on":["A1"],"acceptance":"authenticated bounded owner-loop command queue"},
+    {"id":"V4","workstream":"core-review","status":"active","reserved_threads":1,"depends_on":["W1"],"acceptance":"independent storage, stop, process and budget review"},
+    {"id":"I1","workstream":"root-integration","status":"core-release-preflight-tests-pass-companions-pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
   ],
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",

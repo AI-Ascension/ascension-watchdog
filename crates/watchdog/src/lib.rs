@@ -24,7 +24,9 @@ pub mod cli;
 pub mod config;
 pub mod error;
 pub mod policy;
+pub mod preflight;
 pub mod process;
+pub mod release;
 pub mod runtime;
 pub mod storage;
 

@@ -392,7 +392,7 @@ fn portable_component(value: &str) -> bool {
     )
 }
 
-fn require_real_root(root: &Path) -> Result<(), String> {
+pub(crate) fn require_real_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err("release root must be absolute".to_owned());
     }

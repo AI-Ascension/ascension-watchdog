@@ -9,10 +9,11 @@ bounded manifest/artifact sizes and bounded-memory hashing. It rejects unknown
 and duplicate struct fields, duplicate revisions/roles/paths, traversal, alternate
 Windows path syntax, symlinks/reparse points and byte tampering.
 
-Ten tests passed with Rust 1.97.1 in a separate validation harness that imports
-the exact module and test source. Locked offline tests and Clippy with warnings
-denied passed. This temporary harness is not a product dependency or integrated
-release build. Root must rerun these tests after the core workspace is integrated.
+Ten release tests passed with Rust 1.97.1 after integration into the core
+workspace, together with eight core tests and disk-preflight tests. Locked offline
+tests and Clippy with warnings denied passed. Earlier isolated-module validation
+was rerun against the integrated source, but this is not a companion release-set
+build or service activation test.
 
 Independent review found ancestor-link and dot-identity gaps. Regression tests now
 cover ancestor links, canonical portable paths and Windows case/device aliases,

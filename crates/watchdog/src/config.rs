@@ -4,6 +4,7 @@ use crate::error::{Result, WatchdogError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_COMPONENTS: usize = 16;
@@ -166,7 +167,15 @@ impl WatchdogConfig {
     /// Read and validate a JSON configuration without touching the database.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(WatchdogError::Io)?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(65_537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 65_536 {
+            return Err(WatchdogError::InvalidInput(
+                "configuration exceeds 65536-byte limit".to_owned(),
+            ));
+        }
         let config: Self = serde_json::from_slice(&bytes)?;
         config.validate()?;
         Ok(config)

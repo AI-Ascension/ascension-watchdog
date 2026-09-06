@@ -37,6 +37,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
             "config"
                 | "init"
                 | "doctor"
+                | "preflight"
                 | "status"
                 | "start"
                 | "pause"
@@ -68,6 +69,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "config" => config_command(&mut args, &config_path),
         "init" => init_command(&mut args, &config_path),
         "doctor" => doctor_command(&config_path),
+        "preflight" => preflight_command(&mut args),
         "status" => status_command(&config_path),
         "start" => mode_command(&config_path, DesiredMode::Running),
         "pause" => mode_command(&config_path, DesiredMode::Paused),
@@ -121,6 +123,40 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
     }
     let supervisor = Supervisor::initialize(config.clone())?;
     Ok(Some(serde_json::to_string(&supervisor.status()?)?))
+}
+
+fn preflight_command(args: &mut Vec<String>) -> Result<Option<String>> {
+    let directory = take_option(args, "--state-directory").ok_or_else(|| {
+        WatchdogError::InvalidInput("preflight requires --state-directory".to_owned())
+    })?;
+    let requirements = crate::preflight::DiskRequirements {
+        runtime_reserve_bytes: preflight_bytes(args, "--reserve-bytes", 1_073_741_824)?,
+        staging_bytes: preflight_bytes(args, "--staging-bytes", 0)?,
+        backup_bytes: preflight_bytes(args, "--backup-bytes", 0)?,
+    };
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected preflight argument".to_owned(),
+        ));
+    }
+    let inspection = requirements
+        .inspect(Path::new(&directory))
+        .map_err(WatchdogError::InvalidInput)?;
+    if !inspection.admitted {
+        return Err(WatchdogError::Conflict(format!(
+            "disk headroom insufficient: available={} required={}",
+            inspection.available_bytes, inspection.required_bytes
+        )));
+    }
+    Ok(Some(serde_json::to_string(&inspection)?))
+}
+
+fn preflight_bytes(args: &mut Vec<String>, option: &str, default: u64) -> Result<u64> {
+    take_option(args, option).map_or(Ok(default), |value| {
+        value.parse::<u64>().map_err(|_| {
+            WatchdogError::InvalidInput(format!("{option} requires an unsigned byte count"))
+        })
+    })
 }
 
 fn doctor_command(config_path: &Path) -> Result<Option<String>> {
@@ -260,5 +296,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit|list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit|list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

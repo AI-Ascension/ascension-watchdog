@@ -12,6 +12,11 @@
     {"path":"/root/watchdog","thread_id":"01a078be-e26e-7970-bc65-f6cb983bd315","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
     {"path":"/root/platform","thread_id":"01a078bf-27c6-71e1-b10c-c65510dd9c4c","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
     {"path":"/root/gateway_host","thread_id":"01a078c3-052c-7330-a55b-bd72bbba52b9","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
-    {"path":"/root/harness_mcp","thread_id":"01a078c3-613f-7fb3-aa5c-cc8fd507ec2e","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true}
+    {"path":"/root/harness_mcp","thread_id":"01a078c3-613f-7fb3-aa5c-cc8fd507ec2e","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/host_admission","thread_id":"01a078cc-6e24-77f0-a389-eaa8c1c5c367","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/mcp_recovery","thread_id":"01a078d1-20e1-7762-b479-781cf74abdf4","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/observability","thread_id":"01a078d1-5ecc-71d2-bb14-ea2c06a1eba8","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/admin_control","thread_id":"01a078dd-bfa8-7ab1-b0cf-b5bf1718959c","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
+    {"path":"/root/core_review","thread_id":"01a078eb-a6aa-78b1-b755-b113cb8d6d36","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true}
   ]
 }
