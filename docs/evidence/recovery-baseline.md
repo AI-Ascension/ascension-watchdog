@@ -23,18 +23,21 @@ recorded in `workspace-manifest.json` at the following revisions:
 
 ## Existing executable wiring and gaps
 
-- Gateway `crates/gateway/src/bin/runtime_support/process_supervisor.rs:45-155`
+- Gateway `crates/gateway/src/process_supervisor.rs:45-155`
   stores only an in-memory `BTreeMap<InstanceId, ProcessHandle>`; restart
   force-stops and replaces a handle without durable boot/incarnation, launch
   nonce, orphan reconciliation, or containment.
-- Gateway `crates/gateway/src/bin/runtime_support/identity.rs:70-145` keeps
-  lease state in memory. `control.rs:18-62` allocates in-memory ids and starts
-  `LeaseEpoch::new(1)`. `service_lease.rs:6-49` uses the configured authority
-  context rather than a durable fresh boot authority.
-- Gateway `service_v3.rs:8-62` and `runtime_v3_gameplay_forwarder.rs:30-155`
+- Gateway `crates/gateway/src/identity.rs:70-145` keeps
+  lease state in memory. `crates/gateway/src/control.rs:18-62` allocates
+  in-memory ids and starts `LeaseEpoch::new(1)`.
+- Gateway `crates/gateway/src/bin/runtime_support/service_lease.rs:6-49` uses
+  the configured authority context rather than a durable fresh boot authority.
+- Gateway `crates/gateway/src/bin/runtime_support/service_v3.rs:8-62` and
+  `runtime_v3_gameplay_forwarder.rs:30-155`
   validate and forward the v3 request directly. The existing journal is wired
   to v2; it does not provide a v3 operation ledger.
-- Gateway `journal.rs:11-100` is an atomic JSON snapshot with an exclusive file
+- Gateway `crates/gateway/src/bin/runtime_support/journal.rs:11-100` is an
+  atomic JSON snapshot with an exclusive file
   lock, not an owner-local SQLite WAL/`synchronous=FULL` authority store with
   migration, rekey, and explicit missing-state behavior.
 - Mod `RuntimeV3GameplayHost.cs:121-241` and
