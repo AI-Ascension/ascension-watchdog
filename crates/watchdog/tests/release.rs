@@ -162,6 +162,47 @@ fn source_role_path_and_migration_duplicates_fail_closed() {
 }
 
 #[test]
+fn mixed_profile_bytes_and_schema_rollback_fail_without_mutating_release() {
+    let release = manifest();
+    let approved = release.compatibility.clone();
+    let schemas = [("watchdog", 1), ("gateway", 1), ("harness", 1)];
+    assert!(
+        release
+            .check_deployment_compatibility(&approved, &schemas)
+            .is_ok()
+    );
+    for field in 0..5 {
+        let mut mismatched = release.clone();
+        match field {
+            0 => mismatched.compatibility.runtime_profile_sha256 = "e".repeat(64),
+            1 => mismatched.compatibility.recovery_profile_sha256 = "e".repeat(64),
+            2 => mismatched.compatibility.configuration_sha256 = "e".repeat(64),
+            3 => mismatched.compatibility.provider_adapter_sha256 = "e".repeat(64),
+            _ => mismatched.compatibility.game_build = "other-build".to_owned(),
+        }
+        assert!(
+            mismatched
+                .check_deployment_compatibility(&approved, &schemas)
+                .is_err()
+        );
+    }
+    for invalid in [
+        vec![("watchdog", 1), ("gateway", 2), ("harness", 1)],
+        vec![("watchdog", 1), ("gateway", 0), ("harness", 1)],
+        vec![("watchdog", 1), ("gateway", 1), ("gateway", 1)],
+        vec![("watchdog", 1), ("gateway", 1), ("unknown", 1)],
+        vec![("watchdog", 1), ("gateway", 1)],
+    ] {
+        assert!(
+            release
+                .check_deployment_compatibility(&approved, &invalid)
+                .is_err()
+        );
+    }
+    assert_eq!(release.compatibility, approved);
+}
+
+#[test]
 fn portable_path_escape_variants_are_rejected() {
     for path in [
         "../gateway",

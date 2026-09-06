@@ -59,7 +59,7 @@ pub enum ArtifactRole {
 
 /// Accepted schema interval for one owner's database. Binary rollback must not
 /// restore database bytes or authority generations.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoreCompatibility {
     pub owner: String,
@@ -69,7 +69,7 @@ pub struct StoreCompatibility {
 
 /// Immutable identities used to reject mixed builds and identical profile names
 /// whose bytes differ. Provider identity is approved deployment input.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Compatibility {
     pub game_build: String,
@@ -106,6 +106,55 @@ pub struct ReleaseInspection {
 }
 
 impl ReleaseManifest {
+    /// Check a candidate against independently approved deployment identities and
+    /// current owner-reported schemas. This does not migrate or restore a store,
+    /// approve the candidate, or establish runtime mutation authority.
+    ///
+    /// # Errors
+    /// Rejects mixed profile/configuration/provider/build identities and missing,
+    /// duplicated, unknown or incompatible current database schemas.
+    pub fn check_deployment_compatibility(
+        &self,
+        approved: &Compatibility,
+        current_schemas: &[(&str, u32)],
+    ) -> Result<(), String> {
+        self.validate()?;
+        approved.validate()?;
+        let candidate = &self.compatibility;
+        if candidate.game_build != approved.game_build
+            || candidate.runtime_profile != approved.runtime_profile
+            || candidate.runtime_profile_sha256 != approved.runtime_profile_sha256
+            || candidate.recovery_profile != approved.recovery_profile
+            || candidate.recovery_profile_sha256 != approved.recovery_profile_sha256
+            || candidate.configuration_sha256 != approved.configuration_sha256
+            || candidate.provider_adapter != approved.provider_adapter
+            || candidate.provider_adapter_sha256 != approved.provider_adapter_sha256
+        {
+            return Err("candidate differs from approved deployment identities".to_owned());
+        }
+        if current_schemas.len() != 3 {
+            return Err("current owner schema inventory must contain three stores".to_owned());
+        }
+        let mut owners = BTreeSet::new();
+        for &(owner, current) in current_schemas {
+            if !owners.insert(owner) {
+                return Err("duplicate current schema owner".to_owned());
+            }
+            for compatibility in [candidate, approved] {
+                let supported = compatibility.stores.iter().any(|store| {
+                    store.owner == owner
+                        && (store.minimum_schema..=store.maximum_schema).contains(&current)
+                });
+                if !supported {
+                    return Err(
+                        "current store schema is not compatible with approved release".to_owned(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Inspect artifacts and retain the digest of the exact input manifest bytes,
     /// including its original whitespace. This is the release-contract entrypoint.
     ///
