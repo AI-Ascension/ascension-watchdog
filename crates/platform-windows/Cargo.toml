@@ -1,7 +1,8 @@
 [package]
 name = "ascension-platform-windows"
 version = "0.1.0"
-description = "Audited Windows service, session broker, IPC, and process containment boundary"
+description = "Isolated Windows service, session broker, IPC, and process containment boundary"
+publish = false
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"

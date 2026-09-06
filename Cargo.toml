@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/watchdog", "crates/fault-fixture"]
+members = ["crates/watchdog", "crates/fault-fixture", "crates/platform-windows"]
 default-members = ["crates/watchdog"]
 resolver = "2"
 

@@ -20,9 +20,11 @@
     clippy::type_complexity
 )]
 
+pub mod admin;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod platform;
 pub mod policy;
 pub mod preflight;
 pub mod process;
