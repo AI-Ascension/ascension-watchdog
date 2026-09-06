@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/watchdog-recovery-v1/manifest.json",
+  "contract": "watchdog-recovery-v1",
+  "version": 1,
+  "schema_file": "frame.schema.json",
+  "schema_digest": "fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217",
+  "canonicalization": "RCJ-1 for action payloads; exact bytes for immutable artifacts",
+  "digest_algorithm": "SHA-256",
+  "limits": {
+    "max_frame_bytes": 262144,
+    "max_action_bytes": 65536,
+    "max_auth_proof_bytes": 512,
+    "max_wire_integer": 9007199254740991
+  },
+  "frozen_dependency": {
+    "protocol": "runtime-v3-gameplay",
+    "relationship": "sideband wrapper; the runtime-v3 schema and profile remain owner-published and unchanged"
+  },
+  "publication": {
+    "owner": "architecture-contracts",
+    "consumer_owners": ["gateway", "host-mod", "harness", "watchdog"],
+    "mixed_digest_policy": "reject"
+  }
+}
