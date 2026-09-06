@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "descendant_limit": 12,
+  "maximum_descendant_depth": 3,
+  "model": "gpt-5.6-luna",
+  "reasoning_effort": "max",
+  "tasks": [
+    {"id":"A1","workstream":"architecture","status":"active","reserved_threads":3,"writes":[],"depends_on":[]},
+    {"id":"V1","workstream":"independent-verification","status":"active","reserved_threads":3,"writes":[],"depends_on":[]},
+    {"id":"W1","workstream":"watchdog","status":"pending","reserved_threads":0,"depends_on":["A1"],"acceptance":"durable stop, real subprocess restart and completion deduplication"},
+    {"id":"G1","workstream":"gateway-host","status":"pending","reserved_threads":0,"depends_on":["A1"],"acceptance":"durable boot fence and operation reconciliation in actual runtime"},
+    {"id":"H1","workstream":"harness-mcp","status":"pending","reserved_threads":0,"depends_on":["A1"],"acceptance":"durable resume, accounting and reconstruction handoff"},
+    {"id":"P1","workstream":"platform-operations","status":"pending","reserved_threads":0,"depends_on":["W1"],"acceptance":"native adapters, packaging and release operations"},
+    {"id":"I1","workstream":"root-integration","status":"pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
+  ],
+  "shared_file_owner": "root",
+  "completion": "unverified"
+}

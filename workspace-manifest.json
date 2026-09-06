@@ -1,0 +1,16 @@
+{
+  "schema_version":1,
+  "classification":"confirmed",
+  "purpose":"source baseline, not an activated release set",
+  "repositories":{
+    "sts2-gateway":"33ea48f3b549f08e19db80d8c68c1438fa12a60a",
+    "sts2-harness":"cb17b6c15262ce9356f1e85fd475af997aedc445",
+    "sts2-mcp-server":"eb89ab251665f263c2fe3e6b735eeae3d3e40c83",
+    "sts2-game-mod":"c41064a7e76aec4ce0b862a9a1cb160236b16d9d",
+    "sts2-protocol":"8874b0951289fd943c7e14dea36557fa24c401d1",
+    "sts2-game-core":"87e0f3d9355c0827e989d9fbc31804440852519b",
+    "ai-agent-observability":"b25880376d3a3334c77f58637267db93581c4c77",
+    ".github":"0cbdf744d515b16c042eb6e16b1537d8ccf11771",
+    "AI-Ascension.github.io":"bbe475998b0cd279309666f5cec3dc433d90a4a4"
+  }
+}
