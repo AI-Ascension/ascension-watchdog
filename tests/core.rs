@@ -1,14 +1,16 @@
-use ascension_watchdog::config::{ComponentConfig, DesiredMode, WatchdogConfig};
+#[cfg(unix)]
+use ascension_watchdog::config::ComponentConfig;
+use ascension_watchdog::config::{DesiredMode, WatchdogConfig};
 use ascension_watchdog::error::WatchdogError;
 use ascension_watchdog::policy::{
     ComponentObservation, ComponentState, ReconcileAction, SupervisorPolicy,
 };
+#[cfg(unix)]
 use ascension_watchdog::runtime::Supervisor;
 use ascension_watchdog::storage::{JobStatus, SingletonLock, Store};
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::time::Duration;
+#[cfg(unix)]
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 use tempfile::TempDir;
 
 fn config(temp: &TempDir) -> WatchdogConfig {
@@ -21,6 +23,7 @@ fn config(temp: &TempDir) -> WatchdogConfig {
     }
 }
 
+#[cfg(unix)]
 fn shell_component(id: &str, command: &str) -> ComponentConfig {
     ComponentConfig {
         id: id.to_string(),
@@ -205,6 +208,7 @@ fn policy_is_deterministic_and_respects_stop_and_budget() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_subprocess_crash_restarts_and_durable_stop_survives_reopen() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut config = config(&temp);
