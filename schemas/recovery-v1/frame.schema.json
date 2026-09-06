@@ -1,0 +1,874 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/watchdog-recovery-v1/frame.schema.json",
+  "title": "AI-Ascension watchdog recovery v1 frame",
+  "description": "Closed, bounded sideband recovery messages. The existing runtime-v3 gameplay envelope is carried as canonical JSON bytes and remains governed by its own frozen schema.",
+  "oneOf": [
+    { "$ref": "#/$defs/bootstrap_request_frame" },
+    { "$ref": "#/$defs/bootstrap_response_frame" },
+    { "$ref": "#/$defs/host_fence_request_frame" },
+    { "$ref": "#/$defs/host_fence_response_frame" },
+    { "$ref": "#/$defs/lease_acquire_request_frame" },
+    { "$ref": "#/$defs/lease_acquire_response_frame" },
+    { "$ref": "#/$defs/lease_renew_request_frame" },
+    { "$ref": "#/$defs/lease_renew_response_frame" },
+    { "$ref": "#/$defs/lease_revoke_request_frame" },
+    { "$ref": "#/$defs/lease_revoke_response_frame" },
+    { "$ref": "#/$defs/operation_intent_request_frame" },
+    { "$ref": "#/$defs/operation_intent_response_frame" },
+    { "$ref": "#/$defs/operation_dispatch_request_frame" },
+    { "$ref": "#/$defs/operation_dispatch_response_frame" },
+    { "$ref": "#/$defs/operation_lookup_request_frame" },
+    { "$ref": "#/$defs/operation_lookup_response_frame" },
+    { "$ref": "#/$defs/operation_reconcile_request_frame" },
+    { "$ref": "#/$defs/operation_reconcile_response_frame" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "random_uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "u53": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive_u53": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "bounded_token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "minLength": 43,
+      "maxLength": 43
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+      "minLength": 20,
+      "maxLength": 30
+    },
+    "digest_or_null": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "id_or_null": {
+      "anyOf": [
+        { "$ref": "#/$defs/uuid" },
+        { "type": "null" }
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "role"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "role": {
+          "type": "string",
+          "enum": ["gateway", "watchdog", "harness", "host", "mod", "operator"]
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "capability", "proof"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "capability": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "host_fence",
+            "lease_acquire",
+            "lease_renew",
+            "lease_revoke",
+            "operation_submit",
+            "recovery_read",
+            "recovery_reconcile"
+          ]
+        },
+        "proof": {
+          "anyOf": [
+            { "type": "string", "minLength": 1, "maxLength": 512 },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "release_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release_digest", "config_digest", "profile_digest", "runtime_v3_schema_digest"],
+      "properties": {
+        "release_digest": { "$ref": "#/$defs/sha256" },
+        "config_digest": { "$ref": "#/$defs/sha256" },
+        "profile_digest": { "$ref": "#/$defs/sha256" },
+        "runtime_v3_schema_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "boot_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id", "instance_id", "instance_incarnation", "boot_id",
+        "authority_generation", "release", "created_at", "state"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "release": { "$ref": "#/$defs/release_set" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "state": {
+          "type": "string",
+          "enum": ["FENCE_REQUIRED", "READY", "BLOCKED", "REVOKED"]
+        }
+      }
+    },
+    "lease_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id", "instance_id", "instance_incarnation", "boot_id",
+        "authority_generation", "lease_id", "lease_epoch", "fence_token",
+        "issued_at", "expires_at", "ttl_seconds", "renewal_interval_seconds"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "lease_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "lease_epoch": { "$ref": "#/$defs/positive_u53" },
+        "fence_token": { "$ref": "#/$defs/bounded_token" },
+        "issued_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "ttl_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
+        "renewal_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "host_fence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_fence_id", "deployment_id", "instance_id", "instance_incarnation",
+        "boot_id", "authority_generation", "fence_generation", "created_at"
+      ],
+      "properties": {
+        "host_fence_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "fence_generation": { "$ref": "#/$defs/positive_u53" },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "original_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id", "instance_id", "instance_incarnation", "boot_id",
+        "authority_generation", "lease_id", "lease_epoch"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "lease_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "lease_epoch": { "$ref": "#/$defs/positive_u53" }
+      }
+    },
+    "expected_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state_id", "generation", "catalog_digest"],
+      "properties": {
+        "state_id": { "$ref": "#/$defs/uuid" },
+        "generation": { "$ref": "#/$defs/u53" },
+        "catalog_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "v3_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_digest", "canonical_json_b64", "payload_digest"],
+      "properties": {
+        "schema_digest": { "$ref": "#/$defs/sha256" },
+        "canonical_json_b64": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/=_-]{1,65536}$",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "payload_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "effect_witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "witness_id", "operation_id", "payload_digest", "boot_id",
+        "instance_incarnation", "host_fence_id", "source", "state_id",
+        "generation", "effect_digest", "observed_at"
+      ],
+      "properties": {
+        "witness_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "operation_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "payload_digest": { "$ref": "#/$defs/sha256" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "host_fence_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "source": {
+          "type": "string",
+          "enum": ["host_game_thread", "host_receipt", "authoritative_reobserve"]
+        },
+        "state_id": { "$ref": "#/$defs/uuid" },
+        "generation": { "$ref": "#/$defs/u53" },
+        "effect_digest": { "$ref": "#/$defs/sha256" },
+        "observed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "admission_ticket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticket_id", "operation_id", "payload_digest", "boot_id",
+        "instance_incarnation", "lease_epoch", "host_fence_id", "state",
+        "issued_at", "expires_at"
+      ],
+      "properties": {
+        "ticket_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "operation_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "payload_digest": { "$ref": "#/$defs/sha256" },
+        "boot_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "lease_epoch": { "$ref": "#/$defs/positive_u53" },
+        "host_fence_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "state": {
+          "type": "string",
+          "enum": ["ISSUED", "ADMITTED", "EXECUTING", "EFFECT_WITNESS_RECORDED", "SETTLED", "REJECTED", "UNKNOWN"]
+        },
+        "issued_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "operation_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id", "state", "payload_digest", "original_context",
+        "expected_boundary", "action", "ticket", "witness", "uncertainty_reason",
+        "created_at", "updated_at"
+      ],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "state": {
+          "type": "string",
+          "enum": [
+            "INTENT_RECORDED", "MAY_HAVE_BEEN_DISPATCHED", "ACCEPTED",
+            "SETTLED", "REJECTED", "UNKNOWN", "RECONCILED"
+          ]
+        },
+        "payload_digest": { "$ref": "#/$defs/sha256" },
+        "original_context": { "$ref": "#/$defs/original_context" },
+        "expected_boundary": { "$ref": "#/$defs/expected_boundary" },
+        "action": { "$ref": "#/$defs/v3_action" },
+        "ticket": {
+          "anyOf": [
+            { "$ref": "#/$defs/admission_ticket" },
+            { "type": "null" }
+          ]
+        },
+        "witness": {
+          "anyOf": [
+            { "$ref": "#/$defs/effect_witness" },
+            { "type": "null" }
+          ]
+        },
+        "uncertainty_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["transport_lost", "timeout", "gateway_crash", "host_crash", "receipt_missing", "authority_rotated"]
+            },
+            { "type": "null" }
+          ]
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "operation_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "payload_digest", "original_context"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "payload_digest": { "$ref": "#/$defs/sha256" },
+        "original_context": { "$ref": "#/$defs/original_context" }
+      }
+    },
+    "response_meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "retryable", "retry_after_seconds"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "BOOT_AUTHORITY_CREATED", "BOOT_READY", "BOOT_BLOCKED",
+            "FENCE_ACCEPTED", "FENCE_REJECTED", "LEASE_ACTIVE", "LEASE_RENEWED",
+            "LEASE_REVOKED", "INTENT_RECORDED", "MAY_HAVE_BEEN_DISPATCHED",
+            "ACCEPTED", "SETTLED", "REJECTED", "UNKNOWN", "RECONCILED",
+            "DUPLICATE", "CONFLICT", "NOT_FOUND", "STALE_BOOT",
+            "STALE_INCARNATION", "STALE_LEASE", "LEASE_EXPIRED", "AUTH_REQUIRED",
+            "FORBIDDEN", "CONTRACT_MISMATCH", "PERSISTENCE_UNAVAILABLE",
+            "HOST_NOT_READY", "BOUNDS_EXCEEDED", "INVALID", "BUSY"
+          ]
+        },
+        "retryable": { "type": "boolean" },
+        "retry_after_seconds": {
+          "anyOf": [
+            { "$ref": "#/$defs/positive_u53" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "common": {
+      "type": "object",
+      "required": ["contract", "schema_digest", "message_id", "correlation_id", "sent_at", "actor", "auth"],
+      "properties": {
+        "contract": { "const": "watchdog-recovery-v1" },
+        "schema_digest": { "$ref": "#/$defs/sha256" },
+        "message_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "correlation_id": { "$ref": "#/$defs/random_uuid_v4" },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "actor": { "$ref": "#/$defs/actor" },
+        "auth": { "$ref": "#/$defs/auth" }
+      }
+    },
+    "bootstrap_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment_id", "instance_id", "instance_incarnation", "release", "lease_policy"],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/random_uuid_v4" },
+        "release": { "$ref": "#/$defs/release_set" },
+        "lease_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ttl_seconds", "renewal_interval_seconds"],
+          "properties": {
+            "ttl_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
+            "renewal_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        }
+      }
+    },
+    "bootstrap_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "boot", "fence"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "boot": {
+          "anyOf": [
+            { "$ref": "#/$defs/boot_context" },
+            { "type": "null" }
+          ]
+        },
+        "fence": {
+          "anyOf": [
+            { "$ref": "#/$defs/host_fence" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "host_fence_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boot"],
+      "properties": {
+        "boot": { "$ref": "#/$defs/boot_context" }
+      }
+    },
+    "host_fence_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "fence"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "fence": {
+          "anyOf": [
+            { "$ref": "#/$defs/host_fence" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "lease_acquire_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boot", "fence"],
+      "properties": {
+        "boot": { "$ref": "#/$defs/boot_context" },
+        "fence": { "$ref": "#/$defs/host_fence" }
+      }
+    },
+    "lease_acquire_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "lease"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "lease": {
+          "anyOf": [
+            { "$ref": "#/$defs/lease_context" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "lease_renew_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease", "renew_sequence"],
+      "properties": {
+        "lease": { "$ref": "#/$defs/lease_context" },
+        "renew_sequence": { "$ref": "#/$defs/positive_u53" }
+      }
+    },
+    "lease_renew_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "lease"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "lease": {
+          "anyOf": [
+            { "$ref": "#/$defs/lease_context" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "lease_revoke_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease", "reason"],
+      "properties": {
+        "lease": { "$ref": "#/$defs/lease_context" },
+        "reason": {
+          "type": "string",
+          "enum": ["operator", "shutdown", "incarnation_replaced", "suspend_ambiguous", "rekey"]
+        }
+      }
+    },
+    "lease_revoke_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" }
+      }
+    },
+    "operation_intent_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease", "operation"],
+      "properties": {
+        "lease": { "$ref": "#/$defs/lease_context" },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation_id", "payload_digest", "original_context", "expected_boundary", "action"],
+          "properties": {
+            "operation_id": { "$ref": "#/$defs/random_uuid_v4" },
+            "payload_digest": { "$ref": "#/$defs/sha256" },
+            "original_context": { "$ref": "#/$defs/original_context" },
+            "expected_boundary": { "$ref": "#/$defs/expected_boundary" },
+            "action": { "$ref": "#/$defs/v3_action" }
+          }
+        }
+      }
+    },
+    "operation_intent_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "operation"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "operation": {
+          "anyOf": [
+            { "$ref": "#/$defs/operation_record" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "operation_dispatch_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease", "operation"],
+      "properties": {
+        "lease": { "$ref": "#/$defs/lease_context" },
+        "operation": { "$ref": "#/$defs/operation_ref" }
+      }
+    },
+    "operation_dispatch_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "operation"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "operation": {
+          "anyOf": [
+            { "$ref": "#/$defs/operation_record" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "operation_lookup_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "lookup_scope"],
+      "properties": {
+        "operation": { "$ref": "#/$defs/operation_ref" },
+        "lookup_scope": { "const": "historical_read" }
+      }
+    },
+    "operation_lookup_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "operation", "mutation_authorized"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "operation": {
+          "anyOf": [
+            { "$ref": "#/$defs/operation_record" },
+            { "type": "null" }
+          ]
+        },
+        "mutation_authorized": { "const": false }
+      }
+    },
+    "operation_reconcile_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "strategy", "current_fence"],
+      "properties": {
+        "operation": { "$ref": "#/$defs/operation_ref" },
+        "strategy": {
+          "type": "string",
+          "enum": ["reobserve", "receipt_lookup", "quarantine"]
+        },
+        "current_fence": { "$ref": "#/$defs/host_fence" }
+      }
+    },
+    "operation_reconcile_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "operation", "witness"],
+      "properties": {
+        "result": { "$ref": "#/$defs/response_meta" },
+        "operation": {
+          "anyOf": [
+            { "$ref": "#/$defs/operation_record" },
+            { "type": "null" }
+          ]
+        },
+        "witness": {
+          "anyOf": [
+            { "$ref": "#/$defs/effect_witness" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "bootstrap_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "bootstrap_request" },
+            "payload": { "$ref": "#/$defs/bootstrap_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "bootstrap_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "bootstrap_response" },
+            "payload": { "$ref": "#/$defs/bootstrap_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "host_fence_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "host_fence_request" },
+            "payload": { "$ref": "#/$defs/host_fence_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "host_fence_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "host_fence_response" },
+            "payload": { "$ref": "#/$defs/host_fence_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_acquire_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_acquire_request" },
+            "payload": { "$ref": "#/$defs/lease_acquire_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_acquire_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_acquire_response" },
+            "payload": { "$ref": "#/$defs/lease_acquire_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_renew_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_renew_request" },
+            "payload": { "$ref": "#/$defs/lease_renew_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_renew_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_renew_response" },
+            "payload": { "$ref": "#/$defs/lease_renew_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_revoke_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_revoke_request" },
+            "payload": { "$ref": "#/$defs/lease_revoke_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease_revoke_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "lease_revoke_response" },
+            "payload": { "$ref": "#/$defs/lease_revoke_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_intent_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_intent_request" },
+            "payload": { "$ref": "#/$defs/operation_intent_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_intent_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_intent_response" },
+            "payload": { "$ref": "#/$defs/operation_intent_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_dispatch_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_dispatch_request" },
+            "payload": { "$ref": "#/$defs/operation_dispatch_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_dispatch_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_dispatch_response" },
+            "payload": { "$ref": "#/$defs/operation_dispatch_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_lookup_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_lookup_request" },
+            "payload": { "$ref": "#/$defs/operation_lookup_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_lookup_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_lookup_response" },
+            "payload": { "$ref": "#/$defs/operation_lookup_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_reconcile_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_reconcile_request" },
+            "payload": { "$ref": "#/$defs/operation_reconcile_request" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operation_reconcile_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["kind", "payload"],
+          "properties": {
+            "kind": { "const": "operation_reconcile_response" },
+            "payload": { "$ref": "#/$defs/operation_reconcile_response" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
