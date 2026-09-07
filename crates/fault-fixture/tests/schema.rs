@@ -2,7 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use fault_fixture::{RECOVERY_SCHEMA_JSON, RUNTIME_V3_SCHEMA_JSON};
 use jsonschema::{Draft, PatternOptions, Validator};
@@ -31,6 +31,99 @@ fn digest(bytes: &[u8]) -> String {
         let _ = write!(&mut result, "{byte:02x}");
     }
     result
+}
+
+fn resolve_checksum_path(
+    artifact_root: &Path,
+    package_root: &Path,
+    relative: &Path,
+) -> Result<PathBuf, String> {
+    if relative.is_absolute() {
+        return Err(format!("checksum path is absolute: {}", relative.display()));
+    }
+
+    let package_root = fs::canonicalize(package_root)
+        .map_err(|error| format!("canonicalize package root: {error}"))?;
+    let artifact_root = fs::canonicalize(artifact_root)
+        .map_err(|error| format!("canonicalize artifact root: {error}"))?;
+    if !artifact_root.starts_with(&package_root) {
+        return Err(format!(
+            "artifact root escapes package boundary: {}",
+            artifact_root.display()
+        ));
+    }
+
+    let mut resolved = artifact_root;
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(component) => resolved.push(component),
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "checksum path has a rooted component: {}",
+                    relative.display()
+                ));
+            }
+        }
+    }
+    if !resolved.starts_with(&package_root) {
+        return Err(format!(
+            "checksum path escapes package boundary: {}",
+            relative.display()
+        ));
+    }
+
+    // A lexical check is enough for missing paths. For an existing entry also
+    // resolve symlinks so a manifest cannot reach outside the package through
+    // a path that looks lexically safe.
+    if resolved.exists() {
+        let canonical = fs::canonicalize(&resolved)
+            .map_err(|error| format!("canonicalize {}: {error}", relative.display()))?;
+        if !canonical.starts_with(&package_root) {
+            return Err(format!(
+                "checksum path escapes package boundary through symlink: {}",
+                relative.display()
+            ));
+        }
+    }
+    Ok(resolved)
+}
+
+fn verify_checksum_manifest(artifact_root: &Path, package_root: &Path) -> Result<(), String> {
+    let checksum_path = artifact_root.join("SHA256SUMS");
+    let contents = fs::read_to_string(&checksum_path)
+        .map_err(|error| format!("read {}: {error}", checksum_path.display()))?;
+    let mut entries = 0usize;
+    for (line_number, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some((expected, relative)) = line.split_once("  ") else {
+            return Err(format!("malformed checksum line {}", line_number + 1));
+        };
+        if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("invalid checksum on line {}", line_number + 1));
+        }
+        let relative = Path::new(relative);
+        let path = resolve_checksum_path(artifact_root, package_root, relative)?;
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("missing checksum path {}: {error}", relative.display()))?;
+        let actual = digest(&bytes);
+        if actual != expected {
+            return Err(format!(
+                "checksum mismatch for {}: expected {expected}, got {actual}",
+                relative.display()
+            ));
+        }
+        entries += 1;
+    }
+    if entries == 0 {
+        return Err("checksum manifest has no entries".to_owned());
+    }
+    Ok(())
 }
 
 #[test]
@@ -96,5 +189,67 @@ fn runtime_artifact_compiles_as_draft_2020_12() -> Result<(), Box<dyn std::error
             "artifact schema digest drifted: {relative}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn checksum_manifests_bind_paths_to_artifact_root_and_package_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["runtime-v3-gameplay", "watchdog-recovery-v1"] {
+        let artifact_root = package_root.join("artifacts").join(relative);
+        verify_checksum_manifest(&artifact_root, &package_root)
+            .map_err(|error| format!("{relative}: {error}"))?;
+    }
+
+    let scratch = std::env::temp_dir().join(format!(
+        "watchdog-fault-fixture-checksum-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    fs::create_dir_all(scratch.join("artifacts/package"))?;
+    fs::create_dir_all(scratch.join("fixtures"))?;
+    fs::write(
+        scratch.join("fixtures/source.json"),
+        b"{\"fixture\":true}\n",
+    )?;
+    let source_digest = digest(&fs::read(scratch.join("fixtures/source.json"))?);
+    let checksum_path = scratch.join("artifacts/package/SHA256SUMS");
+
+    // `../../fixtures` is intentionally outside the artifact directory but
+    // remains inside the crate/package boundary.
+    fs::write(
+        &checksum_path,
+        format!("{source_digest}  ../../fixtures/source.json\n"),
+    )?;
+    verify_checksum_manifest(&scratch.join("artifacts/package"), &scratch)?;
+
+    fs::write(
+        &checksum_path,
+        format!("{}  ../../fixtures/source.json\n", "0".repeat(64)),
+    )?;
+    let mismatch = verify_checksum_manifest(&scratch.join("artifacts/package"), &scratch)
+        .expect_err("mismatched checksum was accepted");
+    assert!(mismatch.contains("checksum mismatch"), "{mismatch}");
+
+    fs::write(
+        &checksum_path,
+        format!("{source_digest}  ../../fixtures/missing.json\n"),
+    )?;
+    let missing = verify_checksum_manifest(&scratch.join("artifacts/package"), &scratch)
+        .expect_err("missing checksum path was accepted");
+    assert!(missing.contains("missing checksum path"), "{missing}");
+
+    fs::write(
+        &checksum_path,
+        format!("{source_digest}  ../../../outside.json\n"),
+    )?;
+    let escape = verify_checksum_manifest(&scratch.join("artifacts/package"), &scratch)
+        .expect_err("checksum path escaped package boundary");
+    assert!(escape.contains("escapes package boundary"), "{escape}");
+
+    fs::remove_dir_all(scratch)?;
     Ok(())
 }
