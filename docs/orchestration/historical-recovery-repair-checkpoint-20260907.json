@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-09-07T23:35:54Z",
+  "classification": "confirmed-local-component-candidates-not-a-release",
+  "supersedes_checkpoint": "evidence-binding-wave-20260907.json",
+  "maximum_open_descendants": 12,
+  "required_descendant_depth": 3,
+  "three_level_orchestration_verified": false,
+  "current_wave_model_settings": "Luna max requested and accepted in native spawn arguments; no new independent execution-metadata verification claimed",
+  "candidate_sources": {
+    "sts2-gateway": {
+      "head": "3faaab4f7479efdd0925eb4ace927c24e6ae33c2",
+      "clean": true,
+      "independent_review": "accepted for allocation cleanup and intentional-stop precedence",
+      "root_validation": "format, strict policy, all-target/all-feature Clippy, tests and build passed; malformed and wrong-caller negative TCP checks passed"
+    },
+    "sts2-harness": {
+      "head": "83369562baedd31bc8a0c4aae9e54550d0e79a1e",
+      "clean": true,
+      "tested_source": "d06284c",
+      "independent_review": "UUIDv4 identity candidate 727e4a8c2cb8fd3fc398b6d84aa54374a605d8d4 accepted before integration",
+      "root_validation": "combined allocation, historical response validation and UUID identity source passed full format, strict policy, Clippy, tests and build; later evidence and notices passed policy",
+      "remaining": ["raw catalog persistence", "immutable original operation authority", "fresh observation after historical settlement", "release correlation repair"]
+    },
+    "sts2-game-mod": {
+      "base": "13a488fd815415f7453b820d771196dc5883528a",
+      "clean": false,
+      "status": "terminal tombstone and unknown Windows ACL-mask repairs awaiting independent review and commit",
+      "root_validation": "Linux managed recovery probe and all three forced child-process-death boundaries passed; Rust gates passed; native Windows read-only ACL descriptor matrix passed",
+      "probe_sha256": "74f05abc7939b55fb17ca218aa548a027c4eabab1f6c80838037761b449da2cc",
+      "limits": "new Windows filesystem/crash campaign not run; stopped disposable VMs left unchanged"
+    },
+    "worker_storage": {
+      "base": "421f7a8c6db0c232272160d9e2ee234fc8be3527",
+      "status": "failed terminal ACK projection repaired; historical boot-completion repair assigned to W37"
+    }
+  },
+  "active_ownership": {
+    "H35": "raw catalog persistence and additive execution schema v5; shared migration ownership exclusive",
+    "G64-review": "independent tombstone and ACL repair review; read-only",
+    "W37": "historical worker completion repair in isolated worker candidate; no schema edits without approval",
+    "root": "integration, H33 authority handoff after H35 migration, advisory tooling and release evidence"
+  },
+  "next_dependencies": [
+    "H35 v5 migration and raw-byte tests -> root integration -> H33 immutable original authority persistence",
+    "G64 independent acceptance -> explicit commit -> native filesystem validation when authorized target is available",
+    "W37 restart regression and repair -> independent review -> worker client/config integration",
+    "reviewed companion set -> protected immutable release manifest -> actual cross-binary fault campaign",
+    "integrated fault gates -> authorized native service, live recovery, cold boot and measured soak validation"
+  ],
+  "release_ready": false,
+  "full_objective_complete": false,
+  "remote_delivery_complete": false,
+  "services_installed_in_this_wave": false,
+  "game_or_provider_launched_in_this_wave": false,
+  "hosts_rebooted_in_this_wave": false,
+  "release_activated_in_this_wave": false
+}
