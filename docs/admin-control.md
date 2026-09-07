@@ -1,5 +1,24 @@
 # Watchdog admin control (`watchdog-admin-v1`)
 
+## Integrated lifecycle commands
+
+Configure `admin.endpoint`, `admin.read_token_path`, and `admin.admin_token_path`
+with protected local references before starting `watchdog daemon --config PATH`.
+The configured daemon remains available while desired mode is stopped. Config
+validation does not open credentials; the server validates and loads them at startup.
+
+`watchdog start|pause|resume|drain|stop --config PATH --idempotency-key KEY` uses
+authenticated IPC and persists intent, response, and audit before acknowledgment.
+Reuse the exact key and command after an uncertain response. `status` uses the
+read credential. Acknowledgment means intent accepted, not completed cleanup.
+Without admin configuration, direct mode writes are restricted to the explicit
+synthetic-child configuration; production lifecycle commands fail closed.
+
+Status and these lifecycle operations are wired into the real service loop.
+Other administrative dispatcher operations remain unsupported pending integration;
+their transport types alone are not operational evidence. Windows native service
+execution and uninstall recovery remain unverified.
+
 This sideband is a local operator control plane. It is an authenticated,
 bounded request queue into the watchdog reconciliation loop; it is not a game
 or gateway protocol. The package does not contain a gameplay dispatch,

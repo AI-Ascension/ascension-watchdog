@@ -72,18 +72,82 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args),
-        "status" => status_command(&config_path),
-        "start" => mode_command(&config_path, DesiredMode::Running),
-        "pause" => mode_command(&config_path, DesiredMode::Paused),
-        "resume" => mode_command(&config_path, DesiredMode::Running),
-        "drain" => mode_command(&config_path, DesiredMode::Draining),
-        "stop" => mode_command(&config_path, DesiredMode::Stopped),
+        "status" | "start" | "pause" | "resume" | "drain" | "stop" => {
+            operator_command(&command, &mut args, &config_path)
+        }
         "daemon" | "run" => daemon_command(&mut args, &config_path),
         "job" => job_command(&mut args, &config_path),
         other => Err(WatchdogError::InvalidInput(format!(
             "unknown command {other}; try `watchdog help`"
         ))),
     }
+}
+
+fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<Option<String>> {
+    use crate::admin::{
+        AdminClient, AdminClientConfig, AdminCommand, Capability, EmptyParams, ReplyStatus,
+    };
+    let key = take_option(args, "--idempotency-key");
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected operator command argument".to_owned(),
+        ));
+    }
+    let config = WatchdogConfig::from_file(path)?;
+    let Some(admin) = config.admin else {
+        if name == "status" {
+            return status_command(path);
+        }
+        if !config.allow_synthetic_children {
+            return Err(WatchdogError::Unauthorized(
+                "mutating commands require authenticated admin configuration".to_owned(),
+            ));
+        }
+        let mode = match name {
+            "start" | "resume" => DesiredMode::Running,
+            "pause" => DesiredMode::Paused,
+            "drain" => DesiredMode::Draining,
+            "stop" => DesiredMode::Stopped,
+            _ => {
+                return Err(WatchdogError::InvalidInput(
+                    "unknown lifecycle command".to_owned(),
+                ));
+            }
+        };
+        return mode_command(path, mode);
+    };
+    let command = match name {
+        "status" => AdminCommand::Status(EmptyParams {}),
+        "start" => AdminCommand::Start(EmptyParams {}),
+        "resume" => AdminCommand::Resume(EmptyParams {}),
+        "pause" => AdminCommand::Pause(EmptyParams {}),
+        "drain" => AdminCommand::Drain(EmptyParams {}),
+        "stop" => AdminCommand::Stop(EmptyParams {}),
+        _ => {
+            return Err(WatchdogError::InvalidInput(
+                "unknown lifecycle command".to_owned(),
+            ));
+        }
+    };
+    let (capability, token, key) = if name == "status" {
+        (
+            Capability::Read,
+            admin.read_token_path,
+            key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        )
+    } else {
+        (Capability::Admin, admin.admin_token_path, key.ok_or_else(|| WatchdogError::InvalidInput(
+            "mutating commands require --idempotency-key; reuse it after an uncertain response".to_owned()))?)
+    };
+    let client = AdminClient::new(AdminClientConfig::new(admin.endpoint, token, capability)?)?;
+    let response = client.execute(&key, command)?;
+    if !matches!(response.status, ReplyStatus::Ok | ReplyStatus::Accepted) {
+        return Err(WatchdogError::Conflict(format!(
+            "administrative request returned {:?}; idempotency key {key}",
+            response.status
+        )));
+    }
+    Ok(Some(serde_json::to_string(&response)?))
 }
 
 fn config_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {

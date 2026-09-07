@@ -35,8 +35,16 @@ fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
     let fixture = Fixture::new();
     let config = WatchdogConfig {
         database: fixture.temp.path().join("state.sqlite"),
+        admin: Some(ascension_watchdog::config::AdminConfig {
+            endpoint: fixture.socket.clone(),
+            read_token_path: fixture.read_token.clone(),
+            admin_token_path: fixture.admin_token.clone(),
+            allowed_peer_sid: None,
+        }),
         ..WatchdogConfig::default()
     };
+    let config_path = fixture.temp.path().join("config.json");
+    config.to_file(&config_path).unwrap();
     let mut service = ServiceLoop::new(
         Supervisor::initialize(config.clone()).unwrap(),
         Duration::from_millis(10),
@@ -57,15 +65,30 @@ fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
             DesiredMode::Stopped,
         ),
     ] {
-        let client = client.clone();
-        let request = thread::spawn(move || client.execute(key, command));
+        let config_path = config_path.clone();
+        let name = if matches!(command, AdminCommand::Start(_)) {
+            "start"
+        } else {
+            "stop"
+        };
+        let request = thread::spawn(move || {
+            ascension_watchdog::cli::execute(vec![
+                name.to_owned(),
+                "--config".to_owned(),
+                config_path.to_string_lossy().into_owned(),
+                "--idempotency-key".to_owned(),
+                key.to_owned(),
+            ])
+        });
         let deadline = Instant::now() + Duration::from_secs(3);
         while queue.depth() == 0 && !request.is_finished() {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(1));
         }
         service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
-        assert_eq!(request.join().unwrap().unwrap().status, ReplyStatus::Accepted);
+        let response: ascension_watchdog::admin::AdminResponse =
+            serde_json::from_str(&request.join().unwrap().unwrap().unwrap()).unwrap();
+        assert_eq!(response.status, ReplyStatus::Accepted);
         assert_eq!(service.reconcile(1_000).unwrap().desired_mode, expected);
     }
     drop(server);
@@ -83,7 +106,10 @@ fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
         thread::sleep(Duration::from_millis(1));
     }
     service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
-    assert_eq!(request.join().unwrap().unwrap().status, ReplyStatus::Accepted);
+    assert_eq!(
+        request.join().unwrap().unwrap().status,
+        ReplyStatus::Accepted
+    );
     assert_eq!(
         service.reconcile(1_010).unwrap().desired_mode,
         DesiredMode::Stopped
