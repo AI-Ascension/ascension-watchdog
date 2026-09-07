@@ -23,48 +23,68 @@ impl RunningServer {
             "watchdog-runtime-fixture-{}.sqlite",
             Uuid::new_v4()
         ));
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
+        let child = Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
             .arg("--db")
             .arg(&database)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()?;
-        let stdout = child.stdout.take().ok_or("server stdout unavailable")?;
+        // Own cleanup immediately after spawn, including announcement failures
+        // and assertion unwinding in the calling test.
+        let mut server = Self {
+            child,
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            database,
+        };
+        let stdout = server
+            .child
+            .stdout
+            .take()
+            .ok_or("server stdout unavailable")?;
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         reader.read_line(&mut line)?;
-        let address = line
+        server.address = line
             .strip_prefix("LISTEN ")
             .ok_or("server did not announce its listener")?
             .trim()
             .parse()?;
-        Ok(Self {
-            child,
-            address,
-            database,
-        })
+        Ok(server)
     }
 
     fn stop(mut self) -> Result<(), Box<dyn std::error::Error>> {
         if self.child.try_wait()?.is_none() {
-            let stop_request = json!({
-                "protocol_version":"runtime-v3-gameplay",
-                "schema_digest":RUNTIME_V3_SCHEMA_DIGEST,
-                "provenance":{"artifact":"sts2-protocol/runtime-v3-gameplay","source":"schemas/runtime-v3-gameplay.schema.json","generator":"hand-authored"},
-                "correlation_id":"stop-correlation",
-                "instance_id":"instance-1","session_id":"session-1","lease_id":"lease-1",
-                "lease_epoch":0,"generation":0,"kind":"state_request",
-                "state_id":null,"operation_id":null,"observation":null,"legal_actions":null,
-                "action":null,"status":null,"transition":null,"error_code":null,
-                "wait_for_millis":null,"wait_outcome":null,"recovery":null
-            });
-            let _ = send_raw(self.address, &stop_request);
             self.child.kill()?;
         }
         let _ = self.child.wait();
         remove_database(&self.database);
         Ok(())
     }
+}
+
+impl Drop for RunningServer {
+    fn drop(&mut self) {
+        // Child::kill targets the still-owned handle, never a discovered PID.
+        // Reap before removing this fixture's uniquely named database files.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        remove_database(&self.database);
+    }
+}
+
+#[test]
+fn failed_test_scope_reaps_its_owned_server() -> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let address = server.address;
+    let database = server.database.clone();
+    let outcome = std::panic::catch_unwind(move || {
+        let _owned = server;
+        panic!("synthetic test failure");
+    });
+    assert!(outcome.is_err());
+    assert!(!database.exists());
+    assert!(TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_err());
+    Ok(())
 }
 
 fn remove_database(path: &PathBuf) {
