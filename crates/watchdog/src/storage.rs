@@ -15,15 +15,34 @@ use rusqlite::{
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+#[path = "storage_admin.rs"]
+mod storage_admin;
+pub use storage_admin::{
+    MAX_OPERATOR_COMMANDS, MAX_OPERATOR_COMMANDS_WITH_STOP_RESERVE, MAX_OPERATOR_RESPONSE_BYTES,
+    OPERATOR_LEDGER_SCHEMA_VERSION, OperatorCapability, OperatorCommand, OperatorCommandContext,
+    OperatorCommandOutcome, OperatorCommandReceipt, RESERVED_LIFECYCLE_COMMANDS,
+    RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
+};
+
 const SCHEMA_VERSION: i64 = 1;
 const MAX_AUDIT_DETAIL_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
+/// Hard upper bound for retained audit rows.  Audit is intentionally
+/// backpressured rather than silently evicted: deleting an old audit row can
+/// make an operator replay indistinguishable from a new command.
+pub const MAX_AUDIT_RECORDS: i64 = 4096;
+/// Keep a small audit reserve for lifecycle commands when ordinary diagnostic
+/// events have consumed the normal retention budget.
+pub const RESERVED_CRITICAL_AUDIT_RECORDS: i64 = 8;
+/// One bounded emergency slot keeps a fresh operator stop admissible after
+/// ordinary and lifecycle ledger capacity is exhausted.
+pub const RESERVED_STOP_AUDIT_RECORDS: i64 = 1;
 // Reserved for the platform launch-intent adapter. Keep the bound alongside
 // the storage contract until the native adapter consumes the intent proof.
 #[allow(dead_code)]
@@ -65,12 +84,28 @@ impl SingletonLock {
     /// Acquire `<database>.lock` without deleting another owner's lock file.
     #[allow(clippy::suspicious_open_options)]
     pub fn acquire(database: impl AsRef<Path>) -> Result<Self> {
-        let database = database.as_ref();
-        let path = lock_path(database);
+        let database = canonical_owner_path(database.as_ref(), "database")?;
+        let path = lock_path(&database);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
+        }
+        // Parent creation is itself a filesystem boundary.  Re-resolve the
+        // path after it exists and reject any link/reparse substitution before
+        // opening the lock file.  The owner directory must still be protected
+        // from untrusted writers; path checks alone cannot close a TOCTOU race.
+        let stable_database = canonical_owner_path(&database, "database")?;
+        if stable_database != database {
+            return Err(WatchdogError::Conflict(
+                "database path changed while preparing owner lock".to_string(),
+            ));
+        }
+        let stable_lock = canonical_owner_path(&path, "lock")?;
+        if stable_lock != path {
+            return Err(WatchdogError::Conflict(
+                "lock path changed while preparing owner lock".to_string(),
+            ));
         }
         let file = OpenOptions::new()
             .create(true)
@@ -78,6 +113,7 @@ impl SingletonLock {
             .read(true)
             .write(true)
             .open(&path)?;
+        validate_opened_lock_handle(&path, &file)?;
         file.try_lock_exclusive().map_err(|error| {
             if is_lock_contention(&error) {
                 WatchdogError::Busy(path.clone())
@@ -123,7 +159,8 @@ impl SingletonLock {
     /// This is private to the storage owner path; public `acquire` remains
     /// non-reentrant so a second controller still receives `Busy`.
     fn current_for_path(database: &Path) -> Option<Self> {
-        let path = lock_path(database);
+        let database = canonical_owner_path(database, "database").ok()?;
+        let path = lock_path(&database);
         let registry = lock_registry().lock().ok()?;
         let inner = registry.get(&path)?.upgrade()?;
         Some(Self { inner })
@@ -148,12 +185,149 @@ fn lock_path(database: &Path) -> PathBuf {
 }
 
 fn ensure_owner_lock(database: &Path, owner: &SingletonLock) -> Result<()> {
-    if owner.path() != lock_path(database) {
+    let database = canonical_owner_path(database, "database")?;
+    if owner.path() != lock_path(&database) {
         return Err(WatchdogError::Unauthorized(
             "singleton lock does not match the requested database".to_string(),
         ));
     }
     Ok(())
+}
+
+/// Resolve an owner-local database path without following a link/reparse
+/// component.  The final database may be absent during initialization; all
+/// existing ancestors and the existing leaf are still inspected.  A missing
+/// suffix is joined to the canonical nearest existing parent so equivalent
+/// relative/absolute spellings use one lock identity.
+fn canonical_owner_path(path: &Path, name: &str) -> Result<PathBuf> {
+    validate_local_storage_path(path, name)?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let Some(file_name) = absolute.file_name() else {
+        return Err(WatchdogError::InvalidInput(format!(
+            "{name} path must name a file"
+        )));
+    };
+    reject_existing_link_components(&absolute, name)?;
+
+    let parent = absolute.parent().ok_or_else(|| {
+        WatchdogError::InvalidInput(format!("{name} path has no owner-local parent"))
+    })?;
+    let mut existing = parent.to_path_buf();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let Some(component) = existing.file_name() else {
+            return Err(WatchdogError::InvalidInput(format!(
+                "{name} path has no existing owner-local ancestor"
+            )));
+        };
+        missing.push(component.to_os_string());
+        if !existing.pop() {
+            return Err(WatchdogError::InvalidInput(format!(
+                "{name} path has no existing owner-local ancestor"
+            )));
+        }
+    }
+    let metadata = fs::symlink_metadata(&existing)?;
+    reject_link_or_reparse(&metadata, name)?;
+    if !metadata.is_dir() {
+        return Err(WatchdogError::InvalidInput(format!(
+            "{name} owner-local parent is not a directory"
+        )));
+    }
+    let mut canonical = fs::canonicalize(&existing)?;
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    canonical.push(file_name);
+    // If the leaf appeared between the first inspection and canonical path
+    // construction, inspect it too.  An absent leaf remains valid for init.
+    if let Ok(metadata) = fs::symlink_metadata(&canonical) {
+        reject_link_or_reparse(&metadata, name)?;
+    }
+    Ok(canonical)
+}
+
+fn reject_existing_link_components(path: &Path, name: &str) -> Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => reject_link_or_reparse(&metadata, name)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(WatchdogError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+fn reject_link_or_reparse(metadata: &fs::Metadata, name: &str) -> Result<()> {
+    if metadata.file_type().is_symlink() || is_reparse_point(metadata) {
+        return Err(WatchdogError::InvalidInput(format!(
+            "{name} path contains a symbolic link or reparse point"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate the path again after opening the lock and compare its stable file
+/// identity with the opened handle where the platform exposes one.  This does
+/// not replace protected owner-directory permissions, but it prevents a
+/// path-swap from silently turning the descriptor into a different regular
+/// file between validation and lock acquisition.
+fn validate_opened_lock_handle(path: &Path, file: &File) -> Result<()> {
+    let path_metadata = fs::symlink_metadata(path)?;
+    reject_link_or_reparse(&path_metadata, "lock")?;
+    if !path_metadata.is_file() {
+        return Err(WatchdogError::InvalidInput(
+            "lock path is not a regular file".to_string(),
+        ));
+    }
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(WatchdogError::Conflict(
+            "opened lock handle is no longer a regular file".to_string(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if path_metadata.dev() != opened_metadata.dev()
+            || path_metadata.ino() != opened_metadata.ino()
+        {
+            return Err(WatchdogError::Conflict(
+                "lock path changed after its handle was opened".to_string(),
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if let (Some(path_index), Some(opened_index)) =
+            (path_metadata.file_index(), opened_metadata.file_index())
+            && path_index != opened_index
+        {
+            return Err(WatchdogError::Conflict(
+                "lock path changed after its handle was opened".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 /// Durable deployment and job store.
@@ -357,7 +531,7 @@ impl Store {
     /// make that admission explicit without a second OS lock attempt.
     pub fn initialize(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = canonical_owner_path(path.as_ref(), "database")?;
         let _admission = match SingletonLock::current_for_path(&path) {
             Some(lock) => lock,
             None => SingletonLock::acquire(&path)?,
@@ -374,7 +548,7 @@ impl Store {
         owner: &SingletonLock,
     ) -> Result<Self> {
         config.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = canonical_owner_path(path.as_ref(), "database")?;
         ensure_owner_lock(&path, owner)?;
         Self::initialize_impl(path, config)
     }
@@ -384,6 +558,12 @@ impl Store {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
+        }
+        let stable_path = canonical_owner_path(&path, "database")?;
+        if stable_path != path {
+            return Err(WatchdogError::Conflict(
+                "database path changed while preparing initialization".to_string(),
+            ));
         }
         let existed = path.exists();
         let mut conn = open_connection(&path)?;
@@ -428,6 +608,7 @@ impl Store {
         insert_metadata(&tx, "restart_generation", "1")?;
         insert_metadata(&tx, "config_digest", &config_digest)?;
         insert_metadata(&tx, "config_compat_digest", &config_compat_digest)?;
+        insert_metadata(&tx, "operator_ledger_schema_version", "1")?;
         insert_metadata(&tx, "initialized_at_ms", &now.to_string())?;
         insert_metadata(&tx, "updated_at_ms", &now.to_string())?;
         insert_audit_tx(
@@ -453,7 +634,7 @@ impl Store {
     /// [`Self::open_for_owner`].
     pub fn open(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = canonical_owner_path(path.as_ref(), "database")?;
         Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE)
     }
 
@@ -462,7 +643,7 @@ impl Store {
     /// method so an unlink/create race cannot bootstrap or mutate state.
     pub fn open_read_only(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = canonical_owner_path(path.as_ref(), "database")?;
         Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY)
     }
 
@@ -475,9 +656,11 @@ impl Store {
         owner: &SingletonLock,
     ) -> Result<Self> {
         config.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = canonical_owner_path(path.as_ref(), "database")?;
         ensure_owner_lock(&path, owner)?;
-        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        let store = Self::open_impl(path.clone(), config, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        storage_admin::migrate_operator_ledger_for_owner(&path, owner)?;
+        Ok(store)
     }
 
     fn open_impl(path: PathBuf, config: &WatchdogConfig, flags: OpenFlags) -> Result<Self> {
@@ -605,8 +788,7 @@ impl Store {
     /// Create a consistent SQLite backup without deleting or truncating an
     /// existing destination.
     pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<()> {
-        let destination = destination.as_ref();
-        validate_local_storage_path(destination, "backup")?;
+        let destination = canonical_owner_path(destination.as_ref(), "backup")?;
         if destination.exists() {
             return Err(WatchdogError::Conflict(format!(
                 "backup destination already exists: {}",
@@ -617,6 +799,12 @@ impl Store {
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
+        }
+        let stable_destination = canonical_owner_path(&destination, "backup")?;
+        if stable_destination != destination {
+            return Err(WatchdogError::Conflict(
+                "backup destination changed while preparing copy".to_string(),
+            ));
         }
         self.conn.execute(
             "VACUUM INTO ?",
@@ -641,12 +829,14 @@ impl Store {
         config: &WatchdogConfig,
     ) -> Result<Self> {
         config.validate()?;
-        let destination = destination.as_ref().to_path_buf();
-        let _admission = match SingletonLock::current_for_path(&destination) {
+        let destination = canonical_owner_path(destination.as_ref(), "destination")?;
+        let admission = match SingletonLock::current_for_path(&destination) {
             Some(lock) => lock,
             None => SingletonLock::acquire(&destination)?,
         };
-        Self::restore_impl(backup.as_ref(), destination, config)
+        let restored = Self::restore_impl(backup.as_ref(), &destination, config)?;
+        storage_admin::migrate_operator_ledger_for_owner(restored.path(), &admission)?;
+        Ok(restored)
     }
 
     /// Restore an owner-local backup under an already-held destination lock.
@@ -660,14 +850,16 @@ impl Store {
         owner: &SingletonLock,
     ) -> Result<Self> {
         config.validate()?;
-        let destination = destination.as_ref().to_path_buf();
+        let destination = canonical_owner_path(destination.as_ref(), "destination")?;
         ensure_owner_lock(&destination, owner)?;
-        Self::restore_impl(backup.as_ref(), destination, config)
+        let restored = Self::restore_impl(backup.as_ref(), &destination, config)?;
+        storage_admin::migrate_operator_ledger_for_owner(restored.path(), owner)?;
+        Ok(restored)
     }
 
-    fn restore_impl(backup: &Path, destination: PathBuf, config: &WatchdogConfig) -> Result<Self> {
-        validate_local_storage_path(backup, "backup")?;
-        validate_local_storage_path(&destination, "destination")?;
+    fn restore_impl(backup: &Path, destination: &Path, config: &WatchdogConfig) -> Result<Self> {
+        let backup = canonical_owner_path(backup, "backup")?;
+        let destination = canonical_owner_path(destination, "destination")?;
         if !backup.is_file() {
             return Err(WatchdogError::NotFound(format!(
                 "backup {}",
@@ -680,12 +872,12 @@ impl Store {
                 destination.display()
             )));
         }
-        if config.database != destination {
+        if canonical_owner_path(&config.database, "database")? != destination {
             return Err(WatchdogError::InvalidInput(
                 "restore config database must equal destination".to_string(),
             ));
         }
-        let source_conn = open_connection_with_flags(backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let source_conn = open_connection_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let source_schema = parse_metadata_i64(
             "schema_version",
             &metadata_from_conn(&source_conn, "schema_version")?.ok_or_else(|| {
@@ -782,7 +974,13 @@ impl Store {
         {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(backup, &destination)?;
+        let stable_destination = canonical_owner_path(&destination, "destination")?;
+        if stable_destination != destination {
+            return Err(WatchdogError::Conflict(
+                "restore destination changed while preparing copy".to_string(),
+            ));
+        }
+        std::fs::copy(&backup, &destination)?;
         let mut conn = open_connection(&destination)?;
         // VACUUM INTO produces a standalone database using the source's
         // journal mode.  Re-establish the watchdog's required WAL/FULL
@@ -1863,6 +2061,24 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             worker_id TEXT
         );
         CREATE INDEX IF NOT EXISTS jobs_ready_idx ON jobs(status, next_retry_at_ms, created_at_ms, id);
+        CREATE TABLE IF NOT EXISTS operator_commands (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL UNIQUE,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            principal TEXT NOT NULL,
+            capability TEXT NOT NULL CHECK(capability IN ('read','admin')),
+            command TEXT NOT NULL CHECK(command IN (
+                'status','jobs','attempt','release_inspect','start','pause',
+                'resume','drain','stop','quarantine','retry','reconcile',
+                'backup','restore','release_activate'
+            )),
+            command_fingerprint TEXT NOT NULL,
+            desired_mode TEXT CHECK(desired_mode IS NULL OR desired_mode IN ('stopped','paused','running','draining')),
+            response_json TEXT NOT NULL,
+            recorded_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS operator_commands_order_idx ON operator_commands(sequence);
+        CREATE INDEX IF NOT EXISTS operator_commands_principal_idx ON operator_commands(principal, sequence);
         CREATE TABLE IF NOT EXISTS launch_intents (
             id TEXT PRIMARY KEY NOT NULL,
             deployment_id TEXT NOT NULL,
@@ -1964,11 +2180,34 @@ fn upsert_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()
 fn insert_audit_tx(tx: &Transaction<'_>, action: &str, detail: &str, now_ms: u64) -> Result<()> {
     validate_name(action, "audit action", 128)?;
     validate_detail(detail, "audit detail")?;
+    let retained: i64 = tx.query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))?;
+    let limit = if is_emergency_stop_audit_action(action) {
+        MAX_AUDIT_RECORDS + RESERVED_STOP_AUDIT_RECORDS
+    } else if is_critical_audit_action(action) {
+        MAX_AUDIT_RECORDS
+    } else {
+        MAX_AUDIT_RECORDS - RESERVED_CRITICAL_AUDIT_RECORDS
+    };
+    if retained >= limit {
+        return Err(WatchdogError::Conflict(
+            "audit retention bound is full; explicit archival is required".to_string(),
+        ));
+    }
     tx.execute(
         "INSERT INTO audit (action, detail, occurred_at_ms) VALUES (?, ?, ?)",
         params![action, detail, sqlite_timestamp(now_ms)?],
     )?;
     Ok(())
+}
+
+fn is_critical_audit_action(action: &str) -> bool {
+    action == "desired_mode_changed"
+        || action.starts_with("operator_command_")
+        || action == "store_restored_new_watchdog_namespace"
+}
+
+fn is_emergency_stop_audit_action(action: &str) -> bool {
+    action == "operator_command_stop_accepted"
 }
 
 fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
