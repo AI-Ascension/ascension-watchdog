@@ -4,8 +4,9 @@ The Windows adapter receives an allowlisted executable path and a separate
 approved SHA-256 digest for every role.  Before `CreateProcess` it opens the
 canonical executable with write/delete sharing denied, records the kernel file
 identity, hashes the bytes through that handle, and rejects a digest mismatch.
-It repeats the path identity and byte barrier while the child is suspended,
-then assigns the child to its named Job Object before resuming it.
+`PROC_THREAD_ATTRIBUTE_JOB_LIST` assigns the child to its named Job Object during
+`CreateProcess`. It repeats the path identity and byte barrier while the child
+is suspended, before resuming it.
 
 The approved executable digest is a pre-execution admission check; it is not a
 claim that a path remains a complete release identity after process creation.
