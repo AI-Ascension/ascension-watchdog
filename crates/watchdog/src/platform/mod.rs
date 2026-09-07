@@ -8,6 +8,8 @@ pub mod contract;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "linux")]
+pub mod linux_broker;
+#[cfg(target_os = "linux")]
 pub mod linux_launcher;
 #[cfg(target_os = "linux")]
 pub mod linux_process;
@@ -19,6 +21,11 @@ pub use contract::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{NotificationResult, SystemdNotifier};
+#[cfg(target_os = "linux")]
+pub use linux_broker::{
+    BrokerClient, BrokerComponent, BrokerPolicy, BrokerRequest, LaunchReceipt, LinuxSystemdBroker,
+    PeerCredentials,
+};
 #[cfg(target_os = "linux")]
 pub use linux_launcher::{
     LauncherStreams, LinuxHelperAuthorization, LinuxHelperBootstrap, LinuxHelperRequest,

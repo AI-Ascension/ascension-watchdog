@@ -1,0 +1,33 @@
+[Unit]
+Description=AI-Ascension restricted systemd launch broker
+After=systemd-udev-settle.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=ascension-watchdog-broker
+RuntimeDirectoryMode=0750
+ExecStart=/opt/ascension-watchdog/current/linux-systemd-broker --socket=/run/ascension-watchdog-broker/broker.sock --policy=/etc/ascension-watchdog/broker-policy.json
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/ascension-watchdog/broker-policy.json /opt/ascension-watchdog
+ReadWritePaths=/run/ascension-watchdog-broker
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+TasksMax=64
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
