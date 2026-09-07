@@ -1,7 +1,19 @@
 use ascension_watchdog::admin::MainLoopPhase;
 use ascension_watchdog::service::ServiceLoop;
-use ascension_watchdog::{DesiredMode, Supervisor, WatchdogConfig};
+use ascension_watchdog::{DesiredMode, Supervisor, WatchdogConfig, WatchdogError};
 use std::time::Duration;
+
+fn with_owner_store_guard<F>(
+    supervisor: Supervisor,
+    operation: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&Supervisor) -> Result<(), Box<dyn std::error::Error>>,
+{
+    let result = operation(&supervisor);
+    drop(supervisor);
+    result
+}
 
 #[test]
 fn completed_paused_loop_advances_health_without_starting_children()
@@ -48,6 +60,33 @@ fn competing_controller_is_rejected_before_readiness() -> Result<(), Box<dyn std
     assert!(!health.ready);
     assert_eq!(health.heartbeat_seq, 0);
     assert_eq!(health.phase, MainLoopPhase::Starting);
+    Ok(())
+}
+
+#[test]
+fn owner_store_guard_stays_held_through_finalization_closure()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Stopped,
+        ..WatchdogConfig::default()
+    };
+    let mut owner = Supervisor::initialize(config.clone())?;
+    let report = owner.reconcile_once(1_000)?;
+    assert_eq!(report.desired_mode, DesiredMode::Stopped);
+
+    with_owner_store_guard(owner, |held| {
+        assert_eq!(held.status()?.desired_mode, DesiredMode::Stopped);
+        assert!(matches!(
+            Supervisor::open(config.clone()),
+            Err(WatchdogError::Busy(_))
+        ));
+        Ok(())
+    })?;
+
+    let reopened = Supervisor::open(config)?;
+    assert_eq!(reopened.status()?.desired_mode, DesiredMode::Stopped);
     Ok(())
 }
 

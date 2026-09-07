@@ -153,12 +153,27 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
 
 /// Private owner-store capability issued only after the binding's config has
 /// opened the matching watchdog store, durable `Stopped` intent has been
-/// persisted, and a clean reconciliation has completed. The platform-native
-/// SCM witness is intentionally separate because this crate owns the store
-/// semantics while the platform crate owns SCM.
-#[derive(Debug)]
+/// persisted, and a clean reconciliation has completed. It retains the
+/// opened supervisor and its singleton lock through the final identity/mode
+/// check and native deletion. The platform-native SCM witness is intentionally
+/// separate because this crate owns the store semantics while the platform
+/// crate owns SCM.
 struct DurablyStoppedDeployment {
     binding: ServiceBinding,
+    supervisor: Supervisor,
+    database: PathBuf,
+    deployment_id: String,
+    config_digest: String,
+}
+
+impl std::fmt::Debug for DurablyStoppedDeployment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DurablyStoppedDeployment")
+            .field("binding", &self.binding)
+            .field("owner_store_held", &true)
+            .finish_non_exhaustive()
+    }
 }
 
 fn mint_durably_stopped_deployment(binding: &ServiceBinding) -> Result<DurablyStoppedDeployment> {
@@ -185,7 +200,27 @@ fn mint_durably_stopped_deployment(binding: &ServiceBinding) -> Result<DurablySt
     }
     Ok(DurablyStoppedDeployment {
         binding: binding.clone(),
+        database: persisted.database,
+        deployment_id: persisted.deployment_id,
+        config_digest: persisted.config_digest,
+        supervisor,
     })
+}
+
+impl DurablyStoppedDeployment {
+    fn verify_before_delete(&self) -> Result<()> {
+        let persisted = self.supervisor.status()?;
+        if persisted.desired_mode != DesiredMode::Stopped
+            || persisted.database != self.database
+            || persisted.deployment_id != self.deployment_id
+            || persisted.config_digest != self.config_digest
+        {
+            return Err(WatchdogError::Conflict(
+                "bound watchdog store changed before service deletion".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Keep the owner witness check ahead of the native deletion seam. This
@@ -212,6 +247,7 @@ fn delete_durably_stopped_service(
                 "native SCM stop witness does not match durable owner deployment".to_owned(),
             ));
         }
+        owner_stop.verify_before_delete()?;
         plan.delete_bound_stopped_service(native_stop)
             .map_err(|error| platform_error(&error))
     })
