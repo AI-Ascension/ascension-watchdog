@@ -21,6 +21,18 @@ or explicit cleanup removes the path only when it is still that exact socket;
 replacement or incumbent paths are left untouched. This prevents an old
 server's cleanup from deleting a new server's endpoint.
 
+On Windows the same contract is backed by a real local named pipe in the fixed
+`\\.\pipe\ascension-watchdog-*` namespace. Each fixed worker owns one
+`PIPE_TYPE_MESSAGE` instance with a bounded length-prefixed frame, protected
+by a non-inheritable, protected DACL containing only the configured operator
+SID and `PIPE_REJECT_REMOTE_CLIENTS`. The server captures the peer PID, session,
+user SID, and executable path while the process handle is held. The client
+holds the server process handle and verifies PID plus process-creation time on
+each exchange; callers may additionally require an exact canonical executable
+path. Partial reads/writes, cancellation, disconnect, and deadlines stay
+inside the native boundary. A named-pipe namespace entry is removed by closing
+the exact kernel handle; no filesystem cleanup or stale-name deletion is used.
+
 The server receives explicit references to two owner-only token files through
 `AuthReferences`: one read token and one admin token. Raw token bytes are held
 only by the transport owner and are never present in status/result types,
@@ -30,10 +42,12 @@ retry, reconciliation, backup/restore, and release activation require the
 admin credential. Supplying a read token with an admin claim produces
 `FORBIDDEN`; an unknown or incorrect token produces `UNAUTHORIZED`.
 
-Windows intentionally returns `UNSUPPORTED` from these Unix transport entry
-points. The P2 native named-pipe broker is a separate lifecycle owner and must
-provide the same capability and command boundaries before a Windows adapter is
-enabled. This module never returns a fake success on Windows.
+The Windows adapter still performs token authentication in the watchdog layer:
+the protected peer SID authenticates the local operator identity, while the
+explicit read/admin token determines command capability. After authentication
+the queue receives only a token-free `DispatchContext` containing the UUID,
+idempotency key, capability, coarse principal class, and SHA-256 command
+fingerprint.
 
 ## Closed command contract
 
@@ -99,9 +113,12 @@ disconnects or the response write fails.
 
 `MainLoopHealth` is published only by the actual reconciliation loop. The I/O
 thread cannot increment `heartbeat_seq`, set `ready`, or turn a responsive
-socket into readiness. Status responses therefore expose the last genuine
-loop progress snapshot, including phase, progress age, deadline, queue age,
-pending operation count, incarnation, and lease remaining time.
+socket into readiness. Heartbeat regressions are rejected, and a same-sequence
+phase update cannot reset the monotonic progress age. If the health state is
+poisoned, reads fail closed to `BLOCKED`/not-ready. Status responses therefore
+expose the last genuine loop progress snapshot, including phase, progress age,
+deadline, queue age, pending operation count, incarnation, and lease remaining
+time.
 
 ## Idempotency and deadlines
 
@@ -122,9 +139,11 @@ avoid a client reconnect causing a second durable stop/pause/recovery action.
 
 The root service owns the following integration points:
 
-1. Add `pub mod admin;` and include the package's source files without adding
-   a sibling/path crate dependency. Existing `serde`, `serde_json`, `sha2`,
-   and `uuid` dependencies are sufficient.
+1. Add `pub mod admin;` and include the package's source files. On Unix, add
+   the direct `rustix = { version = "1.1.4", features = ["process"] }`
+   dependency for process-effective-UID checks; do not infer the current UID
+   from the service's current working directory. Windows uses the isolated
+   `ascension-platform-windows` dependency for named pipes and ACL checks.
 2. Construct the queue/server only while the service owns the existing
    singleton reconciliation lock. `Supervisor` (or its service loop) is the
    `AdminDispatcher`; the IPC thread must never open or write the Store.

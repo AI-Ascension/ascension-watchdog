@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use uuid::Uuid;
 
 const MAX_ID_BYTES: usize = 128;
@@ -37,6 +38,22 @@ pub enum Capability {
     Read,
     /// Desired-state, recovery, backup, restore and activation operations.
     Admin,
+}
+
+/// Coarse identity of the principal that passed transport authentication.
+///
+/// This value is deliberately an enum rather than a token, SID, path, or
+/// arbitrary provider claim.  It is safe to persist in a watchdog audit row
+/// and is the only credential-related value that crosses the queue boundary.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticatedPrincipalClass {
+    /// The owner-local read credential authenticated the request.
+    ReadToken,
+    /// The owner-local administrator credential authenticated the request.
+    AdminToken,
+    /// The protected Windows named-pipe peer SID authenticated the request.
+    WindowsOperator,
 }
 
 impl Capability {
@@ -437,6 +454,97 @@ pub struct AdminRequest {
     pub command: AdminCommand,
 }
 
+/// Token-free, validated identity handed to the watchdog reconciliation loop.
+///
+/// A transport may retain the raw request only while authenticating it.  Once
+/// this context is constructed, the request credential is dropped and cannot
+/// be observed by an [`AdminDispatcher`] implementation.  The command
+/// fingerprint is canonical: it covers the v1 contract, claimed capability,
+/// and closed command payload, while excluding the request UUID, deadline,
+/// transport identity, and credential.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatchContext {
+    request_id: Uuid,
+    idempotency_key: String,
+    capability: Capability,
+    principal: AuthenticatedPrincipalClass,
+    command_fingerprint: String,
+}
+
+impl DispatchContext {
+    /// Construct and validate a queue context from an authenticated request.
+    pub fn from_request(
+        request: &AdminRequest,
+        principal: AuthenticatedPrincipalClass,
+    ) -> std::result::Result<Self, String> {
+        request.validate()?;
+        if !request
+            .capability
+            .includes(request.command.name().required_capability())
+        {
+            return Err("capability does not authorize the command".to_string());
+        }
+        let request_id = Uuid::parse_str(&request.request_id)
+            .map_err(|_| "request_id is not a UUID".to_string())?;
+        let context = Self {
+            request_id,
+            idempotency_key: request.idempotency_key.clone(),
+            capability: request.capability,
+            principal,
+            command_fingerprint: request.fingerprint(),
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Validate every field before the context crosses the transport queue.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.request_id.get_version_num() != 4 {
+            return Err("request_id must be a UUIDv4".to_string());
+        }
+        validate_identifier(&self.idempotency_key, "idempotency_key", MAX_ID_BYTES)?;
+        if self.command_fingerprint.len() != 64
+            || !self
+                .command_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("command fingerprint must be a SHA-256 hex digest".to_string());
+        }
+        Ok(())
+    }
+
+    /// Request UUID assigned by the authenticated caller.
+    #[must_use]
+    pub const fn request_id(&self) -> Uuid {
+        self.request_id
+    }
+
+    /// Durable idempotency key for the accepted command.
+    #[must_use]
+    pub fn idempotency_key(&self) -> &str {
+        &self.idempotency_key
+    }
+
+    /// Claimed capability after transport authorization.
+    #[must_use]
+    pub const fn capability(&self) -> Capability {
+        self.capability
+    }
+
+    /// Coarse authenticated identity; no raw credential or OS path is exposed.
+    #[must_use]
+    pub const fn principal(&self) -> AuthenticatedPrincipalClass {
+        self.principal
+    }
+
+    /// Canonical SHA-256 command fingerprint used for idempotency/audit.
+    #[must_use]
+    pub fn command_fingerprint(&self) -> &str {
+        &self.command_fingerprint
+    }
+}
+
 impl fmt::Debug for AdminRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdminRequest")
@@ -497,6 +605,15 @@ impl AdminRequest {
         })
         .unwrap_or_default();
         sha256_hex(&bytes)
+    }
+
+    /// Build the token-free context used by the main-loop dispatcher after
+    /// transport authentication has selected a principal class.
+    pub fn dispatch_context(
+        &self,
+        principal: AuthenticatedPrincipalClass,
+    ) -> std::result::Result<DispatchContext, String> {
+        DispatchContext::from_request(self, principal)
     }
 
     /// Construct a request using a fresh UUID identity.
@@ -601,7 +718,13 @@ impl HealthSnapshot {
 /// Thread-safe publication point owned by the reconciliation loop.
 #[derive(Clone, Debug)]
 pub struct MainLoopHealth {
-    current: Arc<RwLock<HealthSnapshot>>,
+    current: Arc<RwLock<HealthState>>,
+}
+
+#[derive(Debug)]
+struct HealthState {
+    snapshot: HealthSnapshot,
+    progress_started_at: Option<Instant>,
 }
 
 impl Default for MainLoopHealth {
@@ -616,7 +739,10 @@ impl MainLoopHealth {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            current: Arc::new(RwLock::new(HealthSnapshot::default())),
+            current: Arc::new(RwLock::new(HealthState {
+                snapshot: HealthSnapshot::default(),
+                progress_started_at: None,
+            })),
         }
     }
 
@@ -626,18 +752,40 @@ impl MainLoopHealth {
         let mut current = self
             .current
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *current = snapshot;
+            .map_err(|_| "main-loop health state lock is poisoned".to_string())?;
+        if snapshot.heartbeat_seq < current.snapshot.heartbeat_seq {
+            return Err("main-loop heartbeat sequence regressed".to_string());
+        }
+        let now = Instant::now();
+        if snapshot.heartbeat_seq > current.snapshot.heartbeat_seq {
+            current.progress_started_at = snapshot.progress_age_ms.map(|_| now);
+        } else if current.progress_started_at.is_none() && snapshot.progress_age_ms.is_some() {
+            // Permit the first publication to establish an origin even when
+            // the initial sequence is zero.  Later same-sequence updates
+            // retain the origin, so a failure/phase update cannot reset age.
+            current.progress_started_at = Some(now);
+        }
+        current.snapshot = snapshot;
         Ok(())
     }
 
     /// Read the last snapshot without changing readiness or heartbeat.
     #[must_use]
     pub fn snapshot(&self) -> HealthSnapshot {
-        self.current
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        let Ok(current) = self.current.read() else {
+            // A poisoned health lock must never preserve a stale ready bit.
+            return HealthSnapshot {
+                phase: MainLoopPhase::Blocked,
+                ready: false,
+                ..HealthSnapshot::default()
+            };
+        };
+        let mut snapshot = current.snapshot.clone();
+        if let Some(started_at) = current.progress_started_at {
+            let age_ms = started_at.elapsed().as_millis();
+            snapshot.progress_age_ms = Some(u64::try_from(age_ms).unwrap_or(u64::MAX));
+        }
+        snapshot
     }
 }
 
@@ -866,11 +1014,15 @@ pub struct AdminResponse {
 
 impl AdminResponse {
     /// Construct a successful main-loop response.
-    pub fn success(request: &AdminRequest, result: AdminResult, health: &MainLoopHealth) -> Self {
+    pub fn success(
+        context: &DispatchContext,
+        result: AdminResult,
+        health: &MainLoopHealth,
+    ) -> Self {
         Self {
             contract: ContractVersion::V1,
-            request_id: request.request_id.clone(),
-            idempotency_key: request.idempotency_key.clone(),
+            request_id: context.request_id.to_string(),
+            idempotency_key: context.idempotency_key.clone(),
             status: if matches!(result, AdminResult::Accepted(_)) {
                 ReplyStatus::Accepted
             } else {
@@ -879,6 +1031,21 @@ impl AdminResponse {
             result: Some(result),
             health: health.snapshot(),
         }
+    }
+
+    /// Construct an error for an already-authenticated token-free context.
+    #[must_use]
+    pub fn context_error(
+        context: &DispatchContext,
+        status: ReplyStatus,
+        health: &MainLoopHealth,
+    ) -> Self {
+        Self::error(
+            context.request_id.to_string(),
+            context.idempotency_key.clone(),
+            status,
+            health,
+        )
     }
 
     /// Construct an error without carrying arbitrary detail.
@@ -954,6 +1121,7 @@ pub trait AdminDispatcher {
     /// Execute one accepted command on the actual reconciliation thread.
     fn dispatch(
         &mut self,
+        context: &DispatchContext,
         command: &AdminCommand,
     ) -> std::result::Result<AdminResult, AdminDispatchError>;
 }

@@ -1,7 +1,6 @@
 //! Authenticated bounded admin client.
 
 use super::endpoint::validate_endpoint_path;
-#[cfg(unix)]
 use super::protocol::reject_duplicate_fields;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, Capability};
 use super::{MAX_DEADLINE_MS, MAX_FRAME_BYTES};
@@ -19,6 +18,8 @@ pub struct AdminClientConfig {
     token_path: PathBuf,
     capability: Capability,
     timeout: Duration,
+    #[cfg(windows)]
+    expected_server_executable: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for AdminClientConfig {
@@ -44,6 +45,8 @@ impl AdminClientConfig {
             token_path: token_path.into(),
             capability,
             timeout: Duration::from_secs(5),
+            #[cfg(windows)]
+            expected_server_executable: None,
         };
         config.validate()
     }
@@ -51,6 +54,15 @@ impl AdminClientConfig {
     /// Configure a shorter bounded transport deadline.
     pub fn with_timeout(mut self, timeout: Duration) -> Result<Self> {
         self.timeout = timeout;
+        self.validate()
+    }
+
+    /// Require the Windows server process image to match this executable.
+    /// The native client always checks a held server PID and creation
+    /// identity; this option adds the exact image allowlist check.
+    #[cfg(windows)]
+    pub fn with_server_executable(mut self, executable: impl Into<PathBuf>) -> Result<Self> {
+        self.expected_server_executable = Some(executable.into());
         self.validate()
     }
 
@@ -76,6 +88,14 @@ impl AdminClientConfig {
         if self.timeout.is_zero() || self.timeout > Duration::from_secs(30) {
             return Err(WatchdogError::InvalidInput(
                 "admin client timeout must be between 1ms and 30s".to_string(),
+            ));
+        }
+        #[cfg(windows)]
+        if let Some(path) = &self.expected_server_executable
+            && (!path.is_absolute() || path.as_os_str().is_empty())
+        {
+            return Err(WatchdogError::InvalidInput(
+                "expected Windows admin server executable must be absolute".to_string(),
             ));
         }
         Ok(self)
@@ -135,10 +155,28 @@ impl AdminClient {
             response.validate().map_err(WatchdogError::InvalidInput)?;
             Ok(response)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let mut pipe = ascension_platform_windows::AdminPipeClient::connect(
+                self.config.endpoint.to_string_lossy().into_owned(),
+                self.config.expected_server_executable.as_deref(),
+                self.config.timeout,
+            )
+            .map_err(|error| WatchdogError::Unsupported(error.to_string()))?;
+            pipe.write_frame(&bytes, self.config.timeout)
+                .map_err(|error| WatchdogError::Io(std::io::Error::other(error)))?;
+            let response_bytes = pipe
+                .read_frame(self.config.timeout)
+                .map_err(|error| WatchdogError::Io(std::io::Error::other(error)))?;
+            reject_duplicate_fields(&response_bytes).map_err(WatchdogError::InvalidInput)?;
+            let response: AdminResponse = serde_json::from_slice(&response_bytes)?;
+            response.validate().map_err(WatchdogError::InvalidInput)?;
+            Ok(response)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Err(WatchdogError::Unsupported(
-                "native Windows admin transport is owned by the P2 broker".to_string(),
+                "admin transport is unsupported on this platform".to_string(),
             ))
         }
     }
@@ -175,13 +213,19 @@ fn validate_client_token(path: &std::path::Path) -> Result<()> {
     }
     #[cfg(unix)]
     {
+        use super::endpoint::current_uid;
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let current_uid = fs::metadata(".")?.uid();
-        if metadata.uid() != current_uid || metadata.permissions().mode() & 0o077 != 0 {
+        if metadata.uid() != current_uid() || metadata.permissions().mode() & 0o077 != 0 {
             return Err(WatchdogError::Unauthorized(
                 "admin token file is not owner-only".to_string(),
             ));
         }
+    }
+    #[cfg(windows)]
+    {
+        ascension_platform_windows::validate_protected_credential_file(path).map_err(|_| {
+            WatchdogError::Unauthorized("admin token file is not owner-protected".to_string())
+        })?;
     }
     Ok(())
 }

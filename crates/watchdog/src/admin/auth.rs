@@ -1,6 +1,6 @@
 //! File-backed capability credentials for the local admin sideband.
 
-use super::protocol::{AdminRequest, Capability};
+use super::protocol::{AdminRequest, AuthenticatedPrincipalClass, Capability};
 use crate::error::{Result, WatchdogError};
 use std::fmt;
 use std::fs;
@@ -103,21 +103,21 @@ impl AuthStore {
         let admin_matches = constant_time_equal(token, &self.admin);
         let read_matches = constant_time_equal(token, &self.read);
         let credential = if admin_matches {
-            Some(Capability::Admin)
+            Some((Capability::Admin, AuthenticatedPrincipalClass::AdminToken))
         } else if read_matches {
-            Some(Capability::Read)
+            Some((Capability::Read, AuthenticatedPrincipalClass::ReadToken))
         } else {
             None
         };
         let Some(credential) = credential else {
             return Authz::Unauthorized;
         };
-        if credential.includes(request.capability)
+        if credential.0.includes(request.capability)
             && request
                 .capability
                 .includes(request.command.name().required_capability())
         {
-            Authz::Allowed
+            Authz::Allowed(credential.1)
         } else {
             Authz::Forbidden
         }
@@ -134,7 +134,7 @@ impl AuthStore {
 /// Authentication result used by the transport without free-form errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Authz {
-    Allowed,
+    Allowed(AuthenticatedPrincipalClass),
     Unauthorized,
     Forbidden,
 }
@@ -161,12 +161,18 @@ fn validate_token_reference(path: &Path, label: &str) -> Result<()> {
             "{label} reference must name a regular non-symlink file"
         )));
     }
+    #[cfg(windows)]
+    {
+        ascension_platform_windows::validate_protected_credential_file(path).map_err(|_| {
+            WatchdogError::Unauthorized(format!("{label} file is not owner-protected"))
+        })?;
+    }
     #[cfg(unix)]
     {
+        use super::endpoint::current_uid;
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let mode = metadata.permissions().mode();
-        let current_uid = fs::metadata(".")?.uid();
-        if metadata.uid() != current_uid || mode & 0o077 != 0 {
+        if metadata.uid() != current_uid() || mode & 0o077 != 0 {
             return Err(WatchdogError::InvalidInput(format!(
                 "{label} file must be owner-only"
             )));

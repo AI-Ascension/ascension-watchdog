@@ -6,9 +6,9 @@
 //! database and never invokes a process or game operation: accepted requests
 //! are handed to [`AdminQueue::drain`] on the actual reconciliation thread.
 //!
-//! Windows is intentionally unsupported in this first transport module.  The
-//! native named-pipe broker is a separate P2 owner and must be integrated
-//! without changing these command or capability boundaries.
+//! Windows uses the isolated platform crate's named-pipe boundary while
+//! sharing this module's closed command, capability, queue, and idempotency
+//! contract with the Unix transport.
 
 mod auth;
 mod client;
@@ -22,12 +22,12 @@ pub use client::{AdminClient, AdminClientConfig};
 pub use endpoint::{EndpointGuard, validate_endpoint_path};
 pub use protocol::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminRequest,
-    AdminResponse, AdminResult, AttemptRequest, AttemptStatus, AttemptView, BackupRequest,
-    BackupView, Capability, CommandName, ContractVersion, EmptyParams, HealthSnapshot, JobFilter,
-    JobStatus, JobView, JobsRequest, JobsView, MainLoopHealth, MainLoopPhase, QuarantineRequest,
-    ReconcileRequest, ReconcileTarget, ReleaseActivateRequest, ReleaseInspectRequest,
-    ReleaseInspection, ReplyStatus, RestoreRequest, RestoreView, RetryPolicy, RetryRequest,
-    StatusView,
+    AdminResponse, AdminResult, AttemptRequest, AttemptStatus, AttemptView,
+    AuthenticatedPrincipalClass, BackupRequest, BackupView, Capability, CommandName,
+    ContractVersion, DispatchContext, EmptyParams, HealthSnapshot, JobFilter, JobStatus, JobView,
+    JobsRequest, JobsView, MainLoopHealth, MainLoopPhase, QuarantineRequest, ReconcileRequest,
+    ReconcileTarget, ReleaseActivateRequest, ReleaseInspectRequest, ReleaseInspection, ReplyStatus,
+    RestoreRequest, RestoreView, RetryPolicy, RetryRequest, StatusView,
 };
 pub use queue::{AdminQueue, MAX_DRAIN_BATCH};
 pub use server::{AdminServer, AdminServerConfig};

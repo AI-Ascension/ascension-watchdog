@@ -16,6 +16,14 @@ pub use contract::{
 };
 
 #[cfg(windows)]
+mod admin_pipe;
+#[cfg(windows)]
+pub use admin_pipe::{
+    AdminPipeClient, AdminPipePeer, AdminPipeServer, MAX_ADMIN_PIPE_FRAME,
+    validate_protected_credential_file,
+};
+
+#[cfg(windows)]
 mod native;
 #[cfg(windows)]
 pub use native::{
