@@ -1110,7 +1110,11 @@ fn cleanup_failed_cgroup_launch_with(
                     // the cgroup as the durable recovery authority until the
                     // next reconciliation pass proves both facts.
                     return Err(CleanupFailure {
-                        error: first_error.expect("child cleanup failure must have an error"),
+                        error: first_error.unwrap_or_else(|| {
+                            AdapterError::Unavailable(
+                                "failed launch child cleanup was not proven".to_owned(),
+                            )
+                        }),
                         containment_retained: true,
                     });
                 }

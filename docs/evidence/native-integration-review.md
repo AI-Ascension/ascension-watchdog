@@ -27,8 +27,13 @@ Returned to the respective authors for separate fixes and regressions:
 - Linux descriptor-bound execution still permits in-place modification between
   hashing and execution. Opened-handle type checks, nonblocking special-file
   rejection, and cumulative hash bounds are also needed.
-- Linux failed-child cleanup calls blocking `wait()` after a possible kill
-  failure, before starting the containment deadline.
+- Linux failed-child cleanup originally called blocking `wait()` after a
+  possible kill failure. Follow-up `7bad5db`, integrated as `fb7c497`, replaces
+  these waits with deadline-bound polling and retains uncertain containment.
+  Nine focused Linux process tests passed (one native test ignored), including
+  injected termination failure and unproven-reap regressions. Root also removed
+  an introduced production `expect` from the cleanup error path. Full Linux
+  warnings-denied Clippy and formatting checks passed after integration.
 - Runtime launch-error handling clears its durable intent even if containment
   cleanup is uncertain. Prepared-intent recovery does not yet use exact planned
   containment cleanup; abort cleanup can discard retained child ownership.
