@@ -63,10 +63,13 @@ fn hex(bytes: &[u8]) -> String {
 
 // Fixed-size public vector key only. Production consumers use their own
 // reviewed cryptographic library and constant-time verification.
-fn test_hmac(message: &[u8]) -> String {
+fn test_hmac(message: &[u8], key_bytes: &[u8; 32]) -> String {
     let mut inner_pad = [0x36_u8; 64];
     let mut outer_pad = [0x5c_u8; 64];
-    for (key, (inner, outer)) in (0_u8..32).zip(inner_pad.iter_mut().zip(outer_pad.iter_mut())) {
+    for (key, (inner, outer)) in key_bytes
+        .iter()
+        .zip(inner_pad.iter_mut().zip(outer_pad.iter_mut()))
+    {
         *inner ^= key;
         *outer ^= key;
     }
@@ -112,14 +115,38 @@ fn published_host_lease_proofs_match_independent_recomputation() -> Result<(), B
             .remove("proof");
         let body = canonical(&frame)?;
         assert_eq!(hash(body.as_bytes()), case["canonical_sha256"], "{fixture}");
-        let domain = case["domain"].as_str().ok_or("missing domain")?;
+        let domain = match frame["kind"].as_str().ok_or("missing kind")? {
+            "lease_install_request" => "host-lease-control/v1/lease-install-request",
+            "lease_install_response" => "host-lease-control/v1/lease-install-ack",
+            "lease_renew_request" => "host-lease-control/v1/lease-renew-request",
+            "lease_renew_response" => "host-lease-control/v1/lease-renew-ack",
+            "lease_revoke_request" => "host-lease-control/v1/lease-revoke-request",
+            "lease_revoke_response" => "host-lease-control/v1/lease-revoke-ack",
+            _ => return Err("unknown frame kind".into()),
+        };
+        assert_eq!(domain, case["domain"], "domain for {fixture}");
         let mut message = domain.as_bytes().to_vec();
         message.push(0);
         message.extend_from_slice(body.as_bytes());
         assert_eq!(hash(&message), case["signed_message_sha256"], "{fixture}");
-        assert_eq!(test_hmac(&message), case["proof"], "{fixture}");
+        let mut key = [0_u8; 32];
+        for (byte, value) in key.iter_mut().zip(0_u8..32) {
+            *byte = value;
+        }
+        assert_eq!(test_hmac(&message, &key), case["proof"], "{fixture}");
+        let mut alternate_key = key;
+        alternate_key[0] ^= 1;
+        assert_ne!(
+            test_hmac(&message, &alternate_key),
+            case["proof"],
+            "alternate key {fixture}"
+        );
         message.push(b' ');
-        assert_ne!(test_hmac(&message), case["proof"], "tampered {fixture}");
+        assert_ne!(
+            test_hmac(&message, &key),
+            case["proof"],
+            "tampered {fixture}"
+        );
     }
     Ok(())
 }
