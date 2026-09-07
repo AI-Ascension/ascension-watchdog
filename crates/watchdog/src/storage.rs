@@ -9,17 +9,25 @@ use crate::error::{Result, WatchdogError};
 use crate::policy::ComponentState;
 use crate::process::ProcessIdentity;
 use fs2::FileExt;
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_AUDIT_DETAIL_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
+// Reserved for the platform launch-intent adapter. Keep the bound alongside
+// the storage contract until the native adapter consumes the intent proof.
+#[allow(dead_code)]
+const MAX_LAUNCH_PROOF_BYTES: usize = 8 * 1024;
 
 /// Return wall-clock milliseconds for audit records.  Scheduling uses the
 /// explicit timestamp passed to policy/runtime methods instead.
@@ -38,8 +46,19 @@ pub fn now_unix_ms() -> u64 {
 /// stale PID or executable name for ownership.
 #[derive(Debug)]
 pub struct SingletonLock {
+    inner: Arc<LockInner>,
+}
+
+#[derive(Debug)]
+struct LockInner {
     path: PathBuf,
     file: File,
+}
+
+impl Drop for LockInner {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 impl SingletonLock {
@@ -60,19 +79,27 @@ impl SingletonLock {
             .write(true)
             .open(&path)?;
         file.try_lock_exclusive().map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if is_lock_contention(&error) {
                 WatchdogError::Busy(path.clone())
             } else {
                 WatchdogError::Io(error)
             }
         })?;
-        Ok(Self { path, file })
+        let inner = Arc::new(LockInner {
+            path: path.clone(),
+            file,
+        });
+        if let Ok(mut registry) = lock_registry().lock() {
+            registry.retain(|_, weak| weak.strong_count() > 0);
+            registry.insert(path, Arc::downgrade(&inner));
+        }
+        Ok(Self { inner })
     }
 
     /// Path of the lock file for diagnostics.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.inner.path
     }
 
     /// Write non-authoritative diagnostic metadata.  It is never used to
@@ -84,19 +111,34 @@ impl SingletonLock {
                 "owner hint is oversized".to_string(),
             ));
         }
-        let mut file = &self.file;
+        let mut file = &self.inner.file;
         file.seek(SeekFrom::Start(0))?;
         file.set_len(0)?;
         file.write_all(hint.as_bytes())?;
         file.sync_data()?;
         Ok(())
     }
+
+    /// Reuse an already held same-process lock for a nested store bootstrap.
+    /// This is private to the storage owner path; public `acquire` remains
+    /// non-reentrant so a second controller still receives `Busy`.
+    fn current_for_path(database: &Path) -> Option<Self> {
+        let path = lock_path(database);
+        let registry = lock_registry().lock().ok()?;
+        let inner = registry.get(&path)?.upgrade()?;
+        Some(Self { inner })
+    }
 }
 
-impl Drop for SingletonLock {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
+fn lock_registry() -> &'static Mutex<HashMap<PathBuf, Weak<LockInner>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<LockInner>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || (error.raw_os_error().is_some()
+            && error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
 }
 
 fn lock_path(database: &Path) -> PathBuf {
@@ -105,12 +147,23 @@ fn lock_path(database: &Path) -> PathBuf {
     PathBuf::from(value)
 }
 
+fn ensure_owner_lock(database: &Path, owner: &SingletonLock) -> Result<()> {
+    if owner.path() != lock_path(database) {
+        return Err(WatchdogError::Unauthorized(
+            "singleton lock does not match the requested database".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Durable deployment and job store.
 pub struct Store {
     conn: Connection,
     path: PathBuf,
     max_jobs: u64,
     max_payload_bytes: usize,
+    restart_clock_epoch: String,
+    restart_clock_started: Instant,
 }
 
 impl std::fmt::Debug for Store {
@@ -245,12 +298,88 @@ pub struct ComponentRecord {
     pub last_error: Option<String>,
 }
 
+/// Durable pre-spawn ownership admission. The platform adapter supplies the
+/// opaque closed proof after it has created the exact process/container; the
+/// watchdog never invents containment or host identity fields.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LaunchIntent {
+    pub id: String,
+    pub deployment_id: String,
+    pub component_id: String,
+    pub launch_nonce: String,
+    pub planned_containment_id: Option<String>,
+    pub state: LaunchIntentState,
+    pub ownership_proof_json: Option<Value>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+/// State machine for a durable launch intent. Only an intent with a recorded
+/// opaque ownership proof may become active.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchIntentState {
+    Prepared,
+    ProofRecorded,
+    Active,
+    Cleaned,
+}
+
+#[allow(dead_code)]
+impl LaunchIntentState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::ProofRecorded => "proof_recorded",
+            Self::Active => "active",
+            Self::Cleaned => "cleaned",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "prepared" => Ok(Self::Prepared),
+            "proof_recorded" => Ok(Self::ProofRecorded),
+            "active" => Ok(Self::Active),
+            "cleaned" => Ok(Self::Cleaned),
+            other => Err(WatchdogError::Conflict(format!(
+                "unknown launch intent state {other}"
+            ))),
+        }
+    }
+}
+
 impl Store {
     /// Initialize a new database and its schema.  Existing initialized state is
-    /// never overwritten.
+    /// never overwritten.  The compatibility entrypoint acquires the
+    /// owner-local lock for the full bootstrap; production code that already
+    /// owns the controller lock should use [`Self::initialize_for_owner`] to
+    /// make that admission explicit without a second OS lock attempt.
     pub fn initialize(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
+        let _admission = match SingletonLock::current_for_path(&path) {
+            Some(lock) => lock,
+            None => SingletonLock::acquire(&path)?,
+        };
+        Self::initialize_impl(path, config)
+    }
+
+    /// Initialize a new store under an already-held singleton admission.
+    /// The lock path must match the database exactly; this method never
+    /// acquires a second OS lock and keeps the caller's lock authoritative.
+    pub fn initialize_for_owner(
+        path: impl AsRef<Path>,
+        config: &WatchdogConfig,
+        owner: &SingletonLock,
+    ) -> Result<Self> {
+        config.validate()?;
+        let path = path.as_ref().to_path_buf();
+        ensure_owner_lock(&path, owner)?;
+        Self::initialize_impl(path, config)
+    }
+
+    fn initialize_impl(path: PathBuf, config: &WatchdogConfig) -> Result<Self> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
@@ -290,6 +419,7 @@ impl Store {
         }
         create_schema(&mut conn)?;
         let config_digest = config.digest()?;
+        let config_compat_digest = config_compatibility_digest(config)?;
         let now = now_unix_ms();
         let tx = conn.transaction()?;
         insert_metadata(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
@@ -297,6 +427,7 @@ impl Store {
         insert_metadata(&tx, "desired_mode", mode_as_str(config.desired_mode))?;
         insert_metadata(&tx, "restart_generation", "1")?;
         insert_metadata(&tx, "config_digest", &config_digest)?;
+        insert_metadata(&tx, "config_compat_digest", &config_compat_digest)?;
         insert_metadata(&tx, "initialized_at_ms", &now.to_string())?;
         insert_metadata(&tx, "updated_at_ms", &now.to_string())?;
         insert_audit_tx(
@@ -311,26 +442,61 @@ impl Store {
             path,
             max_jobs: config.max_jobs,
             max_payload_bytes: config.max_payload_bytes,
+            restart_clock_epoch: Uuid::new_v4().to_string(),
+            restart_clock_started: Instant::now(),
         })
     }
 
-    /// Open an existing initialized store.  This call never creates a missing
-    /// file or applies a migration implicitly.
+    /// Open an existing initialized store without creating a missing file or
+    /// applying a migration implicitly.  This compatibility path is writable
+    /// for existing callers; owner-controlled mutation should use
+    /// [`Self::open_for_owner`].
     pub fn open(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
-        if !path.exists() {
+        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    }
+
+    /// Open existing state through a true SQLite read-only, non-creating
+    /// connection.  Status, doctor, and inspection paths should use this
+    /// method so an unlink/create race cannot bootstrap or mutate state.
+    pub fn open_read_only(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
+        config.validate()?;
+        let path = path.as_ref().to_path_buf();
+        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    }
+
+    /// Open existing state for a controller that already holds the matching
+    /// singleton lock.  No migration, schema creation, or second lock attempt
+    /// occurs in this method.
+    pub fn open_for_owner(
+        path: impl AsRef<Path>,
+        config: &WatchdogConfig,
+        owner: &SingletonLock,
+    ) -> Result<Self> {
+        config.validate()?;
+        let path = path.as_ref().to_path_buf();
+        ensure_owner_lock(&path, owner)?;
+        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    }
+
+    fn open_impl(path: PathBuf, config: &WatchdogConfig, flags: OpenFlags) -> Result<Self> {
+        if !path.is_file() {
             return Err(WatchdogError::MissingState(path));
         }
-        let conn = open_connection(&path)?;
-        let version: Option<i64> = conn
+        let conn = open_connection_with_flags(&path, flags)?;
+        let version: Option<String> = conn
             .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
                 [],
                 |row| row.get(0),
             )
             .optional()?;
-        match version {
+        match version
+            .as_deref()
+            .map(|value| parse_metadata_i64("schema_version", value))
+            .transpose()?
+        {
             Some(SCHEMA_VERSION) => {}
             Some(other) => {
                 return Err(WatchdogError::Unsupported(format!(
@@ -350,6 +516,25 @@ impl Store {
                 "required SQLite durability is not active: {pragmas:?}"
             )));
         }
+        let stored_deployment_id: Option<String> = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key='deployment_id'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored_deployment_id) = stored_deployment_id else {
+            return Err(WatchdogError::Conflict(
+                "deployment_id metadata is missing".to_string(),
+            ));
+        };
+        validate_metadata_identifier("deployment_id", &stored_deployment_id)?;
+        if stored_deployment_id != config.deployment_id {
+            return Err(WatchdogError::Conflict(
+                "deployment identity differs from initialized owner-local state; explicit restore is required"
+                    .to_string(),
+            ));
+        }
         let stored_config_digest: Option<String> = conn
             .query_row(
                 "SELECT value FROM metadata WHERE key='config_digest'",
@@ -357,10 +542,34 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
+        let Some(stored_config_digest) = stored_config_digest else {
+            return Err(WatchdogError::Conflict(
+                "config_digest metadata is missing".to_string(),
+            ));
+        };
+        crate::config::validate_digest(&stored_config_digest).map_err(|message| {
+            WatchdogError::Conflict(format!("config_digest metadata is invalid: {message}"))
+        })?;
         let expected_config_digest = config.digest()?;
-        if stored_config_digest.as_deref() != Some(expected_config_digest.as_str()) {
+        if stored_config_digest != expected_config_digest {
             return Err(WatchdogError::Conflict(
                 "configuration digest differs from initialized owner-local state; explicit migration is required"
+                    .to_string(),
+            ));
+        }
+        let stored_config_compat_digest = metadata_from_conn(&conn, "config_compat_digest")?
+            .ok_or_else(|| {
+                WatchdogError::Conflict("config_compat_digest metadata is missing".to_string())
+            })?;
+        crate::config::validate_digest(&stored_config_compat_digest).map_err(|message| {
+            WatchdogError::Conflict(format!(
+                "config_compat_digest metadata is invalid: {message}"
+            ))
+        })?;
+        let expected_config_compat_digest = config_compatibility_digest(config)?;
+        if stored_config_compat_digest != expected_config_compat_digest {
+            return Err(WatchdogError::Conflict(
+                "configuration compatibility identity differs from initialized owner-local state; explicit restore is required"
                     .to_string(),
             ));
         }
@@ -369,6 +578,8 @@ impl Store {
             path,
             max_jobs: config.max_jobs,
             max_payload_bytes: config.max_payload_bytes,
+            restart_clock_epoch: Uuid::new_v4().to_string(),
+            restart_clock_started: Instant::now(),
         })
     }
 
@@ -420,17 +631,43 @@ impl Store {
     }
 
     /// Restore an owner-local backup into a new path, then establish a fresh
-    /// durable generation.  The backup itself never reissues its old
-    /// authority namespace.
+    /// durable generation.  The compatibility entrypoint acquires the
+    /// destination singleton for the full copy/admission transition.  A
+    /// controller that already owns the lock should use
+    /// [`Self::restore_from_for_owner`] to avoid a second OS lock attempt.
     pub fn restore_from(
         backup: impl AsRef<Path>,
         destination: impl AsRef<Path>,
         config: &WatchdogConfig,
     ) -> Result<Self> {
-        let backup = backup.as_ref();
-        let destination = destination.as_ref();
+        config.validate()?;
+        let destination = destination.as_ref().to_path_buf();
+        let _admission = match SingletonLock::current_for_path(&destination) {
+            Some(lock) => lock,
+            None => SingletonLock::acquire(&destination)?,
+        };
+        Self::restore_impl(backup.as_ref(), destination, config)
+    }
+
+    /// Restore an owner-local backup under an already-held destination lock.
+    /// The resulting watchdog namespace is fresh, stopped, and conservative;
+    /// this method never rekeys gateway/game leases or claims gameplay
+    /// authority.
+    pub fn restore_from_for_owner(
+        backup: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        config: &WatchdogConfig,
+        owner: &SingletonLock,
+    ) -> Result<Self> {
+        config.validate()?;
+        let destination = destination.as_ref().to_path_buf();
+        ensure_owner_lock(&destination, owner)?;
+        Self::restore_impl(backup.as_ref(), destination, config)
+    }
+
+    fn restore_impl(backup: &Path, destination: PathBuf, config: &WatchdogConfig) -> Result<Self> {
         validate_local_storage_path(backup, "backup")?;
-        validate_local_storage_path(destination, "destination")?;
+        validate_local_storage_path(&destination, "destination")?;
         if !backup.is_file() {
             return Err(WatchdogError::NotFound(format!(
                 "backup {}",
@@ -448,14 +685,105 @@ impl Store {
                 "restore config database must equal destination".to_string(),
             ));
         }
+        let source_conn = open_connection_with_flags(backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let source_schema = parse_metadata_i64(
+            "schema_version",
+            &metadata_from_conn(&source_conn, "schema_version")?.ok_or_else(|| {
+                WatchdogError::Conflict("backup schema_version metadata is missing".to_string())
+            })?,
+        )?;
+        if source_schema != SCHEMA_VERSION {
+            return Err(WatchdogError::Unsupported(format!(
+                "backup schema {source_schema} requires an explicit migration"
+            )));
+        }
+        let source_deployment =
+            metadata_from_conn(&source_conn, "deployment_id")?.ok_or_else(|| {
+                WatchdogError::Conflict("backup deployment_id metadata is missing".to_string())
+            })?;
+        validate_metadata_identifier("deployment_id", &source_deployment)?;
+        let source_mode = metadata_from_conn(&source_conn, "desired_mode")?.ok_or_else(|| {
+            WatchdogError::Conflict("backup desired_mode metadata is missing".to_string())
+        })?;
+        parse_mode(&source_mode)?;
+        let source_config_digest =
+            metadata_from_conn(&source_conn, "config_digest")?.ok_or_else(|| {
+                WatchdogError::Conflict("backup config_digest metadata is missing".to_string())
+            })?;
+        crate::config::validate_digest(&source_config_digest).map_err(|message| {
+            WatchdogError::Conflict(format!(
+                "backup config_digest metadata is invalid: {message}"
+            ))
+        })?;
+        let source_compat_digest = metadata_from_conn(&source_conn, "config_compat_digest")?
+            .ok_or_else(|| {
+                WatchdogError::Conflict(
+                    "backup config_compat_digest metadata is missing".to_string(),
+                )
+            })?;
+        crate::config::validate_digest(&source_compat_digest).map_err(|message| {
+            WatchdogError::Conflict(format!(
+                "backup config_compat_digest metadata is invalid: {message}"
+            ))
+        })?;
+        let expected_compat_digest = config_compatibility_digest(config)?;
+        if source_compat_digest != expected_compat_digest {
+            return Err(WatchdogError::Conflict(
+                "restore configuration is incompatible with the backup owner state".to_string(),
+            ));
+        }
+        let source_integrity: String =
+            source_conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if !source_integrity.eq_ignore_ascii_case("ok") {
+            return Err(WatchdogError::Conflict(
+                "backup integrity check did not return ok".to_string(),
+            ));
+        }
+        let source_generation = parse_metadata_i64(
+            "restart_generation",
+            &metadata_from_conn(&source_conn, "restart_generation")?.ok_or_else(|| {
+                WatchdogError::Conflict("backup restart_generation metadata is missing".to_string())
+            })?,
+        )?;
+        if source_generation <= 0 {
+            return Err(WatchdogError::Conflict(
+                "backup restart_generation metadata must be positive".to_string(),
+            ));
+        }
+        if let Some(approved_digest) = metadata_from_conn(&source_conn, "approved_release_digest")?
+        {
+            crate::config::validate_digest(&approved_digest).map_err(|message| {
+                WatchdogError::Conflict(format!(
+                    "backup approved_release_digest metadata is invalid: {message}"
+                ))
+            })?;
+        }
+        drop(source_conn);
+        if config.deployment_id == source_deployment {
+            // Do not silently generate an identity that is absent from the
+            // caller's configuration.  The caller must provide an explicit
+            // fresh deployment id so a restored store can never be reopened
+            // accidentally under the old authority namespace.  Returning a
+            // conflict before copying also leaves the destination untouched.
+            return Err(WatchdogError::Conflict(
+                "restore requires an explicit fresh deployment identity".to_string(),
+            ));
+        }
+        let mut effective_config = config.clone();
+        // A restore is an admission boundary, not an implicit start command.
+        // Keep the effective configuration in the same stopped state as the
+        // durable metadata so a later open cannot mismatch the restore
+        // contract merely because the caller's input requested Running.
+        effective_config.desired_mode = DesiredMode::Stopped;
+        let expected_config_digest = effective_config.digest()?;
+        let expected_compat_digest = config_compatibility_digest(&effective_config)?;
         if let Some(parent) = destination.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(backup, destination)?;
-        let expected_config_digest = config.digest()?;
-        let mut conn = open_connection(destination)?;
+        std::fs::copy(backup, &destination)?;
+        let mut conn = open_connection(&destination)?;
         // VACUUM INTO produces a standalone database using the source's
         // journal mode.  Re-establish the watchdog's required WAL/FULL
         // contract before any caller can reopen the restored state.
@@ -465,46 +793,89 @@ impl Store {
                 "required SQLite durability was not established for restored state".to_string(),
             ));
         }
-        let current_generation: i64 = conn.query_row(
-            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key='restart_generation'",
-            [],
-            |row| row.get(0),
-        )?;
-        let next_generation = current_generation
+        let next_generation = source_generation
             .checked_add(1)
             .ok_or_else(|| WatchdogError::Conflict("restored generation exhausted".to_string()))?;
         let now = now_unix_ms();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        update_metadata_tx(&tx, "deployment_id", &effective_config.deployment_id)?;
+        update_metadata_tx(&tx, "desired_mode", "stopped")?;
         update_metadata_tx(&tx, "config_digest", &expected_config_digest)?;
+        update_metadata_tx(&tx, "config_compat_digest", &expected_compat_digest)?;
         update_metadata_tx(&tx, "restart_generation", &next_generation.to_string())?;
         update_metadata_tx(&tx, "updated_at_ms", &now.to_string())?;
+        tx.execute(
+            "UPDATE attempts SET status='unknown', finished_at_ms=?, outcome='restored_backup_outcome_unknown' WHERE status='running'",
+            params![sqlite_timestamp(now)?],
+        )?;
+        tx.execute(
+            "UPDATE jobs SET status='quarantined', last_error='restored backup; prior job outcome requires explicit review', worker_id=NULL WHERE status IN ('queued','running','failed')",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE components SET state='quarantined', last_error='restored backup; process identity requires explicit review', updated_at_ms=?",
+            params![sqlite_timestamp(now)?],
+        )?;
+        upsert_metadata_tx(&tx, "restore_source_deployment_id", &source_deployment)?;
         insert_audit_tx(
             &tx,
-            "store_restored_and_rekeyed",
-            &format!("generation={next_generation}"),
+            "store_restored_new_watchdog_namespace",
+            &format!(
+                "source_deployment={source_deployment};new_deployment={};generation={next_generation};game_authority=unchanged",
+                effective_config.deployment_id
+            ),
             now,
         )?;
         tx.commit()?;
         drop(conn);
-        Self::open(destination, config)
+        Self::open(destination, &effective_config)
     }
 
     /// Produce a bounded status view suitable for the CLI/API.
     pub fn status(&self) -> Result<StoreStatus> {
-        let deployment_id = self.metadata("deployment_id")?.unwrap_or_default();
+        let deployment_id = self.metadata("deployment_id")?.ok_or_else(|| {
+            WatchdogError::Conflict("deployment_id metadata is missing".to_string())
+        })?;
+        validate_metadata_identifier("deployment_id", &deployment_id)?;
         let desired_mode = parse_mode(&self.metadata("desired_mode")?.ok_or_else(|| {
             WatchdogError::Conflict("desired mode metadata is missing".to_string())
         })?)?;
-        let schema_version = self
-            .metadata("schema_version")?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_default();
-        let restart_generation = self
-            .metadata("restart_generation")?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_default();
-        let config_digest = self.metadata("config_digest")?.unwrap_or_default();
+        let schema_version = parse_metadata_i64(
+            "schema_version",
+            &self.metadata("schema_version")?.ok_or_else(|| {
+                WatchdogError::Conflict("schema_version metadata is missing".to_string())
+            })?,
+        )?;
+        if schema_version != SCHEMA_VERSION {
+            return Err(WatchdogError::Unsupported(format!(
+                "store schema {schema_version} requires an explicit migration"
+            )));
+        }
+        let restart_generation = parse_metadata_i64(
+            "restart_generation",
+            &self.metadata("restart_generation")?.ok_or_else(|| {
+                WatchdogError::Conflict("restart_generation metadata is missing".to_string())
+            })?,
+        )?;
+        if restart_generation <= 0 {
+            return Err(WatchdogError::Conflict(
+                "restart_generation metadata must be positive".to_string(),
+            ));
+        }
+        let config_digest = self.metadata("config_digest")?.ok_or_else(|| {
+            WatchdogError::Conflict("config_digest metadata is missing".to_string())
+        })?;
+        crate::config::validate_digest(&config_digest).map_err(|message| {
+            WatchdogError::Conflict(format!("config_digest metadata is invalid: {message}"))
+        })?;
         let approved_release_digest = self.metadata("approved_release_digest")?;
+        if let Some(digest) = &approved_release_digest {
+            crate::config::validate_digest(digest).map_err(|message| {
+                WatchdogError::Conflict(format!(
+                    "approved_release_digest metadata is invalid: {message}"
+                ))
+            })?;
+        }
         let jobs_queued = self.job_count(JobStatus::Queued)?;
         let jobs_running = self.job_count(JobStatus::Running)?;
         let jobs_completed = self.job_count(JobStatus::Completed)?;
@@ -555,12 +926,17 @@ impl Store {
     /// reconciliation context.  Historical generation values never grant
     /// authority by themselves.
     pub fn establish_new_generation(&mut self, now_ms: u64) -> Result<i64> {
-        let current = self
-            .metadata("restart_generation")?
-            .and_then(|value| value.parse::<i64>().ok())
-            .ok_or_else(|| {
-                WatchdogError::Conflict("restart generation metadata is invalid".to_string())
-            })?;
+        let current = parse_metadata_i64(
+            "restart_generation",
+            &self.metadata("restart_generation")?.ok_or_else(|| {
+                WatchdogError::Conflict("restart_generation metadata is missing".to_string())
+            })?,
+        )?;
+        if current <= 0 {
+            return Err(WatchdogError::Conflict(
+                "restart_generation metadata must be positive".to_string(),
+            ));
+        }
         let next = current
             .checked_add(1)
             .ok_or_else(|| WatchdogError::Conflict("restart generation exhausted".to_string()))?;
@@ -926,12 +1302,34 @@ impl Store {
     }
 
     /// Return the restart count in a rolling window without resetting it on
-    /// daemon restart.
+    /// daemon restart.  Wall-clock input is retained only for the audit
+    /// surface; aging uses the store instance's monotonic observation. Events
+    /// from prior controller instances remain counted conservatively because a
+    /// Rust `Instant` cannot be restored across a process restart.
     pub fn restart_count(&self, component_id: &str, now_ms: u64, window_ms: u64) -> Result<u32> {
-        let cutoff = now_ms.saturating_sub(window_ms);
+        let _ = now_ms;
+        self.restart_count_with_elapsed(component_id, self.restart_elapsed_ms(), window_ms)
+    }
+
+    /// Count restart events using an explicitly observed monotonic elapsed
+    /// value. This deterministic hook is used by clock/fault tests and by a
+    /// native adapter that can supply a trusted monotonic source.
+    pub fn restart_count_with_elapsed(
+        &self,
+        component_id: &str,
+        elapsed_ms: u64,
+        window_ms: u64,
+    ) -> Result<u32> {
+        validate_name(component_id, "component id", 128)?;
+        let clock_epoch = self.restart_clock_epoch.as_str();
+        let cutoff = elapsed_ms.saturating_sub(window_ms);
         let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM restart_events WHERE component_id=? AND occurred_at_ms >= ?",
-            params![component_id, sqlite_timestamp(cutoff)?],
+            "SELECT COUNT(*) FROM restart_events WHERE component_id=? AND (clock_epoch <> ? OR clock_elapsed_ms >= ?)",
+            params![
+                component_id,
+                clock_epoch,
+                sqlite_timestamp(cutoff)?
+            ],
             |row| row.get(0),
         )?;
         u32::try_from(count)
@@ -939,33 +1337,80 @@ impl Store {
     }
 
     /// Record a restart decision and prune old events only after they leave the
-    /// configured window.
+    /// configured window according to the current monotonic clock epoch.
     pub fn record_restart(
         &mut self,
         component_id: &str,
         now_ms: u64,
         window_ms: u64,
     ) -> Result<u32> {
+        let elapsed_ms = self.restart_elapsed_ms();
+        self.record_restart_with_elapsed(component_id, now_ms, elapsed_ms, window_ms)
+    }
+
+    /// Record a restart with a trusted monotonic elapsed observation. Wall
+    /// time is persisted for audit only; it cannot age or reset the budget.
+    pub fn record_restart_with_elapsed(
+        &mut self,
+        component_id: &str,
+        now_ms: u64,
+        elapsed_ms: u64,
+        window_ms: u64,
+    ) -> Result<u32> {
         validate_name(component_id, "component id", 128)?;
-        let cutoff = now_ms.saturating_sub(window_ms);
-        let tx = self.conn.transaction()?;
+        let clock_epoch = self.restart_clock_epoch.clone();
+        let current_max: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT MAX(clock_elapsed_ms) FROM restart_events WHERE component_id=? AND clock_epoch=?",
+                params![component_id, clock_epoch],
+                |row| row.get(0),
+            )?;
+        let observed_elapsed = current_max
+            .and_then(|value| u64::try_from(value).ok())
+            .map_or(elapsed_ms, |previous| previous.max(elapsed_ms));
+        let cutoff = observed_elapsed.saturating_sub(window_ms);
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "DELETE FROM restart_events WHERE occurred_at_ms < ?",
-            params![sqlite_timestamp(cutoff)?],
+            "DELETE FROM restart_events WHERE component_id=? AND clock_epoch=? AND clock_elapsed_ms < ?",
+            params![
+                component_id,
+                &clock_epoch,
+                sqlite_timestamp(cutoff)?
+            ],
         )?;
         tx.execute(
-            "INSERT INTO restart_events (component_id, occurred_at_ms) VALUES (?, ?)",
-            params![component_id, sqlite_timestamp(now_ms)?],
+            "INSERT INTO restart_events (component_id, occurred_at_ms, clock_epoch, clock_elapsed_ms) VALUES (?, ?, ?, ?)",
+            params![
+                component_id,
+                sqlite_timestamp(now_ms)?,
+                &clock_epoch,
+                sqlite_timestamp(observed_elapsed)?
+            ],
         )?;
         insert_audit_tx(&tx, "component_restart_recorded", component_id, now_ms)?;
         let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM restart_events WHERE component_id=? AND occurred_at_ms >= ?",
-            params![component_id, sqlite_timestamp(cutoff)?],
+            "SELECT COUNT(*) FROM restart_events WHERE component_id=? AND (clock_epoch <> ? OR clock_elapsed_ms >= ?)",
+            params![
+                component_id,
+                &clock_epoch,
+                sqlite_timestamp(cutoff)?
+            ],
             |row| row.get(0),
         )?;
         tx.commit()?;
         u32::try_from(count)
             .map_err(|_| WatchdogError::Conflict("restart count overflow".to_string()))
+    }
+
+    fn restart_elapsed_ms(&self) -> u64 {
+        self.restart_clock_started
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
     }
 
     /// Persist a component state/identity observation.
@@ -996,11 +1441,23 @@ impl Store {
                         id: row.get(0)?,
                         state: component_state_parse(&state).map_err(to_sqlite_error)?,
                         launch_nonce: row.get(2)?,
-                        pid: row.get::<_, Option<i64>>(3)?.and_then(|value| u32::try_from(value).ok()),
+                        pid: sqlite_optional_u32(
+                            row.get::<_, Option<i64>>(3)?,
+                            "component pid",
+                        )?,
                         executable_digest: row.get(4)?,
-                        started_at_ms: row.get::<_, Option<i64>>(5)?.and_then(|value| u64::try_from(value).ok()),
-                        restart_attempts: u32::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
-                        last_restart_at_ms: row.get::<_, Option<i64>>(7)?.and_then(|value| u64::try_from(value).ok()),
+                        started_at_ms: sqlite_optional_u64(
+                            row.get::<_, Option<i64>>(5)?,
+                            "component started_at_ms",
+                        )?,
+                        restart_attempts: sqlite_u32(
+                            row.get::<_, i64>(6)?,
+                            "component restart_attempts",
+                        )?,
+                        last_restart_at_ms: sqlite_optional_u64(
+                            row.get::<_, Option<i64>>(7)?,
+                            "component last_restart_at_ms",
+                        )?,
                         last_error: row.get(8)?,
                     })
                 },
@@ -1066,6 +1523,227 @@ impl Store {
         Ok(())
     }
 
+    /// Record the durable pre-spawn admission for one component.  The
+    /// platform adapter must call this before creating a process, then record
+    /// its opaque containment/ownership proof before the intent can become
+    /// active.  A component may have at most one non-cleaned intent, which
+    /// prevents a retry from creating an untracked duplicate child.
+    pub fn prepare_launch_intent(
+        &mut self,
+        component_id: &str,
+        launch_nonce: &str,
+        planned_containment_id: Option<&str>,
+        now_ms: u64,
+    ) -> Result<LaunchIntent> {
+        validate_name(component_id, "component id", 128)?;
+        validate_name(launch_nonce, "launch nonce", 128)?;
+        if let Some(containment_id) = planned_containment_id {
+            validate_name(containment_id, "planned containment id", 256)?;
+        }
+        let deployment_id = self.metadata("deployment_id")?.ok_or_else(|| {
+            WatchdogError::Conflict("deployment_id metadata is missing".to_string())
+        })?;
+        validate_metadata_identifier("deployment_id", &deployment_id)?;
+        let id = Uuid::new_v4().to_string();
+        let now = sqlite_timestamp(now_ms)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM launch_intents WHERE component_id=? AND state <> 'cleaned' LIMIT 1",
+                params![component_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "component {component_id} already has an unsettled launch intent {existing}"
+            )));
+        }
+        tx.execute(
+            "INSERT INTO launch_intents (id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)",
+            params![
+                id,
+                deployment_id,
+                component_id,
+                launch_nonce,
+                planned_containment_id,
+                now,
+                now
+            ],
+        )?;
+        insert_audit_tx(
+            &tx,
+            "launch_intent_prepared",
+            &format!("{component_id}:{id}"),
+            now_ms,
+        )?;
+        tx.commit()?;
+        self.launch_intent(&id)?.ok_or_else(|| {
+            WatchdogError::Conflict("launch intent disappeared after commit".to_string())
+        })
+    }
+
+    /// Attach the closed platform ownership proof to a prepared intent.  The
+    /// proof is opaque to watchdog policy, but it is retained in bounded JSON
+    /// so recovery can hand it back to the designated process authority.
+    pub fn record_launch_proof(
+        &mut self,
+        intent_id: &str,
+        ownership_proof: &Value,
+        now_ms: u64,
+    ) -> Result<LaunchIntent> {
+        validate_name(intent_id, "launch intent id", 128)?;
+        if ownership_proof.is_null() {
+            return Err(WatchdogError::InvalidInput(
+                "launch ownership proof must not be null".to_string(),
+            ));
+        }
+        let encoded = serde_json::to_string(ownership_proof)?;
+        if encoded.len() > MAX_LAUNCH_PROOF_BYTES {
+            return Err(WatchdogError::InvalidInput(
+                "launch ownership proof exceeds its bound".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM launch_intents WHERE id=?",
+                params![intent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if state.as_deref() != Some("prepared") {
+            tx.rollback()?;
+            return Err(match state {
+                Some(state) => WatchdogError::Conflict(format!(
+                    "launch intent {intent_id} is {state}, not prepared"
+                )),
+                None => WatchdogError::NotFound(format!("launch intent {intent_id}")),
+            });
+        }
+        tx.execute(
+            "UPDATE launch_intents SET state='proof_recorded', ownership_proof_json=?, updated_at_ms=? WHERE id=? AND state='prepared'",
+            params![encoded, sqlite_timestamp(now_ms)?, intent_id],
+        )?;
+        insert_audit_tx(&tx, "launch_proof_recorded", intent_id, now_ms)?;
+        tx.commit()?;
+        self.launch_intent(intent_id)?.ok_or_else(|| {
+            WatchdogError::Conflict("launch intent disappeared after proof commit".to_string())
+        })
+    }
+
+    /// Mark an intent active after the platform has created the exact child
+    /// and the complete process identity has been persisted.  A proof is
+    /// mandatory; no caller may promote a bare PID or a planned path.
+    pub fn activate_launch_intent(&mut self, intent_id: &str, now_ms: u64) -> Result<LaunchIntent> {
+        validate_name(intent_id, "launch intent id", 128)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state_and_proof: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT state, ownership_proof_json FROM launch_intents WHERE id=?",
+                params![intent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((state, proof)) = state_and_proof else {
+            tx.rollback()?;
+            return Err(WatchdogError::NotFound(format!(
+                "launch intent {intent_id}"
+            )));
+        };
+        if state != "proof_recorded" || proof.is_none() {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "launch intent {intent_id} lacks a recorded ownership proof"
+            )));
+        }
+        tx.execute(
+            "UPDATE launch_intents SET state='active', updated_at_ms=? WHERE id=? AND state='proof_recorded'",
+            params![sqlite_timestamp(now_ms)?, intent_id],
+        )?;
+        insert_audit_tx(&tx, "launch_intent_activated", intent_id, now_ms)?;
+        tx.commit()?;
+        self.launch_intent(intent_id)?.ok_or_else(|| {
+            WatchdogError::Conflict("launch intent disappeared after activation".to_string())
+        })
+    }
+
+    /// Mark a prepared, proof-recorded, or active intent cleaned after the
+    /// designated process authority has completed exact containment cleanup.
+    /// This is a durable fact only; it does not itself terminate a process.
+    pub fn clean_launch_intent(&mut self, intent_id: &str, now_ms: u64) -> Result<LaunchIntent> {
+        validate_name(intent_id, "launch intent id", 128)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM launch_intents WHERE id=?",
+                params![intent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(state) = state else {
+            tx.rollback()?;
+            return Err(WatchdogError::NotFound(format!(
+                "launch intent {intent_id}"
+            )));
+        };
+        if state == "cleaned" {
+            tx.commit()?;
+            return self.launch_intent(intent_id)?.ok_or_else(|| {
+                WatchdogError::Conflict("launch intent disappeared after cleanup".to_string())
+            });
+        }
+        if !matches!(state.as_str(), "prepared" | "proof_recorded" | "active") {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "launch intent {intent_id} has unknown state {state}"
+            )));
+        }
+        tx.execute(
+            "UPDATE launch_intents SET state='cleaned', updated_at_ms=? WHERE id=? AND state=?",
+            params![sqlite_timestamp(now_ms)?, intent_id, state],
+        )?;
+        insert_audit_tx(&tx, "launch_intent_cleaned", intent_id, now_ms)?;
+        tx.commit()?;
+        self.launch_intent(intent_id)?.ok_or_else(|| {
+            WatchdogError::Conflict("launch intent disappeared after cleanup".to_string())
+        })
+    }
+
+    /// Fetch one launch intent for platform-authority reconciliation.
+    pub fn launch_intent(&self, intent_id: &str) -> Result<Option<LaunchIntent>> {
+        validate_name(intent_id, "launch intent id", 128)?;
+        self.conn
+            .query_row(
+                "SELECT id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE id=?",
+                params![intent_id],
+                launch_intent_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// List unsettled intents in creation order.  A replacement controller
+    /// must reconcile these through the exact platform authority before any
+    /// new launch is admitted.
+    pub fn unsettled_launch_intents(&self) -> Result<Vec<LaunchIntent>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE state <> 'cleaned' ORDER BY created_at_ms, id",
+        )?;
+        let rows = statement.query_map([], launch_intent_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<LaunchIntent>>>()
+            .map_err(Into::into)
+    }
+
     /// Retain an audit event with a bounded detail string.
     pub fn audit(&mut self, action: &str, detail: &str, now_ms: u64) -> Result<()> {
         validate_name(action, "audit action", 128)?;
@@ -1077,14 +1755,7 @@ impl Store {
     }
 
     fn metadata(&self, key: &str) -> Result<Option<String>> {
-        self.conn
-            .query_row(
-                "SELECT value FROM metadata WHERE key=?",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
+        metadata_from_conn(&self.conn, key)
     }
 
     fn job_count(&self, status: JobStatus) -> Result<u64> {
@@ -1098,7 +1769,14 @@ impl Store {
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    open_connection_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )
+}
+
+fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> Result<Connection> {
+    let conn = Connection::open_with_flags(path, flags)?;
     conn.busy_timeout(Duration::from_millis(750))?;
     // Foreign-key and temp-store settings are connection-local.  Opening a
     // store for `status` does not switch journal mode or create state.
@@ -1185,6 +1863,19 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             worker_id TEXT
         );
         CREATE INDEX IF NOT EXISTS jobs_ready_idx ON jobs(status, next_retry_at_ms, created_at_ms, id);
+        CREATE TABLE IF NOT EXISTS launch_intents (
+            id TEXT PRIMARY KEY NOT NULL,
+            deployment_id TEXT NOT NULL,
+            component_id TEXT NOT NULL,
+            launch_nonce TEXT NOT NULL,
+            planned_containment_id TEXT,
+            state TEXT NOT NULL CHECK(state IN ('prepared','proof_recorded','active','cleaned')),
+            ownership_proof_json TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS launch_intents_one_unsettled_component_idx ON launch_intents(component_id) WHERE state <> 'cleaned';
+        CREATE INDEX IF NOT EXISTS launch_intents_component_idx ON launch_intents(component_id, state, created_at_ms);
         CREATE TABLE IF NOT EXISTS attempts (
             id TEXT PRIMARY KEY NOT NULL,
             job_id TEXT NOT NULL REFERENCES jobs(id),
@@ -1200,9 +1891,11 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS restart_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             component_id TEXT NOT NULL,
-            occurred_at_ms INTEGER NOT NULL
+            occurred_at_ms INTEGER NOT NULL,
+            clock_epoch TEXT NOT NULL,
+            clock_elapsed_ms INTEGER NOT NULL CHECK(clock_elapsed_ms >= 0)
         );
-        CREATE INDEX IF NOT EXISTS restart_events_component_idx ON restart_events(component_id, occurred_at_ms);
+        CREATE INDEX IF NOT EXISTS restart_events_component_idx ON restart_events(component_id, clock_epoch, clock_elapsed_ms);
         CREATE TABLE IF NOT EXISTS components (
             id TEXT PRIMARY KEY NOT NULL,
             state TEXT NOT NULL,
@@ -1229,6 +1922,24 @@ fn insert_metadata(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM metadata WHERE key=?",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn config_compatibility_digest(config: &WatchdogConfig) -> Result<String> {
+    let mut normalized = config.clone();
+    normalized.deployment_id = "watchdog-compatibility-identity".to_string();
+    normalized.database = PathBuf::from("/owner-local/watchdog.sqlite3");
+    normalized.desired_mode = DesiredMode::Stopped;
+    normalized.digest()
+}
+
 fn update_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
     let changed = tx.execute(
         "UPDATE metadata SET value=? WHERE key=?",
@@ -1239,6 +1950,14 @@ fn update_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()
             "metadata key {key} is missing"
         )));
     }
+    Ok(())
+}
+
+fn upsert_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
+    tx.execute(
+        "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, value],
+    )?;
     Ok(())
 }
 
@@ -1262,17 +1981,14 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
         payload: serde_json::from_str(&payload_text).map_err(to_sqlite_error)?,
         payload_digest: row.get(3)?,
         status: JobStatus::parse(&status).map_err(to_sqlite_error)?,
-        created_at_ms: row.get::<_, i64>(5)?.try_into().unwrap_or_default(),
-        claimed_at_ms: row
-            .get::<_, Option<i64>>(6)?
-            .and_then(|v| v.try_into().ok()),
-        completed_at_ms: row
-            .get::<_, Option<i64>>(7)?
-            .and_then(|v| v.try_into().ok()),
-        attempt_count: row.get::<_, i64>(8)?.try_into().unwrap_or_default(),
-        next_retry_at_ms: row
-            .get::<_, Option<i64>>(9)?
-            .and_then(|v| v.try_into().ok()),
+        created_at_ms: sqlite_u64(row.get::<_, i64>(5)?, "job created_at_ms")?,
+        claimed_at_ms: sqlite_optional_u64(row.get::<_, Option<i64>>(6)?, "job claimed_at_ms")?,
+        completed_at_ms: sqlite_optional_u64(row.get::<_, Option<i64>>(7)?, "job completed_at_ms")?,
+        attempt_count: sqlite_u32(row.get::<_, i64>(8)?, "job attempt_count")?,
+        next_retry_at_ms: sqlite_optional_u64(
+            row.get::<_, Option<i64>>(9)?,
+            "job next_retry_at_ms",
+        )?,
         last_error: row.get(10)?,
         result: result_text
             .as_deref()
@@ -1280,6 +1996,50 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
             .transpose()
             .map_err(to_sqlite_error)?,
         worker_id: row.get(12)?,
+    })
+}
+
+fn launch_intent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchIntent> {
+    let state: String = row.get(5)?;
+    let proof_text: Option<String> = row.get(6)?;
+    if proof_text
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_LAUNCH_PROOF_BYTES)
+    {
+        return Err(to_sqlite_error(
+            "launch ownership proof exceeds its persisted bound",
+        ));
+    }
+    let parsed_proof = proof_text
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(to_sqlite_error)?;
+    let parsed_state = LaunchIntentState::parse(&state).map_err(to_sqlite_error)?;
+    if matches!(
+        parsed_state,
+        LaunchIntentState::ProofRecorded | LaunchIntentState::Active
+    ) && parsed_proof.is_none()
+    {
+        return Err(to_sqlite_error(
+            "launch intent state requires a recorded ownership proof",
+        ));
+    }
+    if matches!(parsed_state, LaunchIntentState::Prepared) && parsed_proof.is_some() {
+        return Err(to_sqlite_error(
+            "prepared launch intent unexpectedly contains an ownership proof",
+        ));
+    }
+    Ok(LaunchIntent {
+        id: row.get(0)?,
+        deployment_id: row.get(1)?,
+        component_id: row.get(2)?,
+        launch_nonce: row.get(3)?,
+        planned_containment_id: row.get(4)?,
+        state: parsed_state,
+        ownership_proof_json: parsed_proof,
+        created_at_ms: sqlite_u64(row.get::<_, i64>(7)?, "launch intent created_at_ms")?,
+        updated_at_ms: sqlite_u64(row.get::<_, i64>(8)?, "launch intent updated_at_ms")?,
     })
 }
 
@@ -1294,6 +2054,30 @@ fn to_sqlite_error<E: std::fmt::Display>(error: E) -> rusqlite::Error {
     )
 }
 
+fn sqlite_u64(value: i64, field: &str) -> rusqlite::Result<u64> {
+    u64::try_from(value).map_err(|_| {
+        to_sqlite_error(format!(
+            "{field} contains a negative or out-of-range integer"
+        ))
+    })
+}
+
+fn sqlite_u32(value: i64, field: &str) -> rusqlite::Result<u32> {
+    u32::try_from(value).map_err(|_| {
+        to_sqlite_error(format!(
+            "{field} contains a negative or out-of-range integer"
+        ))
+    })
+}
+
+fn sqlite_optional_u64(value: Option<i64>, field: &str) -> rusqlite::Result<Option<u64>> {
+    value.map(|value| sqlite_u64(value, field)).transpose()
+}
+
+fn sqlite_optional_u32(value: Option<i64>, field: &str) -> rusqlite::Result<Option<u32>> {
+    value.map(|value| sqlite_u32(value, field)).transpose()
+}
+
 fn validate_name(value: &str, name: &str, max_bytes: usize) -> Result<()> {
     if value.is_empty()
         || value.len() > max_bytes
@@ -1302,6 +2086,25 @@ fn validate_name(value: &str, name: &str, max_bytes: usize) -> Result<()> {
     {
         return Err(WatchdogError::InvalidInput(format!(
             "{name} must be non-empty, bounded, and free of control characters"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_metadata_i64(key: &str, value: &str) -> Result<i64> {
+    value.parse::<i64>().map_err(|_| {
+        WatchdogError::Conflict(format!("{key} metadata is not a valid SQLite integer"))
+    })
+}
+
+fn validate_metadata_identifier(key: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.as_bytes().contains(&0)
+        || value.chars().any(char::is_control)
+    {
+        return Err(WatchdogError::Conflict(format!(
+            "{key} metadata is invalid"
         )));
     }
     Ok(())
