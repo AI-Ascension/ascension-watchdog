@@ -10,6 +10,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod contract;
+pub mod service_command;
 pub use contract::{
     ComponentKind, LifecycleCapability, LifecycleFrame, LifecycleRequest, PlatformError,
     ProcessIdentity, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,

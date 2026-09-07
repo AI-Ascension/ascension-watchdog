@@ -2040,86 +2040,35 @@ fn canonicalize_service_config_path(path: &Path) -> Result<PathBuf, PlatformErro
     Ok(canonical)
 }
 
-fn parse_service_command_line(command_line: &Path) -> Result<Vec<String>, PlatformError> {
-    let text = command_line.to_string_lossy();
-    let characters = text.chars().collect::<Vec<_>>();
-    let mut arguments = Vec::new();
-    let mut index = 0_usize;
-    while index < characters.len() {
-        while index < characters.len()
-            && matches!(characters[index], ' ' | '\t' | '\n' | '\r' | '\u{000b}')
-        {
-            index += 1;
-        }
-        if index == characters.len() {
-            break;
-        }
-        let mut argument = String::new();
-        let mut quoted = false;
-        loop {
-            let mut slashes = 0_usize;
-            while index < characters.len() && characters[index] == '\\' {
-                slashes += 1;
-                index += 1;
-            }
-            if index == characters.len() {
-                argument.extend(std::iter::repeat_n('\\', slashes));
-                break;
-            }
-            match characters[index] {
-                '"' => {
-                    argument.extend(std::iter::repeat_n('\\', slashes / 2));
-                    if slashes % 2 == 1 {
-                        argument.push('"');
-                        index += 1;
-                    } else if quoted && index + 1 < characters.len() && characters[index + 1] == '"'
-                    {
-                        argument.push('"');
-                        index += 2;
-                    } else {
-                        quoted = !quoted;
-                        index += 1;
-                    }
-                }
-                character
-                    if !quoted && matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000b}') =>
-                {
-                    argument.extend(std::iter::repeat_n('\\', slashes));
-                    break;
-                }
-                character => {
-                    argument.extend(std::iter::repeat_n('\\', slashes));
-                    argument.push(character);
-                    index += 1;
-                }
-            }
-        }
-        if quoted {
-            return Err(PlatformError::Invalid(
-                "Windows service command line contains an unterminated quote".to_owned(),
-            ));
-        }
-        arguments.push(argument);
-    }
-    Ok(arguments)
-}
-
 fn validate_installed_service_config(
     service_config: &windows_service::service::ServiceConfig,
     expected_executable: &Path,
     expected_config: &Path,
 ) -> Result<(), PlatformError> {
-    if service_config.service_type != ServiceType::OWN_PROCESS
-        || service_config.start_type != ServiceStartType::AutoStart
-    {
+    if service_config.service_type != ServiceType::OWN_PROCESS {
         return Err(PlatformError::IdentityMismatch(
-            "SCM service type/start mode is not the fixed watchdog deployment".to_owned(),
+            "SCM service type is not the fixed watchdog own-process deployment".to_owned(),
         ));
     }
-    let arguments = parse_service_command_line(&service_config.executable_path)?;
-    validate_service_command_shape(&arguments)?;
-    let actual_executable = PathBuf::from(&arguments[0]);
-    let actual_config = PathBuf::from(&arguments[4]);
+    let removal_start_mode = match service_config.start_type {
+        ServiceStartType::AutoStart => crate::service_command::RemovalStartMode::AutoStart,
+        ServiceStartType::OnDemand => crate::service_command::RemovalStartMode::OnDemand,
+        ServiceStartType::Disabled => crate::service_command::RemovalStartMode::Disabled,
+        ServiceStartType::SystemStart | ServiceStartType::BootStart => {
+            crate::service_command::RemovalStartMode::Unsupported
+        }
+    };
+    crate::service_command::validate_removal_start_mode(removal_start_mode).map_err(|error| {
+        PlatformError::IdentityMismatch(format!("invalid SCM removal start mode: {error}"))
+    })?;
+    let command_line = crate::service_command::parse_service_command_line(
+        &service_config.executable_path.to_string_lossy(),
+    )
+    .map_err(|error| {
+        PlatformError::IdentityMismatch(format!("invalid SCM service command line: {error}"))
+    })?;
+    let actual_executable = PathBuf::from(command_line.executable);
+    let actual_config = PathBuf::from(command_line.config);
     let canonical_executable = canonicalize_executable(&actual_executable)?;
     let canonical_config = canonicalize_service_config_path(&actual_config)?;
     if normalize_path(&actual_executable) != normalize_path(&canonical_executable)
@@ -2134,19 +2083,6 @@ fn validate_installed_service_config(
     {
         return Err(PlatformError::IdentityMismatch(
             "SCM service config is not the approved canonical owner-local config".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_service_command_shape(arguments: &[String]) -> Result<(), PlatformError> {
-    if arguments.len() != 5
-        || arguments[1] != "daemon"
-        || arguments[2] != SERVICE_SWITCH_ARGUMENT
-        || arguments[3] != SERVICE_CONFIG_ARGUMENT
-    {
-        return Err(PlatformError::IdentityMismatch(
-            "SCM service command line is not exactly daemon --service --config PATH".to_owned(),
         ));
     }
     Ok(())
@@ -3086,10 +3022,10 @@ fn wide_path(path: &Path) -> Result<Vec<u16>, PlatformError> {
 }
 
 fn command_line(executable: &Path, arguments: &[String]) -> Result<Vec<u16>, PlatformError> {
-    let mut line = quote_windows(executable.to_string_lossy().as_ref());
+    let mut line = crate::service_command::quote_windows(executable.to_string_lossy().as_ref());
     for argument in arguments {
         line.push(' ');
-        line.push_str(&quote_windows(argument));
+        line.push_str(&crate::service_command::quote_windows(argument));
     }
     let result = wide(&line)?;
     if result.len().saturating_sub(1) > 32_767 {
@@ -3098,38 +3034,6 @@ fn command_line(executable: &Path, arguments: &[String]) -> Result<Vec<u16>, Pla
         ));
     }
     Ok(result)
-}
-
-fn quote_windows(value: &str) -> String {
-    if value.is_empty()
-        || value
-            .chars()
-            .any(|character| character.is_whitespace() || character == '"')
-    {
-        let mut quoted = String::from('"');
-        let mut slashes = 0_usize;
-        for character in value.chars() {
-            if character == '\\' {
-                slashes += 1;
-            } else if character == '"' {
-                quoted.extend(std::iter::repeat_n(
-                    '\\',
-                    slashes.saturating_mul(2).saturating_add(1),
-                ));
-                quoted.push(character);
-                slashes = 0;
-            } else {
-                quoted.extend(std::iter::repeat_n('\\', slashes));
-                quoted.push(character);
-                slashes = 0;
-            }
-        }
-        quoted.extend(std::iter::repeat_n('\\', slashes.saturating_mul(2)));
-        quoted.push('"');
-        quoted
-    } else {
-        value.to_owned()
-    }
 }
 
 fn environment_block(environment: &BTreeMap<String, String>) -> Result<Vec<u16>, PlatformError> {
@@ -3240,54 +3144,9 @@ mod tests {
     use windows_service::service::ServiceConfig;
 
     #[test]
-    fn windows_quoting_preserves_backslashes_before_quotes() {
-        assert_eq!(quote_windows("plain"), "plain");
-        assert_eq!(quote_windows("a b"), "\"a b\"");
-        let mut expected = String::from("\"a");
-        expected.extend(std::iter::repeat_n('\\', 7));
-        expected.push('"');
-        expected.push('b');
-        expected.push('"');
-        assert_eq!(quote_windows(r#"a\\\"b"#), expected);
-    }
-
-    #[test]
     fn invalid_nonce_and_pipe_namespace_are_rejected() {
         assert!(validate_nonce("../old").is_err());
         assert!(validate_pipe_name(r"\\.\pipe\other").is_err());
-    }
-
-    #[test]
-    fn service_command_line_parser_requires_the_closed_daemon_grammar() {
-        let parsed = parse_service_command_line(Path::new(
-            r#"C:\Program Files\Ascension\watchdog.exe daemon --service --config "C:\ProgramData\Ascension\watchdog.json""#,
-        ))
-        .expect("closed service command line should parse");
-        assert_eq!(
-            parsed,
-            vec![
-                r"C:\Program Files\Ascension\watchdog.exe".to_owned(),
-                "daemon".to_owned(),
-                "--service".to_owned(),
-                "--config".to_owned(),
-                r"C:\ProgramData\Ascension\watchdog.json".to_owned(),
-            ]
-        );
-        let missing_config =
-            parse_service_command_line(Path::new(r"watchdog.exe daemon --service --config"))
-                .expect("parser should preserve the incomplete argument list");
-        assert!(validate_service_command_shape(&missing_config).is_err());
-        let extra_argument = parse_service_command_line(Path::new(
-            r"watchdog.exe daemon --service --config C:\one.json extra",
-        ))
-        .expect("parser should preserve the extra argument");
-        assert!(validate_service_command_shape(&extra_argument).is_err());
-        assert!(
-            parse_service_command_line(Path::new(
-                r#""C:\broken path\watchdog.exe daemon --service"#,
-            ))
-            .is_err()
-        );
     }
 
     #[test]
@@ -3311,10 +3170,9 @@ mod tests {
             &std::env::current_exe()
                 .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?,
         )?;
-        let command_line = format!(
-            "{} daemon --service --config {}",
-            quote_windows(executable.to_string_lossy().as_ref()),
-            quote_windows(other_config.to_string_lossy().as_ref()),
+        let command_line = crate::service_command::render_service_command_line(
+            executable.to_string_lossy().as_ref(),
+            other_config.to_string_lossy().as_ref(),
         );
         let service_config = ServiceConfig {
             service_type: ServiceType::OWN_PROCESS,
@@ -3327,12 +3185,27 @@ mod tests {
             account_name: None,
             display_name: "test".into(),
         };
-        let result = validate_installed_service_config(
-            &service_config,
-            &executable,
-            &canonicalize_service_config_path(&expected_config)?,
-        );
+        let expected_canonical = canonicalize_service_config_path(&expected_config)?;
+        let result =
+            validate_installed_service_config(&service_config, &executable, &expected_canonical);
         assert!(matches!(result, Err(PlatformError::IdentityMismatch(_))));
+        let mut service_config = service_config;
+        service_config.executable_path = crate::service_command::render_service_command_line(
+            executable.to_string_lossy().as_ref(),
+            expected_config.to_string_lossy().as_ref(),
+        )
+        .into();
+        for start_type in [ServiceStartType::OnDemand, ServiceStartType::Disabled] {
+            service_config.start_type = start_type;
+            assert!(
+                validate_installed_service_config(
+                    &service_config,
+                    &executable,
+                    &expected_canonical,
+                )
+                .is_ok()
+            );
+        }
         let _ = std::fs::remove_dir_all(directory);
         Ok(())
     }
