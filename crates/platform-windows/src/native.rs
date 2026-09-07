@@ -8,29 +8,35 @@
 //! `CREATE_SUSPENDED`; the child cannot execute before assignment.
 
 use crate::contract::{
-    LifecycleRequest, PlatformError, ProcessIdentity, SessionSelector, WindowsLaunchSpec,
-    WindowsPlatformConfig,
+    LifecycleFrame, LifecycleRequest, PlatformError, ProcessIdentity, SessionSelector,
+    WindowsLaunchSpec, WindowsPlatformConfig,
 };
 use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::mem::size_of;
+use std::mem::{align_of, size_of};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 use windows_service::service::{
     Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceErrorControl,
     ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceState, ServiceStatus,
     ServiceType,
 };
-use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+use windows_service::service_control_handler::{
+    self, ServiceControlHandlerResult, ServiceStatusHandle,
+};
 use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER, ERROR_PIPE_CONNECTED,
-    ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME, GENERIC_READ, GetLastError, HANDLE,
-    INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
+    ERROR_NO_DATA, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED,
+    ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED, ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME,
+    GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::{
@@ -39,8 +45,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE,
-    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FlushFileBuffers, GetFileSizeEx, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, GetFileInformationByHandle, GetFileSizeEx,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -52,8 +58,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
-    GetNamedPipeClientSessionId, PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS,
-    PIPE_TYPE_MESSAGE, PIPE_WAIT,
+    GetNamedPipeClientSessionId, PIPE_NOWAIT, PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_MESSAGE,
 };
 use windows_sys::Win32::System::RemoteDesktop::{
     ProcessIdToSessionId, WTSGetActiveConsoleSessionId, WTSQueryUserToken,
@@ -75,6 +81,7 @@ const PIPE_NAME_PREFIX: &str = r"\\.\pipe\ascension-watchdog-";
 const SERVICE_NAME: &str = "ascension-watchdog";
 const HEALTH_STALE_AFTER: Duration = Duration::from_secs(90);
 const SERVICE_READY_TIMEOUT: Duration = Duration::from_mins(2);
+const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
 const HASH_READ_BYTES: usize = 64 * 1024;
 const SHA256_K: [u32; 64] = [
@@ -174,6 +181,17 @@ struct IntegrityGuards {
     release_directory: OwnedHandle,
     path: PathBuf,
     digest: String,
+    file_identity: FileIdentity,
+}
+
+/// Kernel file identity captured from the same handle that is hashed.  A
+/// canonical path is only a lookup; this tuple proves that the path still
+/// resolves to the protected file object before a suspended child is resumed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    volume_serial: u32,
+    file_index: u64,
+    size: u64,
 }
 
 impl IntegrityGuards {
@@ -193,12 +211,19 @@ impl IntegrityGuards {
             FILE_ATTRIBUTE_NORMAL,
             "CreateFileW(executable)",
         )?;
+        let protected_identity = file_identity(&executable)?;
         let digest = hash_immutable_file(&executable)?;
+        if file_identity(&executable)? != protected_identity {
+            return Err(PlatformError::IdentityMismatch(
+                "approved executable changed while its protected handle was opened".to_owned(),
+            ));
+        }
         Ok(Self {
             executable,
             release_directory,
             path: path.to_owned(),
             digest,
+            file_identity: protected_identity,
         })
     }
 
@@ -208,6 +233,30 @@ impl IntegrityGuards {
 
     fn digest(&self) -> &str {
         &self.digest
+    }
+
+    /// Reopen the exact launch path under the same no-share policy and verify
+    /// both kernel file identity and bytes.  This check is intentionally made
+    /// while the child is still suspended; a path-only comparison is not a
+    /// sufficient process-creation barrier.
+    fn verify_path_barrier(&self) -> Result<(), PlatformError> {
+        let candidate = open_immutable_path(
+            self.path(),
+            GENERIC_READ,
+            FILE_ATTRIBUTE_NORMAL,
+            "CreateFileW(approved executable barrier)",
+        )?;
+        if file_identity(&candidate)? != self.file_identity {
+            return Err(PlatformError::IdentityMismatch(
+                "launch path resolves to a different executable file object".to_owned(),
+            ));
+        }
+        if hash_immutable_file(&candidate)? != self.digest {
+            return Err(PlatformError::IdentityMismatch(
+                "launch path executable bytes differ from the protected release".to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -328,6 +377,7 @@ impl JobOwnedProcess {
         graceful_timeout: Duration,
         force_timeout: Duration,
     ) -> Result<Self, PlatformError> {
+        identity.validate()?;
         validate_nonce(&identity.launch_nonce)?;
         validate_stop_timeouts(graceful_timeout, force_timeout)?;
         if max_processes == 0 || max_processes > 128 {
@@ -359,6 +409,7 @@ impl JobOwnedProcess {
                 "persisted executable digest differs from the immutable release handle".to_owned(),
             ));
         }
+        integrity.verify_path_barrier()?;
         let process = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -523,6 +574,7 @@ impl WindowsProcessLauncher {
                 "integrity guard path differs from requested executable".to_owned(),
             ));
         }
+        integrity.verify_path_barrier()?;
         let session_id = match specification.session {
             SessionSelector::ActiveUser => match select_active_session() {
                 ActiveSession::Available(session) => session,
@@ -557,6 +609,10 @@ impl WindowsProcessLauncher {
             specification,
         )?;
         let (process_handle, thread_handle, pid) = process;
+        if let Err(error) = integrity.verify_path_barrier() {
+            let _ = unsafe { TerminateJobObject(job.raw(), 1) };
+            return Err(error);
+        }
         let resumed = unsafe { ResumeThread(thread_handle.raw()) };
         if resumed == u32::MAX {
             let _ = unsafe { TerminateJobObject(job.raw(), 1) };
@@ -765,6 +821,7 @@ fn verify_job_owner(job: &OwnedHandle) -> Result<(), PlatformError> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn spawn_suspended_with_job(
     token: Option<HANDLE>,
     job: &OwnedHandle,
@@ -788,7 +845,26 @@ fn spawn_suspended_with_job(
     if attribute_size == 0 {
         return Err(last_error("InitializeProcThreadAttributeList(size)"));
     }
-    let mut attribute_storage = vec![0_u8; attribute_size];
+    // `PROC_THREAD_ATTRIBUTE_LIST` is an opaque native structure whose
+    // alignment is not guaranteed by `Vec<u8>`.  Allocate whole `usize`
+    // words so the pointer passed to every attribute API is explicitly
+    // pointer-aligned and the backing storage outlives the CreateProcess call.
+    let attribute_words = attribute_size
+        .checked_add(align_of::<usize>().saturating_sub(1))
+        .ok_or_else(|| PlatformError::Invalid("attribute list size overflow".to_owned()))?
+        / align_of::<usize>();
+    let mut attribute_storage = vec![0_usize; attribute_words];
+    let attribute_bytes = attribute_storage
+        .len()
+        .checked_mul(size_of::<usize>())
+        .ok_or_else(|| PlatformError::Invalid("attribute list allocation overflow".to_owned()))?;
+    if attribute_bytes < attribute_size
+        || !(attribute_storage.as_ptr() as usize).is_multiple_of(align_of::<usize>())
+    {
+        return Err(PlatformError::Invalid(
+            "attribute list storage does not satisfy alignment/size invariants".to_owned(),
+        ));
+    }
     let attribute_list = attribute_storage.as_mut_ptr().cast();
     let initialized =
         unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &raw mut attribute_size) };
@@ -909,18 +985,27 @@ pub fn select_active_session() -> ActiveSession {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamedPipePeer {
     pub process_id: u32,
+    pub creation_time_100ns: u64,
     pub session_id: u32,
     pub executable: PathBuf,
 }
 
 /// One-message local IPC server.  The object ACL is owner-only and remote
-/// clients are rejected by the pipe mode; peer PID/session/image are checked
-/// before a lifecycle frame is accepted.
+/// clients are rejected by the pipe mode.  Reads require both peer
+/// authentication and a configured nonce/epoch replay window.
 pub struct NamedPipeServer {
     handle: OwnedHandle,
     name: String,
     connected: bool,
     peer: Option<NamedPipePeer>,
+    peer_process: Option<OwnedHandle>,
+    expected_session: Option<u32>,
+    expected_executable: Option<PathBuf>,
+    expected_epoch: Option<u64>,
+    expected_nonce: Option<String>,
+    authenticated: bool,
+    last_sequence: u64,
+    last_frame: Option<LifecycleFrame>,
 }
 
 impl std::fmt::Debug for NamedPipeServer {
@@ -929,15 +1014,74 @@ impl std::fmt::Debug for NamedPipeServer {
             .debug_struct("NamedPipeServer")
             .field("name", &self.name)
             .field("connected", &self.connected)
+            .field("authenticated", &self.authenticated)
             .finish_non_exhaustive()
     }
 }
 
 impl NamedPipeServer {
-    /// Create a one-instance owner-only named pipe.
+    /// Create a one-instance owner-only named pipe.  Callers must supply an
+    /// explicit peer policy with [`Self::authenticate_peer`] and
+    /// [`Self::configure_replay_policy`] before reading a request.
     pub fn create(name: impl Into<String>) -> Result<Self, PlatformError> {
-        let name = name.into();
+        Self::create_inner(name.into(), None, None, None, None)
+    }
+
+    /// Create a lifecycle pipe bound to the configured executable and a
+    /// durable epoch/nonce.  This is the preferred production constructor;
+    /// it prevents a caller from forgetting to bind
+    /// `WindowsPlatformConfig::authorized_peer_executable`.
+    pub fn create_for_config(
+        config: &WindowsPlatformConfig,
+        expected_session: Option<u32>,
+        epoch: u64,
+        nonce: impl Into<String>,
+    ) -> Result<Self, PlatformError> {
+        config.validate()?;
+        Self::create_with_policy(
+            config.pipe_name.clone(),
+            expected_session,
+            &config.authorized_peer_executable,
+            epoch,
+            nonce,
+        )
+    }
+
+    /// Create a lifecycle pipe with an explicit authenticated peer policy.
+    pub fn create_with_policy(
+        name: impl Into<String>,
+        expected_session: Option<u32>,
+        expected_executable: &Path,
+        epoch: u64,
+        nonce: impl Into<String>,
+    ) -> Result<Self, PlatformError> {
+        let expected_executable = canonicalize_executable(expected_executable)?;
+        let nonce = nonce.into();
+        validate_replay_policy(epoch, &nonce)?;
+        Self::create_inner(
+            name.into(),
+            expected_session,
+            Some(expected_executable),
+            Some(epoch),
+            Some(nonce),
+        )
+    }
+
+    fn create_inner(
+        name: String,
+        expected_session: Option<u32>,
+        expected_executable: Option<PathBuf>,
+        expected_epoch: Option<u64>,
+        expected_nonce: Option<String>,
+    ) -> Result<Self, PlatformError> {
         validate_pipe_name(&name)?;
+        if expected_executable.is_some() != expected_epoch.is_some()
+            || expected_epoch.is_some() != expected_nonce.is_some()
+        {
+            return Err(PlatformError::Invalid(
+                "lifecycle peer and replay policy must be configured together".to_owned(),
+            ));
+        }
         let security = SecurityDescriptor::owner_only()?;
         let attributes = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(|_| {
@@ -951,7 +1095,10 @@ impl NamedPipeServer {
             CreateNamedPipeW(
                 wide_name.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_TYPE_MESSAGE
+                    | PIPE_READMODE_MESSAGE
+                    | PIPE_NOWAIT
+                    | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 u32::try_from(MAX_PIPE_FRAME)
                     .map_err(|_| PlatformError::Invalid("pipe frame size overflow".to_owned()))?,
@@ -967,21 +1114,228 @@ impl NamedPipeServer {
             name,
             connected: false,
             peer: None,
+            peer_process: None,
+            expected_session,
+            expected_executable,
+            expected_epoch,
+            expected_nonce,
+            authenticated: false,
+            last_sequence: 0,
+            last_frame: None,
         })
     }
 
-    /// Block until one local client connects, then capture its PID/session and
-    /// executable.  A later call must explicitly authenticate that peer.
-    pub fn accept(&mut self) -> Result<NamedPipePeer, PlatformError> {
+    /// Set the durable replay window for a pipe created with [`Self::create`].
+    /// This must be done before a request is read.
+    pub fn configure_replay_policy(
+        &mut self,
+        epoch: u64,
+        nonce: impl Into<String>,
+    ) -> Result<(), PlatformError> {
+        if self.authenticated || self.last_frame.is_some() {
+            return Err(PlatformError::Invalid(
+                "lifecycle replay policy cannot change after authentication".to_owned(),
+            ));
+        }
+        let nonce = nonce.into();
+        validate_replay_policy(epoch, &nonce)?;
+        self.expected_epoch = Some(epoch);
+        self.expected_nonce = Some(nonce);
+        self.last_sequence = 0;
+        self.last_frame = None;
+        Ok(())
+    }
+
+    /// Poll for one local client for at most `timeout`, then capture its
+    /// process handle, PID, creation time, session and executable.  Every
+    /// post-connect metadata failure resets the pipe to listen state so a
+    /// rejected peer cannot strand the one-instance endpoint.
+    pub fn accept(&mut self, timeout: Duration) -> Result<Option<NamedPipePeer>, PlatformError> {
+        validate_lifecycle_timeout(timeout)?;
         if self.connected {
             return Err(PlatformError::Invalid(
                 "named pipe already has a connected client".to_owned(),
             ));
         }
-        let result = unsafe { ConnectNamedPipe(self.handle.raw(), null_mut()) };
-        if result == 0 && unsafe { GetLastError() } != ERROR_PIPE_CONNECTED {
-            return Err(last_error("ConnectNamedPipe"));
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        loop {
+            let result = unsafe { ConnectNamedPipe(self.handle.raw(), null_mut()) };
+            let code = if result == 0 {
+                unsafe { GetLastError() }
+            } else {
+                ERROR_SUCCESS
+            };
+            if result != 0 || code == ERROR_PIPE_CONNECTED {
+                self.connected = true;
+                match self.capture_peer() {
+                    Ok((peer, process)) => {
+                        self.peer = Some(peer.clone());
+                        self.peer_process = Some(process);
+                        return Ok(Some(peer));
+                    }
+                    Err(error) => {
+                        let _ = self.reset_listener();
+                        return Err(error);
+                    }
+                }
+            }
+            if code == ERROR_NO_DATA || code == ERROR_PIPE_NOT_CONNECTED {
+                self.reset_listener()?;
+            } else if code != ERROR_PIPE_LISTENING && code != ERROR_OPERATION_ABORTED {
+                return Err(win32_error("ConnectNamedPipe", code));
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            thread::sleep(
+                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
+    }
+
+    /// Verify peer session and exact executable, then authorize lifecycle
+    /// reads.  The configured policy is preferred; explicit values are only
+    /// available for the low-level constructor and are never optional at read
+    /// time.
+    pub fn authenticate_peer(
+        &mut self,
+        expected_session: Option<u32>,
+        expected_executable: &Path,
+    ) -> Result<&NamedPipePeer, PlatformError> {
+        let expected = canonicalize_executable(expected_executable)?;
+        if self.expected_executable.is_some() && self.expected_session != expected_session {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe session policy differs from configured authority".to_owned(),
+            ));
+        }
+        if self
+            .expected_executable
+            .as_ref()
+            .is_some_and(|configured| normalize_path(configured) != normalize_path(&expected))
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe executable policy differs from configured authority".to_owned(),
+            ));
+        }
+        self.expected_executable = Some(expected);
+        self.expected_session = expected_session;
+        self.authenticate_configured_peer()
+    }
+
+    /// Apply the executable/session policy captured by `create_with_policy`.
+    pub fn authenticate_configured_peer(&mut self) -> Result<&NamedPipePeer, PlatformError> {
+        self.verify_peer_identity()?;
+        let peer = self
+            .peer
+            .as_ref()
+            .ok_or_else(|| PlatformError::Invalid("named pipe has no accepted peer".to_owned()))?;
+        let expected = self.expected_executable.as_ref().ok_or_else(|| {
+            PlatformError::Invalid(
+                "named-pipe peer executable policy must be configured before reads".to_owned(),
+            )
+        })?;
+        if self
+            .expected_session
+            .is_some_and(|session| session != peer.session_id)
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe peer session is not approved".to_owned(),
+            ));
+        }
+        if normalize_path(expected) != normalize_path(&peer.executable) {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe peer executable is not approved".to_owned(),
+            ));
+        }
+        self.authenticated = true;
+        Ok(peer)
+    }
+
+    /// Read and replay-check one bounded lifecycle frame.
+    pub fn read_frame(&mut self, timeout: Duration) -> Result<LifecycleFrame, PlatformError> {
+        self.require_authenticated()?;
+        self.verify_peer_identity()?;
+        let payload = read_length_prefixed(self.handle.raw(), timeout)?;
+        let frame = LifecycleFrame::decode_payload(&payload)?;
+        self.verify_replay(&frame)?;
+        self.last_sequence = frame.sequence;
+        self.last_frame = Some(frame.clone());
+        Ok(frame)
+    }
+
+    /// Read one request only after peer authentication and replay checks.
+    pub fn read_request(&mut self, timeout: Duration) -> Result<LifecycleRequest, PlatformError> {
+        Ok(self.read_frame(timeout)?.request)
+    }
+
+    /// Write a frame with a bounded deadline.  A response is bound to the
+    /// current authenticated epoch/nonce and may acknowledge the last request
+    /// sequence, but cannot introduce a new unauthenticated window.
+    pub fn write_frame(
+        &mut self,
+        frame: &LifecycleFrame,
+        timeout: Duration,
+    ) -> Result<(), PlatformError> {
+        self.require_authenticated()?;
+        self.verify_peer_identity()?;
+        frame.validate()?;
+        if self.expected_epoch != Some(frame.epoch)
+            || self.expected_nonce.as_deref() != Some(frame.nonce.as_str())
+            || self.last_frame.as_ref().is_none_or(|last| {
+                last.sequence != frame.sequence
+                    || last.request.capability() != frame.request.capability()
+            })
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle response is outside the current authenticated frame".to_owned(),
+            ));
+        }
+        write_length_prefixed(self.handle.raw(), &frame.encode_payload()?, timeout)
+    }
+
+    /// Write a response matching the most recently received request.
+    pub fn write_request(
+        &mut self,
+        request: &LifecycleRequest,
+        timeout: Duration,
+    ) -> Result<(), PlatformError> {
+        let last = self.last_frame.as_ref().ok_or_else(|| {
+            PlatformError::Invalid("lifecycle response has no preceding request".to_owned())
+        })?;
+        let frame = LifecycleFrame::new(
+            last.nonce.clone(),
+            last.epoch,
+            last.sequence,
+            request.clone(),
+        );
+        self.write_frame(&frame, timeout)
+    }
+
+    /// Cancel pending native I/O and reset a connected peer.
+    pub fn cancel(&mut self) -> Result<(), PlatformError> {
+        let result =
+            unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.raw(), null()) };
+        if result == 0 {
+            let code = unsafe { GetLastError() };
+            if code != ERROR_NOT_FOUND
+                && code != ERROR_OPERATION_ABORTED
+                && code != ERROR_PIPE_NOT_CONNECTED
+            {
+                return Err(win32_error("CancelIoEx(lifecycle pipe)", code));
+            }
+        }
+        Ok(())
+    }
+
+    /// Disconnect and make the one-instance endpoint available for the next
+    /// bounded connection.
+    pub fn disconnect(&mut self) -> Result<(), PlatformError> {
+        self.reset_listener()
+    }
+
+    fn capture_peer(&self) -> Result<(NamedPipePeer, OwnedHandle), PlatformError> {
         let mut process_id = 0_u32;
         let ok = unsafe { GetNamedPipeClientProcessId(self.handle.raw(), &raw mut process_id) };
         if ok == 0 || process_id == 0 {
@@ -992,103 +1346,108 @@ impl NamedPipeServer {
         if ok == 0 {
             return Err(last_error("GetNamedPipeClientSessionId"));
         }
-        let process = unsafe {
+        let raw_process = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
                 0,
                 process_id,
             )
         };
-        let process = OwnedHandle::new(process, "OpenProcess(pipe peer)")?;
+        let process = OwnedHandle::new(raw_process, "OpenProcess(pipe peer)")?;
+        let creation_time_100ns = process_creation_time(process.raw())?;
         let executable = query_image_path(process.raw())?;
-        let peer = NamedPipePeer {
-            process_id,
-            session_id,
-            executable,
-        };
-        self.connected = true;
-        self.peer = Some(peer.clone());
-        Ok(peer)
+        Ok((
+            NamedPipePeer {
+                process_id,
+                creation_time_100ns,
+                session_id,
+                executable,
+            },
+            process,
+        ))
     }
 
-    /// Verify peer session and exact executable before consuming a lifecycle
-    /// request.  The pipe ACL is the user boundary; PID is only a rechecked
-    /// diagnostic identity and is never accepted as sole authorization.
-    pub fn authenticate_peer(
-        &self,
-        expected_session: Option<u32>,
-        expected_executable: &Path,
-    ) -> Result<&NamedPipePeer, PlatformError> {
-        let peer = self
-            .peer
-            .as_ref()
-            .ok_or_else(|| PlatformError::Invalid("named pipe has no accepted peer".to_owned()))?;
-        if expected_session.is_some_and(|session| session != peer.session_id) {
-            return Err(PlatformError::IdentityMismatch(
-                "named-pipe peer session is not approved".to_owned(),
-            ));
-        }
-        let expected = canonicalize_executable(expected_executable)?;
-        if normalize_path(&expected) != normalize_path(&peer.executable) {
-            return Err(PlatformError::IdentityMismatch(
-                "named-pipe peer executable is not approved".to_owned(),
-            ));
-        }
-        Ok(peer)
-    }
-
-    /// Read one bounded lifecycle frame.  The protocol is closed and length
-    /// prefixed; no arbitrary command text is accepted.
-    pub fn read_request(&mut self) -> Result<LifecycleRequest, PlatformError> {
+    fn verify_peer_identity(&self) -> Result<(), PlatformError> {
         if !self.connected {
             return Err(PlatformError::Invalid(
                 "named pipe has no connected client".to_owned(),
             ));
         }
-        let mut length = [0_u8; 4];
-        read_exact(self.handle.raw(), &mut length)?;
-        let length = usize::try_from(u32::from_le_bytes(length))
-            .map_err(|_| PlatformError::Invalid("lifecycle frame length overflow".to_owned()))?;
-        if length == 0 || length > MAX_PIPE_FRAME {
-            return Err(PlatformError::Invalid(
-                "lifecycle frame exceeds bounds".to_owned(),
+        let peer = self.peer.as_ref().ok_or_else(|| {
+            PlatformError::Invalid("named pipe peer identity is missing".to_owned())
+        })?;
+        let process = self.peer_process.as_ref().ok_or_else(|| {
+            PlatformError::Invalid("named pipe peer handle is missing".to_owned())
+        })?;
+        if unsafe { GetProcessId(process.raw()) } != peer.process_id
+            || process_creation_time(process.raw())? != peer.creation_time_100ns
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe peer process identity changed".to_owned(),
             ));
         }
-        let mut payload = vec![0_u8; length];
-        read_exact(self.handle.raw(), &mut payload)?;
-        LifecycleRequest::decode_payload(&payload)
-    }
-
-    /// Write one bounded acknowledgement payload.
-    pub fn write_request(&mut self, request: &LifecycleRequest) -> Result<(), PlatformError> {
-        if !self.connected {
-            return Err(PlatformError::Invalid(
-                "named pipe has no connected client".to_owned(),
+        if process_session(peer.process_id)? != peer.session_id
+            || normalize_path(&query_image_path(process.raw())?) != normalize_path(&peer.executable)
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "named-pipe peer session or executable changed".to_owned(),
             ));
-        }
-        let payload = request.encode_payload()?;
-        let length = u32::try_from(payload.len())
-            .map_err(|_| PlatformError::Invalid("lifecycle frame length overflow".to_owned()))?;
-        write_all(self.handle.raw(), &length.to_le_bytes())?;
-        write_all(self.handle.raw(), &payload)?;
-        let flushed = unsafe { FlushFileBuffers(self.handle.raw()) };
-        if flushed == 0 {
-            return Err(last_error("FlushFileBuffers"));
         }
         Ok(())
     }
 
-    /// Disconnect and make the one-instance endpoint available for the next
-    /// bounded connection.
-    pub fn disconnect(&mut self) -> Result<(), PlatformError> {
+    fn verify_replay(&self, frame: &LifecycleFrame) -> Result<(), PlatformError> {
+        if self.expected_epoch != Some(frame.epoch)
+            || self.expected_nonce.as_deref() != Some(frame.nonce.as_str())
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle frame belongs to a different nonce or epoch".to_owned(),
+            ));
+        }
+        if frame.sequence <= self.last_sequence {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle frame sequence was replayed or regressed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_authenticated(&self) -> Result<(), PlatformError> {
+        if !self.authenticated {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle peer must be authenticated before reading".to_owned(),
+            ));
+        }
+        if self.expected_epoch.is_none() || self.expected_nonce.is_none() {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle replay policy is not configured".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn reset_listener(&mut self) -> Result<(), PlatformError> {
         if self.connected {
-            let ok = unsafe { DisconnectNamedPipe(self.handle.raw()) };
-            if ok == 0 {
-                return Err(last_error("DisconnectNamedPipe"));
+            let result = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+            if result == 0 {
+                let code = unsafe { GetLastError() };
+                if code != ERROR_NOT_FOUND
+                    && code != ERROR_PIPE_NOT_CONNECTED
+                    && code != ERROR_BROKEN_PIPE
+                    && code != ERROR_NO_DATA
+                {
+                    return Err(win32_error("DisconnectNamedPipe", code));
+                }
             }
         }
         self.connected = false;
         self.peer = None;
+        self.peer_process = None;
+        self.authenticated = false;
+        // Keep the monotonic sequence across reconnects for the same durable
+        // epoch.  Only an explicit new epoch/nonce policy resets it; otherwise
+        // a captured old frame could be replayed after DisconnectNamedPipe.
+        self.last_frame = None;
         Ok(())
     }
 }
@@ -1101,13 +1460,30 @@ pub struct ServiceInstallPlan {
 }
 
 impl ServiceInstallPlan {
-    /// Install an automatic own-process service and bounded restart actions.
+    /// Refuse the legacy installer rather than silently registering as
+    /// `LocalSystem`.  A service account is an authorization decision and
+    /// must be supplied explicitly by the deployment owner.
     pub fn install(&self) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported(
+            "Windows service installation requires an explicit least-privilege service account"
+                .to_owned(),
+        ))
+    }
+
+    /// Install an automatic own-process service under an explicit account.
+    /// `account_password` is passed only to SCM and is never included in an
+    /// error or diagnostic value.  Virtual service accounts may use `None`.
+    pub fn install_as(
+        &self,
+        account_name: &str,
+        account_password: Option<&str>,
+    ) -> Result<(), PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
                 "service name is not the fixed ascension-watchdog name".to_owned(),
             ));
         }
+        validate_service_account(account_name)?;
         let executable = canonicalize_executable(&self.executable)?;
         let manager = ServiceManager::local_computer(
             None::<&str>,
@@ -1123,46 +1499,87 @@ impl ServiceInstallPlan {
             executable_path: executable,
             launch_arguments: vec!["daemon".into()],
             dependencies: Vec::new(),
-            account_name: None,
-            account_password: None,
+            account_name: Some(account_name.into()),
+            account_password: account_password.map(Into::into),
         };
         let service_access = ServiceAccess::QUERY_STATUS
             | ServiceAccess::START
             | ServiceAccess::STOP
-            | ServiceAccess::CHANGE_CONFIG;
-        let service = match manager.create_service(&info, service_access) {
-            Ok(service) => service,
+            | ServiceAccess::CHANGE_CONFIG
+            | ServiceAccess::DELETE;
+        let (service, created) = match manager.create_service(&info, service_access) {
+            Ok(service) => (service, true),
             Err(error) if service_exists(&error) => manager
                 .open_service(&self.service_name, service_access)
+                .map(|service| (service, false))
                 .map_err(service_error("OpenService(existing)"))?,
             Err(error) => return Err(service_error("CreateService")(error)),
         };
-        service
-            .change_config(&info)
-            .map_err(service_error("ChangeServiceConfig"))?;
-        service
-            .update_failure_actions(ServiceFailureActions {
-                reset_period: ServiceFailureResetPeriod::After(Duration::from_hours(24)),
-                reboot_msg: None,
-                command: None,
-                actions: Some(vec![
-                    ServiceAction {
-                        action_type: ServiceActionType::Restart,
-                        delay: Duration::from_secs(5),
-                    },
-                    ServiceAction {
-                        action_type: ServiceActionType::Restart,
-                        delay: Duration::from_secs(30),
-                    },
-                    ServiceAction {
-                        action_type: ServiceActionType::None,
-                        delay: Duration::default(),
-                    },
-                ]),
-            })
-            .map_err(service_error("ChangeServiceConfig2(failure actions)"))?;
+        let result = (|| {
+            service
+                .change_config(&info)
+                .map_err(service_error("ChangeServiceConfig"))?;
+            service
+                .update_failure_actions(ServiceFailureActions {
+                    reset_period: ServiceFailureResetPeriod::After(Duration::from_hours(24)),
+                    reboot_msg: None,
+                    command: None,
+                    actions: Some(vec![
+                        ServiceAction {
+                            action_type: ServiceActionType::Restart,
+                            delay: Duration::from_secs(5),
+                        },
+                        ServiceAction {
+                            action_type: ServiceActionType::Restart,
+                            delay: Duration::from_secs(30),
+                        },
+                        ServiceAction {
+                            action_type: ServiceActionType::None,
+                            delay: Duration::default(),
+                        },
+                    ]),
+                })
+                .map_err(service_error("ChangeServiceConfig2(failure actions)"))?;
+            service
+                .set_failure_actions_on_non_crash_failures(true)
+                .map_err(service_error("ChangeServiceConfig2(failure actions flag)"))?;
+            Ok::<(), PlatformError>(())
+        })();
+        if let Err(error) = result {
+            if created {
+                service
+                    .delete()
+                    .map_err(service_error("DeleteService(rollback)"))?;
+            }
+            return Err(error);
+        }
         Ok(())
     }
+}
+
+fn validate_service_account(account_name: &str) -> Result<(), PlatformError> {
+    let normalized = account_name.to_ascii_lowercase();
+    if account_name.is_empty()
+        || account_name.len() > 256
+        || account_name.contains('\0')
+        || account_name.chars().any(char::is_control)
+        || matches!(
+            normalized.as_str(),
+            "localsystem"
+                | ".\\localsystem"
+                | "localservice"
+                | ".\\localservice"
+                | "networkservice"
+                | ".\\networkservice"
+                | "nt authority\\system"
+                | "nt authority\\localsystem"
+        )
+    {
+        return Err(PlatformError::Invalid(
+            "Windows service account must be an explicit least-privilege identity".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Minimal trusted health checker.  It can request SCM stop/recovery only
@@ -1290,7 +1707,14 @@ windows_service::define_windows_service!(ffi_service_main, dispatch_service_main
 
 fn dispatch_service_main(arguments: Vec<std::ffi::OsString>) {
     if let (Some(reconcile), Some(readiness)) = (SERVICE_RECONCILE.get(), SERVICE_READINESS.get()) {
-        let _ = service_entry(arguments, reconcile, readiness);
+        if let Err(error) = service_entry(arguments, reconcile, readiness) {
+            // The SCM callback cannot return a Rust error.  Do not silently
+            // discard startup/status failures: this is the last diagnostic
+            // path before SCM applies configured failure actions.
+            eprintln!("ascension-watchdog service entry failed: {error}");
+        }
+    } else {
+        eprintln!("ascension-watchdog service entry callbacks were not initialized");
     }
 }
 
@@ -1301,10 +1725,30 @@ fn service_entry(
 ) -> Result<(), PlatformError> {
     let stopping = Arc::new(Mutex::new(false));
     let stop_flag = Arc::clone(&stopping);
+    let status_slot = Arc::new(Mutex::new(None::<ServiceStatusHandle>));
+    let handler_status_slot = Arc::clone(&status_slot);
+    let stop_checkpoint = Arc::new(AtomicU32::new(1));
+    let handler_checkpoint = Arc::clone(&stop_checkpoint);
     let handler = move |control| match control {
         ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
             if let Ok(mut value) = stop_flag.lock() {
                 *value = true;
+            }
+            let checkpoint = handler_checkpoint.fetch_add(1, Ordering::AcqRel);
+            if let Ok(slot) = handler_status_slot.lock()
+                && let Some(status) = *slot
+            {
+                if let Err(error) = status.set_service_status(ServiceStatus {
+                    service_type: ServiceType::OWN_PROCESS,
+                    current_state: ServiceState::StopPending,
+                    controls_accepted: windows_service::service::ServiceControlAccept::empty(),
+                    exit_code: windows_service::service::ServiceExitCode::Win32(ERROR_SUCCESS),
+                    checkpoint,
+                    wait_hint: SERVICE_STOP_TIMEOUT,
+                    process_id: None,
+                }) {
+                    eprintln!("ascension-watchdog failed to publish STOP_PENDING: {error}");
+                }
             }
             ServiceControlHandlerResult::NoError
         }
@@ -1313,6 +1757,13 @@ fn service_entry(
     };
     let status = service_control_handler::register(SERVICE_NAME, handler)
         .map_err(service_error("RegisterServiceCtrlHandler"))?;
+    if let Ok(mut slot) = status_slot.lock() {
+        *slot = Some(status);
+    } else {
+        return Err(PlatformError::Unavailable(
+            "service status slot was poisoned before startup".to_owned(),
+        ));
+    }
     status
         .set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
@@ -1326,15 +1777,19 @@ fn service_entry(
         })
         .map_err(service_error("SetServiceStatus(StartPending)"))?;
     if let Err(error) = readiness() {
-        let _ = status.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Stopped,
-            controls_accepted: windows_service::service::ServiceControlAccept::empty(),
-            exit_code: windows_service::service::ServiceExitCode::ServiceSpecific(1),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        });
+        status
+            .set_service_status(ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Stopped,
+                controls_accepted: windows_service::service::ServiceControlAccept::empty(),
+                exit_code: windows_service::service::ServiceExitCode::ServiceSpecific(1),
+                checkpoint: 0,
+                wait_hint: Duration::default(),
+                process_id: None,
+            })
+            .map_err(service_error(
+                "SetServiceStatus(Stopped after readiness failure)",
+            ))?;
         return Err(error);
     }
     status
@@ -1442,7 +1897,68 @@ impl Drop for SecurityDescriptor {
     }
 }
 
-fn read_exact(handle: HANDLE, buffer: &mut [u8]) -> Result<(), PlatformError> {
+fn validate_lifecycle_timeout(timeout: Duration) -> Result<(), PlatformError> {
+    if timeout.is_zero() || timeout > Duration::from_secs(30) {
+        return Err(PlatformError::Invalid(
+            "lifecycle pipe timeout must be between 1ms and 30s".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_replay_policy(epoch: u64, nonce: &str) -> Result<(), PlatformError> {
+    let request = LifecycleRequest::Heartbeat {
+        instance_id: "policy".to_owned(),
+        incarnation: "policy".to_owned(),
+        sequence: 1,
+    };
+    LifecycleFrame::new(nonce, epoch, 1, request).validate()
+}
+
+fn read_length_prefixed(handle: HANDLE, timeout: Duration) -> Result<Vec<u8>, PlatformError> {
+    validate_lifecycle_timeout(timeout)?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut length_bytes = [0_u8; 4];
+    read_exact_poll(handle, &mut length_bytes, deadline)?;
+    let length = usize::try_from(u32::from_le_bytes(length_bytes))
+        .map_err(|_| PlatformError::Invalid("lifecycle frame length overflow".to_owned()))?;
+    if length == 0 || length > MAX_PIPE_FRAME {
+        return Err(PlatformError::Invalid(
+            "lifecycle frame exceeds bounds".to_owned(),
+        ));
+    }
+    let mut payload = vec![0_u8; length];
+    read_exact_poll(handle, &mut payload, deadline)?;
+    Ok(payload)
+}
+
+fn write_length_prefixed(
+    handle: HANDLE,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<(), PlatformError> {
+    validate_lifecycle_timeout(timeout)?;
+    if payload.is_empty() || payload.len() > MAX_PIPE_FRAME {
+        return Err(PlatformError::Invalid(
+            "lifecycle frame exceeds bounds".to_owned(),
+        ));
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let length = u32::try_from(payload.len())
+        .map_err(|_| PlatformError::Invalid("lifecycle frame length overflow".to_owned()))?;
+    write_all_poll(handle, &length.to_le_bytes(), deadline)?;
+    write_all_poll(handle, payload, deadline)
+}
+
+fn read_exact_poll(
+    handle: HANDLE,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
         let remaining = &mut buffer[offset..];
@@ -1452,29 +1968,53 @@ fn read_exact(handle: HANDLE, buffer: &mut [u8]) -> Result<(), PlatformError> {
         let ok = unsafe {
             ReadFile(
                 handle,
-                remaining.as_mut_ptr(),
+                remaining.as_mut_ptr().cast(),
                 count,
                 &raw mut read,
                 null_mut(),
             )
         };
-        if ok == 0 {
-            return Err(last_error("ReadFile"));
+        let code = unsafe { GetLastError() };
+        if read > count {
+            return Err(PlatformError::Invalid(
+                "lifecycle read count exceeds requested buffer".to_owned(),
+            ));
         }
-        if read == 0 {
+        if ok != 0 || (code == ERROR_MORE_DATA && read != 0) {
+            if read == 0 {
+                return Err(PlatformError::Unavailable(
+                    "lifecycle pipe returned no read progress".to_owned(),
+                ));
+            }
+            offset = offset.saturating_add(
+                usize::try_from(read)
+                    .map_err(|_| PlatformError::Invalid("pipe read count overflow".to_owned()))?,
+            );
+            continue;
+        }
+        if code == ERROR_NO_DATA || code == ERROR_PIPE_LISTENING {
+            if Instant::now() >= deadline {
+                let _ = unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, null()) };
+                return Err(PlatformError::Timeout(
+                    "lifecycle pipe read deadline elapsed".to_owned(),
+                ));
+            }
+            thread::sleep(
+                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+            );
+            continue;
+        }
+        if code == ERROR_BROKEN_PIPE || code == ERROR_PIPE_NOT_CONNECTED {
             return Err(PlatformError::Unavailable(
                 "named pipe closed before frame completion".to_owned(),
             ));
         }
-        offset = offset.saturating_add(
-            usize::try_from(read)
-                .map_err(|_| PlatformError::Invalid("pipe read count overflow".to_owned()))?,
-        );
+        return Err(win32_error("ReadFile(lifecycle pipe)", code));
     }
     Ok(())
 }
 
-fn write_all(handle: HANDLE, buffer: &[u8]) -> Result<(), PlatformError> {
+fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
         let remaining = &buffer[offset..];
@@ -1490,18 +2030,42 @@ fn write_all(handle: HANDLE, buffer: &[u8]) -> Result<(), PlatformError> {
                 null_mut(),
             )
         };
-        if ok == 0 {
-            return Err(last_error("WriteFile"));
-        }
-        if written == 0 {
-            return Err(PlatformError::Unavailable(
-                "named pipe made no write progress".to_owned(),
+        if written > count {
+            return Err(PlatformError::Invalid(
+                "lifecycle write count exceeds requested buffer".to_owned(),
             ));
         }
-        offset = offset.saturating_add(
-            usize::try_from(written)
-                .map_err(|_| PlatformError::Invalid("pipe write count overflow".to_owned()))?,
-        );
+        if ok != 0 {
+            if written == 0 {
+                return Err(PlatformError::Unavailable(
+                    "named pipe made no write progress".to_owned(),
+                ));
+            }
+            offset = offset.saturating_add(
+                usize::try_from(written)
+                    .map_err(|_| PlatformError::Invalid("pipe write count overflow".to_owned()))?,
+            );
+            continue;
+        }
+        let code = unsafe { GetLastError() };
+        if code == ERROR_NO_DATA || code == ERROR_PIPE_LISTENING {
+            if Instant::now() >= deadline {
+                let _ = unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, null()) };
+                return Err(PlatformError::Timeout(
+                    "lifecycle pipe write deadline elapsed".to_owned(),
+                ));
+            }
+            thread::sleep(
+                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+            );
+            continue;
+        }
+        if code == ERROR_BROKEN_PIPE || code == ERROR_PIPE_NOT_CONNECTED {
+            return Err(PlatformError::Unavailable(
+                "named pipe closed during frame write".to_owned(),
+            ));
+        }
+        return Err(win32_error("WriteFile(lifecycle pipe)", code));
     }
     Ok(())
 }
@@ -1571,6 +2135,20 @@ fn open_immutable_path(
         )
     };
     OwnedHandle::new(raw, operation)
+}
+
+fn file_identity(file: &OwnedHandle) -> Result<FileIdentity, PlatformError> {
+    let mut information =
+        windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.raw(), &raw mut information) } == 0 {
+        return Err(last_error("GetFileInformationByHandle(executable)"));
+    }
+    Ok(FileIdentity {
+        volume_serial: information.dwVolumeSerialNumber,
+        file_index: (u64::from(information.nFileIndexHigh) << 32)
+            | u64::from(information.nFileIndexLow),
+        size: (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow),
+    })
 }
 
 fn hash_immutable_file(file: &OwnedHandle) -> Result<String, PlatformError> {
@@ -1968,6 +2546,13 @@ fn last_error(operation: &str) -> PlatformError {
     PlatformError::Win32 {
         operation: operation.to_owned(),
         code: unsafe { GetLastError() },
+    }
+}
+
+fn win32_error(operation: &str, code: u32) -> PlatformError {
+    PlatformError::Win32 {
+        operation: operation.to_owned(),
+        code,
     }
 }
 

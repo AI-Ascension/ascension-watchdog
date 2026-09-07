@@ -33,8 +33,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_NONE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_NONE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     GetFileInformationByHandle, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile,
     WriteFile,
 };
@@ -42,8 +42,7 @@ use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
     GetNamedPipeClientSessionId, GetNamedPipeServerProcessId, PIPE_NOWAIT, PIPE_READMODE_MESSAGE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES,
-    SetNamedPipeHandleState,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, SetNamedPipeHandleState,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetProcessId, GetProcessTimes, OpenProcess,
@@ -97,9 +96,10 @@ impl std::fmt::Debug for AdminPipeServer {
 }
 
 impl AdminPipeServer {
-    /// Create one fixed worker instance.  Multiple workers may create the same
-    /// name; the watchdog controls the number of instances and never grows it
-    /// from client input.
+    /// Create the sole fixed worker instance.  `FILE_FLAG_FIRST_PIPE_INSTANCE`
+    /// and a single kernel instance make a same-SID competing server fail at
+    /// bind time; Windows integration must use one accept worker and perform
+    /// bounded client work behind it.
     pub fn create(
         name: impl Into<String>,
         allowed_peer_sid: Option<&str>,
@@ -129,9 +129,9 @@ impl AdminPipeServer {
         let raw = unsafe {
             CreateNamedPipeW(
                 wide_name.as_ptr(),
-                PIPE_ACCESS_DUPLEX,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
                 LOCAL_ONLY_PIPE_MODE,
-                PIPE_UNLIMITED_INSTANCES,
+                1,
                 u32::try_from(MAX_ADMIN_PIPE_FRAME)
                     .map_err(|_| PlatformError::Invalid("pipe frame size overflow".to_owned()))?,
                 u32::try_from(MAX_ADMIN_PIPE_FRAME)
@@ -365,15 +365,20 @@ impl std::fmt::Debug for AdminPipeClient {
 }
 
 impl AdminPipeClient {
-    /// Connect to a local named pipe and verify the exact server process.  If
-    /// `expected_server_executable` is supplied, its canonical path must match
-    /// the path observed through the held server process handle.
+    /// Connect to a local named pipe and verify the exact server process.  The
+    /// expected executable is mandatory; its canonical path must match the
+    /// path observed through the held server process handle.
     pub fn connect(
         name: impl Into<String>,
         expected_server_executable: Option<&Path>,
         timeout: Duration,
     ) -> Result<Self, PlatformError> {
         validate_timeout(timeout)?;
+        let expected_server_executable = expected_server_executable.ok_or_else(|| {
+            PlatformError::Invalid(
+                "admin pipe clients must configure the expected server executable".to_owned(),
+            )
+        })?;
         let name = name.into();
         validate_pipe_name(&name)?;
         let wide_name = wide(&name)?;
@@ -418,13 +423,11 @@ impl AdminPipeClient {
         };
         let server_process = OwnedHandle::new(server_process, "OpenProcess(admin pipe server)")?;
         let server_executable = query_image_path(server_process.raw())?;
-        if let Some(expected) = expected_server_executable {
-            let expected = canonicalize_executable(expected)?;
-            if normalize_path(&expected) != normalize_path(&server_executable) {
-                return Err(PlatformError::IdentityMismatch(
-                    "admin pipe server executable is not approved".to_owned(),
-                ));
-            }
+        let expected = canonicalize_executable(expected_server_executable)?;
+        if normalize_path(&expected) != normalize_path(&server_executable) {
+            return Err(PlatformError::IdentityMismatch(
+                "admin pipe server executable is not approved".to_owned(),
+            ));
         }
         let server_creation_time = process_creation_time(server_process.raw())?;
         Ok(Self {
@@ -581,6 +584,7 @@ pub fn validate_protected_credential_file(path: &Path) -> Result<(), PlatformErr
     result
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_credential_acl(
     owner: *mut c_void,
     dacl: *mut windows_sys::Win32::Security::ACL,
@@ -632,21 +636,75 @@ fn validate_credential_acl(
             "credential DACL has no owner allow entry".to_owned(),
         ));
     }
+    let dacl_address = dacl.cast::<u8>() as usize;
+    let dacl_capacity = usize::from(unsafe { (*dacl).AclSize });
+    let acl_used = usize::try_from(info.AclBytesInUse)
+        .map_err(|_| PlatformError::Invalid("ACL byte count overflow".to_owned()))?;
+    if dacl_capacity < size_of::<windows_sys::Win32::Security::ACL>()
+        || acl_used < size_of::<windows_sys::Win32::Security::ACL>()
+        || acl_used > dacl_capacity
+    {
+        return Err(PlatformError::Invalid(
+            "credential DACL byte bounds are invalid".to_owned(),
+        ));
+    }
+    let dacl_end = dacl_address
+        .checked_add(acl_used)
+        .ok_or_else(|| PlatformError::Invalid("ACL address range overflow".to_owned()))?;
     for index in 0..info.AceCount {
         let mut raw_ace = null_mut();
         if unsafe { GetAce(dacl, index, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
             return Err(last_error("GetAce"));
         }
-        let header = unsafe { &*raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>() };
-        if u32::from(header.AceFlags) & windows_sys::Win32::Security::INHERITED_ACE != 0
+        // GetAce returns an untrusted descriptor-provided pointer.  Read the
+        // fixed header without assuming alignment, then prove the complete
+        // ACE and SID fit inside the ACL before any typed cast or dereference.
+        let entry_address = raw_ace as usize;
+        let header_end = entry_address
+            .checked_add(size_of::<windows_sys::Win32::Security::ACE_HEADER>())
+            .ok_or_else(|| PlatformError::Invalid("ACE header address overflow".to_owned()))?;
+        if entry_address < dacl_address || header_end > dacl_end {
+            return Err(PlatformError::Invalid(
+                "credential ACE header lies outside its ACL".to_owned(),
+            ));
+        }
+        let header = unsafe {
+            std::ptr::read_unaligned(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>())
+        };
+        let entry_size = usize::from(header.AceSize);
+        let entry_end = entry_address
+            .checked_add(entry_size)
+            .ok_or_else(|| PlatformError::Invalid("ACE address range overflow".to_owned()))?;
+        if entry_address < dacl_address
+            || entry_end > dacl_end
+            || entry_size < size_of::<windows_sys::Win32::Security::ACE_HEADER>()
+            || u32::from(header.AceFlags) & windows_sys::Win32::Security::INHERITED_ACE != 0
             || header.AceType != 0
         {
             return Err(PlatformError::IdentityMismatch(
                 "credential DACL contains inherited or non-allow ACE".to_owned(),
             ));
         }
-        let ace = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
-        let sid = (&raw const ace.SidStart).cast::<c_void>().cast_mut();
+        let sid_offset = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+        let sid_minimum_end = sid_offset
+            .checked_add(size_of::<u32>())
+            .ok_or_else(|| PlatformError::Invalid("ACE SID offset overflow".to_owned()))?;
+        if entry_size < sid_minimum_end {
+            return Err(PlatformError::Invalid(
+                "credential allow ACE is truncated before its SID".to_owned(),
+            ));
+        }
+        let sid = unsafe { raw_ace.cast::<u8>().add(sid_offset).cast::<c_void>() };
+        let sid_length = usize::try_from(unsafe { GetLengthSid(sid) })
+            .map_err(|_| PlatformError::Invalid("credential SID length overflow".to_owned()))?;
+        if sid_length == 0
+            || sid_length > entry_size.saturating_sub(sid_offset)
+            || sid_length > dacl_end.saturating_sub(sid.cast::<u8>() as usize)
+        {
+            return Err(PlatformError::Invalid(
+                "credential allow ACE SID exceeds its bounded ACE".to_owned(),
+            ));
+        }
         if unsafe { IsValidSid(sid) } == 0 || sid_string(sid)? != expected_sid {
             return Err(PlatformError::IdentityMismatch(
                 "credential DACL grants a different SID".to_owned(),

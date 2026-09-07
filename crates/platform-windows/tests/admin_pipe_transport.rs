@@ -90,7 +90,9 @@ fn native_pipe_partial_frame_times_out_and_disconnect_is_recoverable() -> Result
     });
     // Keeping this handle alive while the server polls proves that an
     // incomplete frame cannot hold the native worker indefinitely.
-    let client = AdminPipeClient::connect(name, None, Duration::from_secs(5))?;
+    let server_image = std::env::current_exe()
+        .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?;
+    let client = AdminPipeClient::connect(name, Some(&server_image), Duration::from_secs(5))?;
     join_result(server_thread)?;
     drop(client);
     Ok(())
@@ -105,7 +107,7 @@ fn native_pipe_rejects_invalid_namespace_and_oversized_frames() {
     assert!(matches!(
         AdminPipeClient::connect(
             r"\\.\pipe\ascension-watchdog-admin-no-such-pipe",
-            None,
+            Some(std::path::Path::new(r"C:\missing\watchdog.exe")),
             Duration::from_millis(1),
         ),
         Err(PlatformError::Timeout(_) | PlatformError::Win32 { .. })
