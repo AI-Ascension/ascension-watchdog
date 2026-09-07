@@ -29,6 +29,46 @@ struct Fixture {
 }
 
 #[test]
+fn real_service_read_credential_inspects_jobs_without_private_payloads() {
+    use ascension_watchdog::service::ServiceLoop;
+    use ascension_watchdog::{Supervisor, WatchdogConfig};
+    let fixture = Fixture::new();
+    let config = WatchdogConfig {
+        database: fixture.temp.path().join("state.sqlite"),
+        ..WatchdogConfig::default()
+    };
+    let mut supervisor = Supervisor::initialize(config).unwrap();
+    let job = supervisor
+        .submit_job("episode", &serde_json::json!({"private": "do-not-export"}))
+        .unwrap();
+    let mut service = ServiceLoop::new(supervisor, Duration::from_millis(10)).unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let _server = fixture.server(queue.clone(), service.health());
+    let client = fixture.client(Capability::Read, &fixture.read_token);
+    let request = thread::spawn(move || {
+        client.execute(
+            "inspect-jobs",
+            AdminCommand::Jobs(ascension_watchdog::admin::JobsRequest {
+                filter: ascension_watchdog::admin::JobFilter::Queued,
+                limit: 1,
+            }),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while queue.depth() == 0 && !request.is_finished() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    let response = request.join().unwrap().unwrap();
+    assert_eq!(response.status, ReplyStatus::Ok);
+    let encoded = serde_json::to_string(&response).unwrap();
+    assert!(encoded.contains(&job.id));
+    assert!(!encoded.contains("do-not-export"));
+    assert!(!encoded.contains("payload"));
+}
+
+#[test]
 fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
     use ascension_watchdog::service::ServiceLoop;
     use ascension_watchdog::{DesiredMode, Supervisor, WatchdogConfig};
