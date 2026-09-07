@@ -76,6 +76,32 @@ fn admin_quarantine_preserves_unknown_attempt_and_is_replayable_after_restart() 
         "unknown"
     );
     assert_eq!(store.operator_command_count().expect("ledger count"), 1);
+    assert_eq!(
+        store
+            .get_job(&job.id)
+            .expect("job")
+            .expect("row")
+            .worker_id
+            .as_deref(),
+        Some("worker-a")
+    );
+    let next_job = store
+        .submit_job_at("synthetic", &json!({"next": true}), 13)
+        .expect("submit next job");
+    assert!(
+        store
+            .claim_next_job("worker-a", 14)
+            .expect("same worker is backpressured")
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .get_job(&next_job.id)
+            .expect("next job")
+            .expect("row")
+            .status,
+        ascension_watchdog::storage::JobStatus::Queued
+    );
 
     drop(store);
     let mut reopened =
@@ -100,6 +126,17 @@ fn admin_quarantine_preserves_unknown_attempt_and_is_replayable_after_restart() 
         reopened.get_job(&job.id).expect("job").expect("row").status,
         ascension_watchdog::storage::JobStatus::Quarantined
     );
+    assert!(
+        reopened
+            .claim_next_job("worker-a", 100)
+            .expect("same worker remains backpressured after restart")
+            .is_none()
+    );
+    let other_worker_claim = reopened
+        .claim_next_job("worker-b", 100)
+        .expect("different worker claim")
+        .expect("queued work remains available to an unreserved worker");
+    assert_eq!(other_worker_claim.job.id, next_job.id);
 }
 
 #[test]
@@ -136,6 +173,73 @@ fn admin_quarantine_refuses_completed_attempt_without_a_receipt() {
     assert_eq!(
         store.get_job(&job.id).expect("job").expect("row").status,
         ascension_watchdog::storage::JobStatus::Completed
+    );
+}
+
+#[test]
+fn admin_quarantine_rejects_a_stale_failed_attempt_when_a_newer_attempt_is_active() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (owner, mut store, _config) = owner_store(&temp);
+    let job = store
+        .submit_job_at("synthetic", &json!({}), 10)
+        .expect("submit");
+    let first = store
+        .claim_next_job("worker-live", 11)
+        .expect("first claim")
+        .expect("first claim exists");
+    assert_eq!(
+        store
+            .fail_job_at(&job.id, &first.attempt_id, "transient", Some(20), 12)
+            .expect("failed attempt is requeued"),
+        ascension_watchdog::storage::JobStatus::Queued
+    );
+    let second = store
+        .claim_next_job("worker-live", 20)
+        .expect("second claim")
+        .expect("newer claim exists");
+    assert_ne!(first.attempt_id, second.attempt_id);
+    let context = context(
+        "stale-attempt-quarantine",
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        'd',
+    );
+    let error = store
+        .admit_operator_quarantine(
+            &owner,
+            &context,
+            &first.attempt_id,
+            "stale attempt must not close newer work",
+            &json!({"accepted": true}),
+            21,
+        )
+        .expect_err("stale attempt must be rejected");
+    assert!(matches!(error, WatchdogError::Conflict(_)));
+    assert_eq!(store.operator_command_count().expect("ledger count"), 0);
+    assert_eq!(
+        store
+            .attempt_summary(&first.attempt_id)
+            .expect("first attempt")
+            .expect("first row")
+            .status,
+        "failed"
+    );
+    assert_eq!(
+        store
+            .attempt_summary(&second.attempt_id)
+            .expect("second attempt")
+            .expect("second row")
+            .status,
+        "running"
+    );
+    assert_eq!(
+        store.get_job(&job.id).expect("job").expect("row").status,
+        ascension_watchdog::storage::JobStatus::Running
+    );
+    assert!(
+        store
+            .claim_next_job("worker-live", 22)
+            .expect("active worker reservation")
+            .is_none()
     );
 }
 

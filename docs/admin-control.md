@@ -120,10 +120,14 @@ credential is rejected before queue admission.
 `quarantine` takes `{ "attempt_id": "...", "reason": "..." }`. The owner
 thread refuses a completed attempt or completed job, records a running
 attempt's outcome as unknown, moves its job to the durable quarantined state,
-and commits that transition with the operator receipt and audit rows. A
-replayed idempotency key returns the retained response without reapplying the
-transition. This is a watchdog disposition only; it does not cancel, settle,
-or retry a gateway, host, provider, or gameplay operation.
+retains the original worker ownership, and commits that transition with the
+operator receipt and audit rows. A worker with a persisted running or unknown
+attempt remains backpressured from claiming another job until an explicit
+reconciliation/completion transition releases the reservation; this survives
+store restart. A stale attempt id cannot quarantine a newer attempt in the same
+job. A replayed idempotency key returns the retained response without
+reapplying the transition. This is a watchdog disposition only; it does not
+cancel, settle, or retry a gateway, host, provider, or gameplay operation.
 
 Duplicate JSON member names are rejected recursively before typed decoding.
 Unknown fields, unknown command kinds, invalid UUIDs, unsafe identifiers,

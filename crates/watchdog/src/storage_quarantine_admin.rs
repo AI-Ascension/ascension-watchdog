@@ -95,6 +95,16 @@ impl Store {
                 "attempt job is already quarantined".to_string(),
             ));
         }
+        let latest_attempt_id: String = tx.query_row(
+            "SELECT id FROM attempts WHERE job_id=? ORDER BY sequence DESC, id DESC LIMIT 1",
+            params![job_id],
+            |row| row.get(0),
+        )?;
+        if latest_attempt_id != attempt_id {
+            return Err(WatchdogError::Conflict(
+                "attempt is not the latest durable attempt for its job".to_string(),
+            ));
+        }
         if !matches!(job_status.as_str(), "running" | "failed") {
             return Err(WatchdogError::Conflict(format!(
                 "attempt job is {job_status}, not eligible for quarantine"
@@ -115,7 +125,7 @@ impl Store {
             }
         }
         let changed = tx.execute(
-            "UPDATE jobs SET status='quarantined', next_retry_at_ms=NULL, last_error=?, worker_id=NULL WHERE id=? AND status IN ('running','failed')",
+            "UPDATE jobs SET status='quarantined', next_retry_at_ms=NULL, last_error=? WHERE id=? AND status IN ('running','failed')",
             params![reason, job_id],
         )?;
         if changed != 1 {
