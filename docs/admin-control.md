@@ -22,6 +22,11 @@ one SQLite transaction. Reusing the exact key and payload returns the original
 job ID even after completion or while stopped; changing the kind or payload is
 a conflict. Submission never changes desired mode, and a stopped deployment
 cannot claim the queued job until an operator separately admits running mode.
+On Linux, payload files are opened through owner-anchored directory handles and
+read only from the validated regular-file handle; ancestor and leaf symlinks are
+rejected. Other Unix targets and Windows fail closed for `--payload-file` until
+an equivalent protected-handle and ACL reader is available; use inline `--payload`
+there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
