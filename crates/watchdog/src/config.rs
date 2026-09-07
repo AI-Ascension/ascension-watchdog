@@ -4,8 +4,10 @@ use crate::error::{Result, WatchdogError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
+
+#[path = "config_file.rs"]
+mod config_file;
 
 const MAX_COMPONENTS: usize = 16;
 const MAX_ARGUMENTS: usize = 64;
@@ -236,7 +238,7 @@ pub struct WatchdogConfig {
     /// Explicit local authenticated control endpoint and protected credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminConfig>,
-    /// Canonical source path captured when this configuration was loaded from
+    /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
     /// its digest; the Linux launch helper uses it only as a protected,
     /// separately supplied bootstrap reference for fresh durable authorization.
@@ -275,22 +277,14 @@ impl Default for WatchdogConfig {
 impl WatchdogConfig {
     /// Read and validate a JSON configuration without touching the database.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)?
-            .take(65_537)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > 65_536 {
-            return Err(WatchdogError::InvalidInput(
-                "configuration exceeds 65536-byte limit".to_owned(),
-            ));
-        }
+        let (bytes, source_path) = config_file::read(path.as_ref())?;
         let mut config: Self = serde_json::from_slice(&bytes)?;
         // Keep the helper bootstrap independent from a caller-controlled
-        // relative path and reject a missing source before a daemon can start.
+        // relative path and reject missing, indirect, or non-regular sources
+        // before a daemon can start.
         // The Linux helper performs a second owner/readability check immediately
         // before it opens this path.
-        config.source_path = Some(std::fs::canonicalize(path)?);
+        config.source_path = Some(source_path);
         config.validate()?;
         Ok(config)
     }
