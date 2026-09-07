@@ -13,19 +13,25 @@
 //! group or cgroup name.  Those are deliberately unrepresentable at the IPC
 //! boundary.
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::io::{self, ErrorKind, Read, Write};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::net::sockopt::socket_peercred;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{Gid, fchown};
+use rustix::io::Errno;
+use rustix::net::sockopt::{socket_error, socket_peercred};
+use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType, connect, socket_with};
+use rustix::process::{Pid, PidfdFlags, pidfd_open};
 
 const MAX_FRAME_BYTES: usize = 16 * 1024;
 const MAX_IDENTITY_BYTES: usize = 128;
@@ -39,6 +45,19 @@ const MAX_TASKS: u64 = 4096;
 const MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_TIMEOUT: Duration = Duration::from_mins(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MAX_IO_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RECEIPTS: usize = 128;
+const MAX_ACTIVE_PROCESSES: usize = 64;
+const MAX_LEDGER_BYTES: usize = 1024 * 1024;
+const MAX_LEDGER_RECORDS: usize = MAX_RECEIPTS;
+const BROKER_UNIT_NAME: &str = "ascension-watchdog-broker.service";
+
+fn remaining(deadline: Instant) -> BrokerResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| BrokerError::Unavailable("broker operation deadline expired".to_owned()))
+}
 
 /// Errors returned by the broker boundary.  Error text intentionally does not
 /// echo request-controlled paths or arguments.
@@ -157,7 +176,8 @@ pub struct LaunchPolicy {
 }
 
 /// Policy object used by the broker after loading and validating its protected
-/// source. Component target UIDs/GIDs must be pairwise distinct.
+/// source. Component target UIDs/GIDs must each be distinct from the peer and
+/// from every other component; this is checked independently for each ID.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrokerPolicy {
     peer: PeerPolicy,
@@ -175,13 +195,20 @@ impl BrokerPolicy {
             ));
         }
         validate_peer(&peer)?;
-        let mut target_pairs = BTreeMap::new();
-        for (component, policy) in &components {
+        let mut target_uid_set = BTreeSet::from([peer.uid]);
+        let mut target_gid_set = BTreeSet::from([peer.gid]);
+        for policy in components.values() {
             validate_launch_policy(policy)?;
-            let pair = (policy.target_uid, policy.target_gid);
-            if target_pairs.insert(pair, *component).is_some() {
+            if !target_uid_set.insert(policy.target_uid) {
                 return Err(BrokerError::Invalid(
-                    "component target UID/GID pairs must be distinct".to_owned(),
+                    "component target UIDs must be distinct from the peer and each other"
+                        .to_owned(),
+                ));
+            }
+            if !target_gid_set.insert(policy.target_gid) {
+                return Err(BrokerError::Invalid(
+                    "component target GIDs must be distinct from the peer and each other"
+                        .to_owned(),
                 ));
             }
         }
@@ -198,15 +225,8 @@ impl BrokerPolicy {
     /// fallback or default component entries.
     pub fn from_file(path: &Path) -> BrokerResult<Self> {
         validate_protected_file(path, "broker policy")?;
-        let bytes = fs::read(path).map_err(io_error)?;
-        if bytes.len() > MAX_FRAME_BYTES {
-            return Err(BrokerError::Invalid(
-                "broker policy exceeds size bound".to_owned(),
-            ));
-        }
-        let document: PolicyDocument = serde_json::from_slice(&bytes).map_err(|error| {
-            BrokerError::Invalid(format!("broker policy JSON is invalid: {error}"))
-        })?;
+        let bytes = read_bounded_file(path, MAX_FRAME_BYTES, "broker policy")?;
+        let document: PolicyDocument = parse_json(&bytes, "broker policy JSON")?;
         let peer = PeerPolicy {
             uid: document.peer.uid,
             gid: document.peer.gid,
@@ -291,6 +311,158 @@ struct CgroupPolicyDocument {
     memory_max_bytes: u64,
 }
 
+/// serde_json normally keeps the last value for a duplicate object member.
+/// The broker's policy, request and receipt schemas are security boundaries,
+/// so duplicate members are rejected before typed deserialization.
+#[derive(Debug, Serialize)]
+enum StrictJsonValue {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<Self>),
+    Object(serde_json::Map<String, serde_json::Value>),
+}
+
+impl StrictJsonValue {
+    fn into_value(self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(value) => serde_json::Value::Bool(value),
+            Self::Number(value) => serde_json::Value::Number(value),
+            Self::String(value) => serde_json::Value::String(value),
+            Self::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(Self::into_value).collect())
+            }
+            Self::Object(values) => serde_json::Value::Object(values),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StrictJsonValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StrictVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for StrictVisitor {
+            type Value = StrictJsonValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value with unique object members")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::Null)
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::Bool(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::Number(serde_json::Number::from(value)))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::Number(serde_json::Number::from(value)))
+            }
+
+            fn visit_i128<E>(self, value: i128) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_i128(value)
+                    .map(StrictJsonValue::Number)
+                    .ok_or_else(|| E::custom("JSON integer is out of bounds"))
+            }
+
+            fn visit_u128<E>(self, value: u128) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_u128(value)
+                    .map(StrictJsonValue::Number)
+                    .ok_or_else(|| E::custom("JSON integer is out of bounds"))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(StrictJsonValue::Number)
+                    .ok_or_else(|| E::custom("JSON number is not finite"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictJsonValue::String(value))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element::<StrictJsonValue>()? {
+                    values.push(value);
+                }
+                Ok(StrictJsonValue::Array(values))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut keys = BTreeSet::new();
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !keys.insert(key.clone()) {
+                        return Err(serde::de::Error::custom(
+                            "duplicate JSON object member is not allowed",
+                        ));
+                    }
+                    let value = map.next_value::<StrictJsonValue>()?.into_value();
+                    values.insert(key, value);
+                }
+                Ok(StrictJsonValue::Object(values))
+            }
+        }
+
+        deserializer.deserialize_any(StrictVisitor)
+    }
+}
+
+fn parse_json<T: DeserializeOwned>(bytes: &[u8], label: &str) -> BrokerResult<T> {
+    let value: StrictJsonValue = serde_json::from_slice(bytes)
+        .map_err(|error| BrokerError::Invalid(format!("{label} is invalid: {error}")))?;
+    serde_json::from_value(value.into_value())
+        .map_err(|error| BrokerError::Invalid(format!("{label} schema is invalid: {error}")))
+}
+
 fn validate_peer(peer: &PeerPolicy) -> BrokerResult<()> {
     if peer.uid == 0 || peer.gid == 0 {
         return Err(BrokerError::Invalid(
@@ -350,10 +522,11 @@ fn validate_launch_policy(policy: &LaunchPolicy) -> BrokerResult<()> {
         ));
     }
     if !policy.capabilities.no_new_privileges
-        || policy.capabilities.ambient_set & !policy.capabilities.bounding_set != 0
+        || policy.capabilities.bounding_set != 0
+        || policy.capabilities.ambient_set != 0
     {
         return Err(BrokerError::Invalid(
-            "launch capability policy must retain no-new-privileges and bound ambient capabilities"
+            "launch capability policy must have zero capability sets and retain no-new-privileges"
                 .to_owned(),
         ));
     }
@@ -393,11 +566,7 @@ fn validate_sha256(value: &str) -> BrokerResult<()> {
 }
 
 fn validate_protected_file(path: &Path, label: &str) -> BrokerResult<()> {
-    if !path.is_absolute() {
-        return Err(BrokerError::Invalid(format!(
-            "{label} path must be absolute"
-        )));
-    }
+    validate_protected_ancestors(path, label)?;
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
     if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
         return Err(BrokerError::Invalid(format!(
@@ -408,11 +577,7 @@ fn validate_protected_file(path: &Path, label: &str) -> BrokerResult<()> {
 }
 
 fn validate_protected_directory(path: &Path, label: &str) -> BrokerResult<()> {
-    if !path.is_absolute() {
-        return Err(BrokerError::Invalid(format!(
-            "{label} path must be absolute"
-        )));
-    }
+    validate_protected_ancestors(path, label)?;
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
     if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
         return Err(BrokerError::Invalid(format!(
@@ -422,8 +587,58 @@ fn validate_protected_directory(path: &Path, label: &str) -> BrokerResult<()> {
     Ok(())
 }
 
+/// Validate every path component, not just the final object.  A root-owned
+/// final file is insufficient when a writable or symlinked ancestor can
+/// redirect the lookup.
+fn validate_protected_ancestors(path: &Path, label: &str) -> BrokerResult<()> {
+    if !path.is_absolute() {
+        return Err(BrokerError::Invalid(format!(
+            "{label} path must be absolute"
+        )));
+    }
+    let components = path.components().collect::<Vec<_>>();
+    if components.iter().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir
+                | std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(BrokerError::Invalid(format!(
+            "{label} path contains a non-canonical component"
+        )));
+    }
+    let mut current = PathBuf::from("/");
+    for component in components {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        current.push(part);
+        let metadata = fs::symlink_metadata(&current).map_err(io_error)?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            // The final object is validated separately, but all components
+            // before it must be directories with no non-root write access.
+            if current != path {
+                return Err(BrokerError::Invalid(format!(
+                    "{label} path has an unsafe ancestor"
+                )));
+            }
+        }
+        if current != path && metadata.file_type().is_symlink() {
+            return Err(BrokerError::Invalid(format!(
+                "{label} path has a symlinked ancestor"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn hash_file(path: &Path) -> BrokerResult<String> {
-    let mut file = File::open(path).map_err(io_error)?;
+    hash_open_file(File::open(path).map_err(io_error)?)
+}
+
+fn hash_open_file(mut file: File) -> BrokerResult<String> {
     let metadata = file.metadata().map_err(io_error)?;
     if metadata.len() > MAX_HASH_BYTES {
         return Err(BrokerError::Invalid(
@@ -432,14 +647,37 @@ fn hash_file(path: &Path) -> BrokerResult<String> {
     }
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total = 0_u64;
     loop {
         let count = file.read(&mut buffer).map_err(io_error)?;
         if count == 0 {
             break;
         }
+        total = total.saturating_add(count as u64);
+        if total > MAX_HASH_BYTES {
+            return Err(BrokerError::Invalid(
+                "executable exceeds hash bound".to_owned(),
+            ));
+        }
         hasher.update(&buffer[..count]);
     }
     Ok(hex_digest(&hasher.finalize()))
+}
+
+fn read_bounded_file(path: &Path, maximum: usize, label: &str) -> BrokerResult<Vec<u8>> {
+    let file = File::open(path).map_err(io_error)?;
+    let metadata = file.metadata().map_err(io_error)?;
+    if metadata.len() > maximum as u64 {
+        return Err(BrokerError::Invalid(format!("{label} exceeds size bound")));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(maximum));
+    file.take((maximum as u64).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() > maximum {
+        return Err(BrokerError::Invalid(format!("{label} exceeds size bound")));
+    }
+    Ok(bytes)
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
@@ -473,13 +711,32 @@ fn authenticate_peer(credentials: PeerCredentials, policy: &PeerPolicy) -> Broke
             "peer credentials are not approved".to_owned(),
         ));
     }
-    let executable = fs::read_link(format!("/proc/{}/exe", credentials.pid)).map_err(io_error)?;
+    let pid = Pid::from_raw(
+        i32::try_from(credentials.pid)
+            .map_err(|_| BrokerError::Unauthorized("peer PID is out of bounds".to_owned()))?,
+    )
+    .ok_or_else(|| BrokerError::Unauthorized("peer PID is zero".to_owned()))?;
+    // Pin the process identity while the proc executable descriptor is opened
+    // and hashed.  SO_PEERCRED supplies the PID, but a connected socket can
+    // outlive that process, so a bare /proc/<pid> path is not sufficient.
+    let _pidfd = pidfd_open(pid, PidfdFlags::empty()).map_err(|error| {
+        BrokerError::Unauthorized(format!("peer process identity is unavailable: {error}"))
+    })?;
+    let start_before = process_start_token(credentials.pid)?;
+    let proc_executable = PathBuf::from(format!("/proc/{}/exe", credentials.pid));
+    let executable = fs::read_link(&proc_executable).map_err(io_error)?;
     if executable != policy.executable {
         return Err(BrokerError::Unauthorized(
             "peer executable path is not approved".to_owned(),
         ));
     }
-    let actual = hash_file(&executable)?;
+    let actual = hash_open_file(File::open(&proc_executable).map_err(io_error)?)?;
+    let start_after = process_start_token(credentials.pid)?;
+    if start_before != start_after {
+        return Err(BrokerError::Unauthorized(
+            "peer process identity changed during authentication".to_owned(),
+        ));
+    }
     if actual != policy.executable_sha256 {
         return Err(BrokerError::Unauthorized(
             "peer executable digest is not approved".to_owned(),
@@ -540,7 +797,7 @@ impl UnitObservation {
 }
 
 /// Public receipt returned to the bounded broker client.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LaunchReceipt {
     pub request: BrokerRequest,
     pub unit: String,
@@ -554,19 +811,25 @@ pub struct LaunchReceipt {
     pub duplicate: bool,
 }
 
+#[cfg(target_os = "linux")]
+mod ledger;
+#[cfg(target_os = "linux")]
+pub use ledger::BrokerLedger;
 pub trait SystemdBackend {
     fn start(
         &mut self,
         unit: &str,
         request: &BrokerRequest,
         policy: &LaunchPolicy,
+        deadline: Instant,
     ) -> BrokerResult<UnitObservation>;
     fn inspect(
         &mut self,
         unit: &str,
         policy: &LaunchPolicy,
+        deadline: Instant,
     ) -> BrokerResult<Option<UnitObservation>>;
-    fn stop(&mut self, unit: &str) -> BrokerResult<()>;
+    fn stop(&mut self, unit: &str, deadline: Instant) -> BrokerResult<()>;
 }
 
 /// Broker state and exact nonce idempotence. The backend owns all privileged
@@ -574,18 +837,27 @@ pub trait SystemdBackend {
 pub struct LinuxSystemdBroker<B> {
     policy: BrokerPolicy,
     backend: B,
+    ledger: BrokerLedger,
     receipts: BTreeMap<BrokerRequest, LaunchReceipt>,
+    active_units: BTreeSet<String>,
 }
 
 impl<B: SystemdBackend> LinuxSystemdBroker<B> {
     pub fn new(policy: BrokerPolicy, backend: B) -> Self {
+        Self::new_with_ledger(policy, backend, BrokerLedger::memory())
+    }
+
+    pub fn new_with_ledger(policy: BrokerPolicy, backend: B, ledger: BrokerLedger) -> Self {
         Self {
             policy,
             backend,
+            ledger,
             receipts: BTreeMap::new(),
+            active_units: BTreeSet::new(),
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn handle(
         &mut self,
         credentials: PeerCredentials,
@@ -595,25 +867,76 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         authenticate_peer(credentials, &self.policy.peer)?;
         let policy = self.policy.component(request.component)?;
         let unit = unit_name(&request);
-        if let Some(receipt) = self.receipts.get(&request) {
-            let mut duplicate = receipt.clone();
-            duplicate.duplicate = true;
-            return Ok(duplicate);
+        let existing = self.ledger.contains(&request);
+        if !existing && self.active_units.len() >= MAX_ACTIVE_PROCESSES {
+            return Err(BrokerError::Unavailable(
+                "broker active-process capacity is exhausted".to_owned(),
+            ));
         }
-        if let Some(observation) = self.backend.inspect(&unit, policy)? {
+        let newly_reserved = self.ledger.reserve(&request, &unit)?;
+        let deadline = Instant::now()
+            .checked_add(policy.timeout)
+            .unwrap_or_else(Instant::now);
+        if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
             observation.verify(&unit, policy)?;
-            let receipt = receipt_from(&request, &observation, true);
-            self.receipts.insert(request, receipt.clone());
+            self.active_units.insert(unit.clone());
+            let mut receipt = receipt_from(&request, &observation, true);
+            if newly_reserved {
+                receipt.duplicate = false;
+            }
+            self.ledger.commit(&request, &receipt)?;
+            self.cache_receipt(&request, &receipt);
             return Ok(receipt);
         }
-        let observation = self.backend.start(&unit, &request, policy)?;
+        if !newly_reserved {
+            return Err(BrokerError::Conflict(
+                "durable launch record has no active unit; refusing to relaunch old nonce"
+                    .to_owned(),
+            ));
+        }
+        let observation = match self.backend.start(&unit, &request, policy, deadline) {
+            Ok(observation) => observation,
+            Err(error) => {
+                let cleanup = self.cleanup_unit(&unit);
+                return Err(cleanup_error(error, cleanup));
+            }
+        };
         if let Err(error) = observation.verify(&unit, policy) {
-            let _ = self.backend.stop(&unit);
-            return Err(error);
+            let cleanup = self.cleanup_unit(&unit);
+            return Err(cleanup_error(error, cleanup));
         }
         let receipt = receipt_from(&request, &observation, false);
-        self.receipts.insert(request, receipt.clone());
+        if let Err(error) = self.ledger.commit(&request, &receipt) {
+            let cleanup = self.cleanup_unit(&unit);
+            return Err(cleanup_error(error, cleanup));
+        }
+        self.active_units.insert(unit);
+        self.cache_receipt(&request, &receipt);
         Ok(receipt)
+    }
+
+    fn cache_receipt(&mut self, request: &BrokerRequest, receipt: &LaunchReceipt) {
+        if self.receipts.len() < MAX_RECEIPTS || self.receipts.contains_key(request) {
+            self.receipts.insert(request.clone(), receipt.clone());
+        }
+    }
+
+    fn cleanup_unit(&mut self, unit: &str) -> BrokerResult<()> {
+        let deadline = Instant::now()
+            .checked_add(MAX_CLEANUP_TIMEOUT)
+            .unwrap_or_else(Instant::now);
+        let result = self.backend.stop(unit, deadline);
+        self.active_units.remove(unit);
+        result
+    }
+}
+
+fn cleanup_error(error: BrokerError, cleanup: BrokerResult<()>) -> BrokerError {
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup_error) => BrokerError::Conflict(format!(
+            "launch failed and exact-unit cleanup was not proven: {error}; cleanup: {cleanup_error}"
+        )),
     }
 }
 
@@ -651,8 +974,16 @@ pub fn serve<B: SystemdBackend>(
     mut broker: LinuxSystemdBroker<B>,
 ) -> BrokerResult<()> {
     for connection in listener.incoming() {
-        let mut stream = connection.map_err(io_error)?;
-        let result = handle_connection(&mut stream, &mut broker);
+        let Ok(mut stream) = connection else {
+            // A single failed accept is not allowed to terminate the root
+            // broker. The service manager owns restart policy for persistent
+            // listener failures.
+            continue;
+        };
+        let deadline = Instant::now()
+            .checked_add(MAX_IO_TIMEOUT)
+            .unwrap_or_else(Instant::now);
+        let result = handle_connection(&mut stream, &mut broker, deadline);
         if let Err(error) = &result {
             let error_text = error.to_string();
             let response = serde_json::to_vec(&WireResponse {
@@ -660,9 +991,10 @@ pub fn serve<B: SystemdBackend>(
                 duplicate: false,
                 receipt: None,
                 error: Some(&error_text),
-            })
-            .map_err(|serialize_error| BrokerError::Io(serialize_error.to_string()))?;
-            stream.write_all(&response).map_err(io_error)?;
+            });
+            if let Ok(response) = response {
+                let _ = write_deadline(&mut stream, &response, deadline);
+            }
         }
     }
     Ok(())
@@ -671,21 +1003,15 @@ pub fn serve<B: SystemdBackend>(
 fn handle_connection<B: SystemdBackend>(
     stream: &mut UnixStream,
     broker: &mut LinuxSystemdBroker<B>,
+    deadline: Instant,
 ) -> BrokerResult<()> {
     let credentials = peer_credentials(stream)?;
-    let mut bytes = Vec::new();
-    stream
-        .take((MAX_FRAME_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(io_error)?;
-    if bytes.len() > MAX_FRAME_BYTES {
-        return Err(BrokerError::Invalid(
-            "broker request exceeds frame bound".to_owned(),
-        ));
-    }
-    let request: BrokerRequest = serde_json::from_slice(&bytes).map_err(|error| {
-        BrokerError::Invalid(format!("broker request JSON is invalid: {error}"))
-    })?;
+    // Authenticate before accepting any request bytes. This prevents an
+    // untrusted peer from holding a root broker connection open while it
+    // trickles a body, and the handle path repeats the check after parsing.
+    authenticate_peer(credentials, &broker.policy.peer)?;
+    let bytes = read_frame(stream, deadline)?;
+    let request: BrokerRequest = parse_json(&bytes, "broker request JSON")?;
     let receipt = broker.handle(credentials, request)?;
     let response = serde_json::to_vec(&WireResponse {
         accepted: true,
@@ -694,25 +1020,80 @@ fn handle_connection<B: SystemdBackend>(
         error: None,
     })
     .map_err(|error| BrokerError::Io(error.to_string()))?;
-    stream.write_all(&response).map_err(io_error)
+    if response.len() > MAX_FRAME_BYTES {
+        return Err(BrokerError::Unavailable(
+            "broker response exceeds frame bound".to_owned(),
+        ));
+    }
+    write_deadline(stream, &response, deadline)
+}
+
+fn read_frame(stream: &mut UnixStream, deadline: Instant) -> BrokerResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        stream
+            .set_read_timeout(Some(remaining(deadline)?))
+            .map_err(io_error)?;
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(bytes),
+            Ok(count) => {
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.len() > MAX_FRAME_BYTES {
+                    return Err(BrokerError::Invalid(
+                        "broker request exceeds frame bound".to_owned(),
+                    ));
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+}
+
+fn write_deadline(stream: &mut UnixStream, bytes: &[u8], deadline: Instant) -> BrokerResult<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        stream
+            .set_write_timeout(Some(remaining(deadline)?))
+            .map_err(io_error)?;
+        match stream.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(BrokerError::Io(
+                    "broker peer closed during response".to_owned(),
+                ));
+            }
+            Ok(count) => written += count,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Ok(())
 }
 
 /// Build a listener only at a root-owned, non-world-writable directory. An
 /// existing path is never unlinked, avoiding replacement of another broker.
-pub fn bind_root_owned_socket(path: &Path) -> BrokerResult<UnixListener> {
+pub fn bind_root_owned_socket(path: &Path, peer_gid: u32) -> BrokerResult<UnixListener> {
+    if peer_gid == 0 || peer_gid == u32::MAX {
+        return Err(BrokerError::Invalid(
+            "broker peer group must be a non-root valid GID".to_owned(),
+        ));
+    }
     let parent = path
         .parent()
         .ok_or_else(|| BrokerError::Invalid("broker socket has no parent directory".to_owned()))?;
     validate_protected_directory(parent, "broker socket directory")?;
-    if path.exists() {
+    if fs::symlink_metadata(path).is_ok() {
         return Err(BrokerError::Conflict(
             "broker socket already exists".to_owned(),
         ));
     }
     let listener = UnixListener::bind(path).map_err(io_error)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o660)).map_err(io_error)?;
+    fchown(&listener, None, Some(Gid::from_raw(peer_gid)))
+        .map_err(|error| BrokerError::Io(error.to_string()))?;
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    if metadata.uid() != 0 || metadata.mode() & 0o007 != 0 {
+    if metadata.uid() != 0 || metadata.gid() != peer_gid || metadata.mode() & 0o007 != 0 {
         return Err(BrokerError::Unauthorized(
             "broker socket ownership or mode is unsafe".to_owned(),
         ));
@@ -742,18 +1123,32 @@ impl BrokerClient {
                 "broker socket must be absolute".to_owned(),
             ));
         }
+        let parent = socket.parent().ok_or_else(|| {
+            BrokerError::Invalid("broker socket has no parent directory".to_owned())
+        })?;
+        validate_protected_directory(parent, "broker socket directory")?;
         Ok(Self { socket, timeout })
     }
 
     pub fn launch(&self, request: &BrokerRequest) -> BrokerResult<LaunchReceipt> {
         request.validate()?;
-        let mut stream = UnixStream::connect(&self.socket).map_err(io_error)?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(io_error)?;
-        stream
-            .set_write_timeout(Some(self.timeout))
-            .map_err(io_error)?;
+        let metadata = fs::symlink_metadata(&self.socket).map_err(io_error)?;
+        if !metadata.file_type().is_socket() || metadata.uid() != 0 || metadata.mode() & 0o007 != 0
+        {
+            return Err(BrokerError::Unauthorized(
+                "broker socket ownership or type is unsafe".to_owned(),
+            ));
+        }
+        let deadline = Instant::now()
+            .checked_add(self.timeout)
+            .unwrap_or_else(Instant::now);
+        let mut stream = connect_with_deadline(&self.socket, deadline)?;
+        let peer = peer_credentials(&stream)?;
+        if peer.uid != 0 {
+            return Err(BrokerError::Unauthorized(
+                "broker peer is not root".to_owned(),
+            ));
+        }
         let bytes =
             serde_json::to_vec(request).map_err(|error| BrokerError::Io(error.to_string()))?;
         if bytes.len() > MAX_FRAME_BYTES {
@@ -761,23 +1156,12 @@ impl BrokerClient {
                 "broker request exceeds frame bound".to_owned(),
             ));
         }
-        stream.write_all(&bytes).map_err(io_error)?;
+        write_deadline(&mut stream, &bytes, deadline)?;
         stream
             .shutdown(std::net::Shutdown::Write)
             .map_err(io_error)?;
-        let mut response = Vec::new();
-        stream
-            .take((MAX_FRAME_BYTES + 1) as u64)
-            .read_to_end(&mut response)
-            .map_err(io_error)?;
-        if response.len() > MAX_FRAME_BYTES {
-            return Err(BrokerError::Invalid(
-                "broker response exceeds frame bound".to_owned(),
-            ));
-        }
-        let response: WireResponseOwned = serde_json::from_slice(&response).map_err(|error| {
-            BrokerError::Invalid(format!("broker response JSON is invalid: {error}"))
-        })?;
+        let response = read_frame(&mut stream, deadline)?;
+        let response: WireResponseOwned = parse_json(&response, "broker response JSON")?;
         if !response.accepted {
             return Err(BrokerError::Conflict(
                 response
@@ -785,10 +1169,60 @@ impl BrokerClient {
                     .unwrap_or_else(|| "broker rejected request".to_owned()),
             ));
         }
-        response
-            .receipt()
-            .ok_or_else(|| BrokerError::Unavailable("broker accepted without a receipt".to_owned()))
+        let duplicate = response.duplicate;
+        let receipt = response.receipt().ok_or_else(|| {
+            BrokerError::Unavailable("broker accepted without a receipt".to_owned())
+        })?;
+        if receipt.request != *request
+            || receipt.unit != unit_name(request)
+            || receipt.pid == 0
+            || receipt.creation_token.is_empty()
+            || receipt.duplicate != duplicate
+        {
+            return Err(BrokerError::Conflict(
+                "broker receipt does not correlate to the request".to_owned(),
+            ));
+        }
+        Ok(receipt)
     }
+}
+
+fn connect_with_deadline(path: &Path, deadline: Instant) -> BrokerResult<UnixStream> {
+    let descriptor = socket_with(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .map_err(|error| BrokerError::Io(error.to_string()))?;
+    let address = SocketAddrUnix::new(path).map_err(|error| BrokerError::Io(error.to_string()))?;
+    match connect(&descriptor, &address) {
+        Ok(()) => {}
+        Err(error) if error == Errno::INPROGRESS || error == Errno::WOULDBLOCK => {
+            let mut poll_fds = [PollFd::new(&descriptor, PollFlags::OUT)];
+            let timeout = remaining(deadline)?;
+            let timespec = Timespec {
+                tv_sec: timeout.as_secs().try_into().unwrap_or(i64::MAX),
+                tv_nsec: timeout.subsec_nanos().into(),
+            };
+            if poll(&mut poll_fds, Some(&timespec))
+                .map_err(|error| BrokerError::Io(error.to_string()))?
+                == 0
+            {
+                return Err(BrokerError::Unavailable(
+                    "broker socket connect deadline expired".to_owned(),
+                ));
+            }
+            match socket_error(&descriptor).map_err(|error| BrokerError::Io(error.to_string()))? {
+                Ok(()) => {}
+                Err(error) => return Err(BrokerError::Io(error.to_string())),
+            }
+        }
+        Err(error) => return Err(BrokerError::Io(error.to_string())),
+    }
+    let stream: UnixStream = descriptor.into();
+    stream.set_nonblocking(false).map_err(io_error)?;
+    Ok(stream)
 }
 
 #[derive(Debug, Deserialize)]
@@ -840,577 +1274,13 @@ impl WireResponseOwned {
 }
 
 #[cfg(target_os = "linux")]
-struct NativeSystemdBackend {
-    connection: zbus::blocking::Connection,
-}
-
+mod native;
 #[cfg(target_os = "linux")]
-impl NativeSystemdBackend {
-    fn connect() -> BrokerResult<Self> {
-        let connection = zbus::blocking::Connection::system().map_err(|error| {
-            BrokerError::Unavailable(format!("system D-Bus connection failed: {error}"))
-        })?;
-        Ok(Self { connection })
-    }
-
-    fn manager(&self) -> BrokerResult<zbus::blocking::Proxy<'_>> {
-        zbus::blocking::Proxy::new(
-            &self.connection,
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-        )
-        .map_err(|error| BrokerError::Unavailable(format!("systemd manager proxy failed: {error}")))
-    }
-
-    fn unit_proxy<'a>(&'a self, path: &'a str) -> BrokerResult<zbus::blocking::Proxy<'a>> {
-        zbus::blocking::Proxy::new(
-            &self.connection,
-            "org.freedesktop.systemd1",
-            path,
-            "org.freedesktop.DBus.Properties",
-        )
-        .map_err(|error| {
-            BrokerError::Unavailable(format!("systemd property proxy failed: {error}"))
-        })
-    }
-
-    fn property<T>(&self, path: &str, interface: &str, property: &str) -> BrokerResult<T>
-    where
-        T: TryFrom<zbus::zvariant::OwnedValue>,
-        T::Error: fmt::Display,
-    {
-        let proxy = self.unit_proxy(path)?;
-        let value: zbus::zvariant::OwnedValue =
-            proxy.call("Get", &(interface, property)).map_err(|error| {
-                BrokerError::Unavailable(format!("systemd property read failed: {error}"))
-            })?;
-        T::try_from(value).map_err(|error| {
-            BrokerError::Unavailable(format!("systemd property type failed: {error}"))
-        })
-    }
-
-    fn unit_observation(
-        &self,
-        unit: &str,
-        policy: &LaunchPolicy,
-    ) -> BrokerResult<Option<UnitObservation>> {
-        let manager = self.manager()?;
-        let path: zbus::zvariant::OwnedObjectPath = match manager.call("GetUnit", &unit) {
-            Ok(path) => path,
-            Err(error) if error.to_string().contains("NoSuchUnit") => return Ok(None),
-            Err(error) => {
-                return Err(BrokerError::Unavailable(format!(
-                    "systemd unit lookup failed: {error}"
-                )));
-            }
-        };
-        let path = path.as_str();
-        let active: String = self.property(path, "org.freedesktop.systemd1.Unit", "ActiveState")?;
-        if active != "active" {
-            return Ok(None);
-        }
-        let pid: u32 = self.property(path, "org.freedesktop.systemd1.Service", "MainPID")?;
-        if pid == 0 {
-            return Ok(None);
-        }
-        let control_group: String =
-            self.property(path, "org.freedesktop.systemd1.Unit", "ControlGroup")?;
-        let process = read_process_postcondition(pid, policy, &control_group)?;
-        Ok(Some(UnitObservation {
-            unit: unit.to_owned(),
-            pid,
-            creation_token: process.creation_token,
-            uid: process.uid,
-            gid: process.gid,
-            capability_bounding_set: process.capability_bounding_set,
-            ambient_capabilities: process.ambient_capabilities,
-            no_new_privileges: process.no_new_privileges,
-            control_group,
-        }))
-    }
-}
-
+pub(crate) use native::process_start_token;
+#[cfg(all(target_os = "linux", test))]
+pub(crate) use native::require_no_supplementary_groups;
 #[cfg(target_os = "linux")]
-impl SystemdBackend for NativeSystemdBackend {
-    #[allow(clippy::vec_init_then_push)]
-    fn start(
-        &mut self,
-        unit: &str,
-        _request: &BrokerRequest,
-        policy: &LaunchPolicy,
-    ) -> BrokerResult<UnitObservation> {
-        if hash_file(&policy.executable)? != policy.executable_sha256 {
-            return Err(BrokerError::Conflict(
-                "launch executable changed after policy admission".to_owned(),
-            ));
-        }
-        let manager = self.manager()?;
-        let mut argv = Vec::with_capacity(policy.arguments.len() + 1);
-        argv.push(policy.executable.to_string_lossy().into_owned());
-        argv.extend(policy.arguments.iter().cloned());
-        let exec_start = zbus::zvariant::Value::new(vec![(
-            policy.executable.to_string_lossy().into_owned(),
-            argv,
-            false,
-        )])
-        .try_to_owned()
-        .map_err(|error| {
-            BrokerError::Invalid(format!("systemd ExecStart value failed: {error}"))
-        })?;
-        let environment = policy
-            .environment
-            .iter()
-            .map(|(name, value)| format!("{name}={value}"))
-            .collect::<Vec<_>>();
-        let mut properties = Vec::new();
-        properties.push(("ExecStart", exec_start));
-        properties.push((
-            "User",
-            zbus::zvariant::Value::new(policy.target_uid.to_string())
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "Group",
-            zbus::zvariant::Value::new(policy.target_gid.to_string())
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "SupplementaryGroups",
-            zbus::zvariant::Value::new(Vec::<String>::new())
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "WorkingDirectory",
-            zbus::zvariant::Value::new(policy.working_directory.to_string_lossy().into_owned())
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "Environment",
-            zbus::zvariant::Value::new(environment)
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "CapabilityBoundingSet",
-            zbus::zvariant::OwnedValue::from(policy.capabilities.bounding_set),
-        ));
-        properties.push((
-            "AmbientCapabilities",
-            zbus::zvariant::OwnedValue::from(policy.capabilities.ambient_set),
-        ));
-        properties.push((
-            "NoNewPrivileges",
-            zbus::zvariant::OwnedValue::from(policy.capabilities.no_new_privileges),
-        ));
-        properties.push(("Delegate", zbus::zvariant::OwnedValue::from(false)));
-        properties.push((
-            "KillMode",
-            zbus::zvariant::Value::new("control-group")
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "StandardOutput",
-            zbus::zvariant::Value::new("null")
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "StandardError",
-            zbus::zvariant::Value::new("null")
-                .try_to_owned()
-                .map_err(|error| BrokerError::Invalid(error.to_string()))?,
-        ));
-        properties.push((
-            "TasksMax",
-            zbus::zvariant::OwnedValue::from(policy.cgroup.tasks_max),
-        ));
-        properties.push((
-            "MemoryMax",
-            zbus::zvariant::OwnedValue::from(policy.cgroup.memory_max_bytes),
-        ));
-        let timeout_us: u64 = policy.timeout.as_micros().try_into().map_err(|_| {
-            BrokerError::Invalid("launch timeout overflows systemd property".to_owned())
-        })?;
-        properties.push((
-            "TimeoutStartUSec",
-            zbus::zvariant::OwnedValue::from(timeout_us),
-        ));
-        properties.push((
-            "TimeoutStopUSec",
-            zbus::zvariant::OwnedValue::from(timeout_us),
-        ));
-        let aux: Vec<(String, Vec<(String, zbus::zvariant::OwnedValue)>)> = Vec::new();
-        let _: zbus::zvariant::OwnedObjectPath = manager
-            .call("StartTransientUnit", &(unit, "fail", properties, aux))
-            .map_err(|error| {
-                BrokerError::Unavailable(format!("systemd transient unit start failed: {error}"))
-            })?;
-        let deadline = Instant::now()
-            .checked_add(policy.timeout)
-            .unwrap_or_else(Instant::now);
-        loop {
-            if let Some(observation) = self.unit_observation(unit, policy)? {
-                return Ok(observation);
-            }
-            if Instant::now() >= deadline {
-                return Err(BrokerError::Unavailable(
-                    "systemd transient unit did not become active before deadline".to_owned(),
-                ));
-            }
-            thread::sleep(POLL_INTERVAL);
-        }
-    }
-
-    fn inspect(
-        &mut self,
-        unit: &str,
-        policy: &LaunchPolicy,
-    ) -> BrokerResult<Option<UnitObservation>> {
-        self.unit_observation(unit, policy)
-    }
-
-    fn stop(&mut self, unit: &str) -> BrokerResult<()> {
-        let manager = self.manager()?;
-        let _: zbus::zvariant::OwnedObjectPath = manager
-            .call("StopUnit", &(unit, "replace"))
-            .map_err(|error| {
-                BrokerError::Unavailable(format!("systemd exact-unit cleanup failed: {error}"))
-            })?;
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct ProcessPostcondition {
-    creation_token: String,
-    uid: u32,
-    gid: u32,
-    capability_bounding_set: u64,
-    ambient_capabilities: u64,
-    no_new_privileges: bool,
-}
-
-#[cfg(target_os = "linux")]
-fn read_process_postcondition(
-    pid: u32,
-    policy: &LaunchPolicy,
-    control_group: &str,
-) -> BrokerResult<ProcessPostcondition> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status")).map_err(io_error)?;
-    let uid = parse_status_quad(&status, "Uid")?;
-    let gid = parse_status_quad(&status, "Gid")?;
-    if uid.iter().any(|value| *value != policy.target_uid)
-        || gid.iter().any(|value| *value != policy.target_gid)
-    {
-        return Err(BrokerError::Conflict(
-            "systemd target UID/GID postcheck failed".to_owned(),
-        ));
-    }
-    require_no_supplementary_groups(&status)?;
-    let cap_bounding_set = parse_hex_status(&status, "CapBnd")?;
-    let ambient_capabilities = parse_hex_status(&status, "CapAmb")?;
-    let no_new_privileges = status
-        .lines()
-        .find_map(|line| line.strip_prefix("NoNewPrivs:"))
-        .map(str::trim)
-        .is_some_and(|value| value == "1");
-    if !no_new_privileges
-        || cap_bounding_set != policy.capabilities.bounding_set
-        || ambient_capabilities != policy.capabilities.ambient_set
-    {
-        return Err(BrokerError::Conflict(
-            "systemd capability postcheck failed".to_owned(),
-        ));
-    }
-    let cgroup = fs::read_to_string(format!("/proc/{pid}/cgroup")).map_err(io_error)?;
-    let actual_cgroup = cgroup
-        .lines()
-        .find_map(|line| line.strip_prefix("0::"))
-        .ok_or_else(|| {
-            BrokerError::Conflict("target has no unified cgroup membership".to_owned())
-        })?;
-    if actual_cgroup != control_group {
-        return Err(BrokerError::Conflict(
-            "target cgroup does not match exact systemd unit".to_owned(),
-        ));
-    }
-    let creation_token = process_start_token(pid)?;
-    Ok(ProcessPostcondition {
-        creation_token,
-        uid: policy.target_uid,
-        gid: policy.target_gid,
-        capability_bounding_set: cap_bounding_set,
-        ambient_capabilities,
-        no_new_privileges,
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn require_no_supplementary_groups(status: &str) -> BrokerResult<()> {
-    let groups = status
-        .lines()
-        .find_map(|line| line.strip_prefix("Groups:"))
-        .ok_or_else(|| BrokerError::Conflict("process status lacks Groups".to_owned()))?;
-    if !groups.trim().is_empty() {
-        return Err(BrokerError::Conflict(
-            "systemd supplementary-group postcheck failed".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn parse_status_quad(status: &str, field: &str) -> BrokerResult<[u32; 4]> {
-    let values = status
-        .lines()
-        .find_map(|line| line.strip_prefix(&format!("{field}:")))
-        .ok_or_else(|| BrokerError::Conflict(format!("process status lacks {field}")))?
-        .split_whitespace()
-        .map(|value| {
-            value
-                .parse::<u32>()
-                .map_err(|_| BrokerError::Conflict(format!("process status has invalid {field}")))
-        })
-        .collect::<BrokerResult<Vec<_>>>()?;
-    values
-        .try_into()
-        .map_err(|_| BrokerError::Conflict(format!("process status has incomplete {field}")))
-}
-
-#[cfg(target_os = "linux")]
-fn parse_hex_status(status: &str, field: &str) -> BrokerResult<u64> {
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix(&format!("{field}:")))
-        .and_then(|value| u64::from_str_radix(value.trim(), 16).ok())
-        .ok_or_else(|| BrokerError::Conflict(format!("process status has invalid {field}")))
-}
-
-#[cfg(target_os = "linux")]
-fn process_start_token(pid: u32) -> BrokerResult<String> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).map_err(io_error)?;
-    let close = stat.rfind(')').ok_or_else(|| {
-        BrokerError::Conflict("process stat has no command terminator".to_owned())
-    })?;
-    stat.get(close + 2..)
-        .and_then(|suffix| suffix.split_whitespace().nth(19))
-        .map(str::to_owned)
-        .ok_or_else(|| BrokerError::Conflict("process stat has no start token".to_owned()))
-}
-
-/// Start the root-owned broker binary after loading the protected policy.
-#[cfg(target_os = "linux")]
-pub fn run_native_broker(socket: &Path, policy_path: &Path) -> BrokerResult<()> {
-    let policy = BrokerPolicy::from_file(policy_path)?;
-    let listener = bind_root_owned_socket(socket)?;
-    let backend = NativeSystemdBackend::connect()?;
-    serve(&listener, LinuxSystemdBroker::new(policy, backend))
-}
+pub use native::run_native_broker;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct FakeBackend {
-        starts: usize,
-        units: BTreeMap<String, UnitObservation>,
-    }
-
-    impl FakeBackend {
-        fn new() -> Self {
-            Self {
-                starts: 0,
-                units: BTreeMap::new(),
-            }
-        }
-    }
-
-    impl SystemdBackend for FakeBackend {
-        fn start(
-            &mut self,
-            unit: &str,
-            _request: &BrokerRequest,
-            policy: &LaunchPolicy,
-        ) -> BrokerResult<UnitObservation> {
-            self.starts += 1;
-            let observation = UnitObservation {
-                unit: unit.to_owned(),
-                pid: 42,
-                creation_token: "start-token".to_owned(),
-                uid: policy.target_uid,
-                gid: policy.target_gid,
-                capability_bounding_set: policy.capabilities.bounding_set,
-                ambient_capabilities: policy.capabilities.ambient_set,
-                no_new_privileges: true,
-                control_group: format!("/system.slice/{unit}"),
-            };
-            self.units.insert(unit.to_owned(), observation.clone());
-            Ok(observation)
-        }
-
-        fn inspect(
-            &mut self,
-            unit: &str,
-            _policy: &LaunchPolicy,
-        ) -> BrokerResult<Option<UnitObservation>> {
-            Ok(self.units.get(unit).cloned())
-        }
-
-        fn stop(&mut self, unit: &str) -> BrokerResult<()> {
-            self.units.remove(unit);
-            Ok(())
-        }
-    }
-
-    fn digest(path: &Path) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(fs::read(path).expect("fixture executable must be readable"));
-        hex_digest(&hasher.finalize())
-    }
-
-    fn policy() -> BrokerPolicy {
-        let executable = PathBuf::from("/bin/true");
-        let peer_executable = fs::canonicalize("/bin/sleep").expect("peer fixture executable path");
-        let launch = LaunchPolicy {
-            executable: executable.clone(),
-            executable_sha256: digest(&executable),
-            arguments: Vec::new(),
-            working_directory: PathBuf::from("/"),
-            environment: Vec::new(),
-            target_uid: 1001,
-            target_gid: 1001,
-            capabilities: CapabilityPolicy {
-                bounding_set: 0,
-                ambient_set: 0,
-                no_new_privileges: true,
-            },
-            cgroup: CgroupPolicy {
-                tasks_max: 16,
-                memory_max_bytes: 64 * 1024 * 1024,
-            },
-            timeout: Duration::from_secs(2),
-        };
-        let peer = PeerPolicy {
-            uid: rustix::process::getuid().as_raw(),
-            gid: rustix::process::getgid().as_raw(),
-            executable: peer_executable.clone(),
-            executable_sha256: digest(&peer_executable),
-        };
-        BrokerPolicy::new(peer, BTreeMap::from([(BrokerComponent::Synthetic, launch)]))
-            .expect("valid fixture policy")
-    }
-
-    fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) {
-        let child = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .expect("peer fixture process");
-        (
-            PeerCredentials {
-                pid: child.id(),
-                uid: policy.peer.uid,
-                gid: policy.peer.gid,
-            },
-            child,
-        )
-    }
-
-    fn request(nonce: &str) -> BrokerRequest {
-        BrokerRequest {
-            component: BrokerComponent::Synthetic,
-            instance: "instance".to_owned(),
-            incarnation: "incarnation".to_owned(),
-            nonce: nonce.to_owned(),
-        }
-    }
-
-    #[test]
-    fn fixed_policy_has_distinct_target_identity_and_no_capabilities() {
-        let policy = policy();
-        let launch = policy
-            .component(BrokerComponent::Synthetic)
-            .expect("policy entry");
-        assert_ne!(launch.target_uid, policy.peer.uid);
-        assert_eq!(launch.capabilities.bounding_set, 0);
-        assert_eq!(launch.capabilities.ambient_set, 0);
-    }
-
-    #[test]
-    fn duplicate_nonce_does_not_start_a_second_unit() {
-        let policy = policy();
-        let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
-        let (peer, mut child) = credentials(&policy);
-        let first = broker.handle(peer, request("nonce")).expect("first launch");
-        let second = broker
-            .handle(peer, request("nonce"))
-            .expect("duplicate launch");
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(!first.duplicate);
-        assert!(second.duplicate);
-        assert_eq!(broker.backend.starts, 1);
-    }
-
-    #[test]
-    fn unit_name_binds_all_request_identity_fields() {
-        assert_ne!(unit_name(&request("a")), unit_name(&request("b")));
-        assert!(unit_name(&request("a")).ends_with(".service"));
-    }
-
-    #[test]
-    fn unknown_request_field_is_rejected() {
-        let result = serde_json::from_str::<BrokerRequest>(
-            r#"{"component":"synthetic","instance":"i","incarnation":"c","nonce":"n","executable":"/bin/sh"}"#,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn peer_credentials_are_kernel_bound() {
-        let policy = policy();
-        let (peer, mut child) = credentials(&policy);
-        let error = authenticate_peer(
-            PeerCredentials {
-                pid: peer.pid,
-                uid: policy.peer.uid.saturating_add(1),
-                gid: policy.peer.gid,
-            },
-            &policy.peer,
-        )
-        .expect_err("forged uid must fail");
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(matches!(error, BrokerError::Unauthorized(_)));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn process_start_token_is_not_pid_only() {
-        let token = process_start_token(std::process::id()).expect("current process stat");
-        assert!(!token.is_empty());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn supplementary_groups_postcheck_requires_an_empty_groups_field() {
-        let base = "Uid:\t1001\t1001\t1001\t1001\nGid:\t1001\t1001\t1001\t1001\n";
-        require_no_supplementary_groups(&format!("{base}Groups:\t"))
-            .expect("empty supplementary groups are approved");
-        let error = require_no_supplementary_groups(&format!("{base}Groups:\t1001"))
-            .expect_err("supplementary groups must be rejected");
-        assert!(matches!(error, BrokerError::Conflict(_)));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "requires an approved disposable host with a root-owned broker unit and system D-Bus"]
-    fn native_systemd_broker_is_explicitly_gated() {
-        assert!(std::env::var_os("ASCENSION_NATIVE_BROKER_TEST").is_some());
-    }
-}
+mod tests;
