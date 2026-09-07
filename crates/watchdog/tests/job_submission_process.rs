@@ -12,6 +12,7 @@ use ascension_watchdog::admin::{AdminResult, ReplyStatus};
 use ascension_watchdog::config::{AdminConfig, WatchdogConfig};
 use ascension_watchdog::storage::{SingletonLock, Store, now_unix_ms};
 use serde_json::json;
+use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -19,15 +20,19 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CLI_OUTPUT_BYTES: usize = 256 * 1024;
+
 #[test]
 fn actual_daemon_and_cli_processes_submit_complete_reopen_replay_and_deny_read()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = ProcessFixture::new()?;
     fixture.config().to_file(&fixture.config_path)?;
-    let init = ProcessFixture::command()
+    let mut init_command = ProcessFixture::command();
+    init_command
         .args(["init", "--config"])
-        .arg(&fixture.config_path)
-        .output()?;
+        .arg(&fixture.config_path);
+    let init = run_bounded_cli(init_command)?;
     assert!(
         init.status.success(),
         "init failed: {}",
@@ -108,11 +113,12 @@ fn actual_daemon_and_cli_processes_submit_complete_reopen_replay_and_deny_read()
     assert_eq!(replay_after_reopen.status, ReplyStatus::Accepted);
     assert_eq!(response_job_id(&replay_after_reopen)?, first_id);
 
-    let listed = ProcessFixture::command()
+    let mut list_command = ProcessFixture::command();
+    list_command
         .args(["job", "list", "--config"])
         .arg(&fixture.config_path)
-        .args(["--filter", "all"])
-        .output()?;
+        .args(["--filter", "all"]);
+    let listed = run_bounded_cli(list_command)?;
     assert!(
         listed.status.success(),
         "list failed: {}",
@@ -153,6 +159,29 @@ fn cli_process_rejects_payload_file_with_a_symlinked_ancestor_before_ipc()
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("must-not-leak"));
+    assert!(!fixture.endpoint.exists());
+    Ok(())
+}
+
+#[test]
+fn cli_process_rejects_fifo_payload_without_blocking_before_ipc()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = ProcessFixture::new()?;
+    fixture.config().to_file(&fixture.config_path)?;
+    let fifo = fixture.temp.path().join("payload.fifo");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )?;
+
+    let started = Instant::now();
+    let output = ProcessFixture::submit(&fixture.config_path, "fifo-payload", &fifo)?;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "FIFO payload validation exceeded the bounded process window"
+    );
+    assert!(!output.status.success());
     assert!(!fixture.endpoint.exists());
     Ok(())
 }
@@ -218,8 +247,13 @@ impl ProcessFixture {
         command
     }
 
-    fn submit(config_path: &Path, key: &str, payload: &Path) -> Result<Output, std::io::Error> {
-        Self::command()
+    fn submit(
+        config_path: &Path,
+        key: &str,
+        payload: &Path,
+    ) -> Result<Output, Box<dyn std::error::Error>> {
+        let mut command = Self::command();
+        command
             .args(["job", "submit", "--config"])
             .arg(config_path)
             .args([
@@ -229,8 +263,8 @@ impl ProcessFixture {
                 "episode",
                 "--payload-file",
             ])
-            .arg(payload)
-            .output()
+            .arg(payload);
+        run_bounded_cli(command)
     }
 
     fn write_read_denial_config(&self) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -296,12 +330,13 @@ impl DaemonGuard {
     }
 
     fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(mut child) = self.child.take() {
+        if let Some(child) = self.child.as_mut() {
             if child.try_wait()?.is_none() {
                 child.kill()?;
             }
-            let _ = child.wait()?;
+            child.wait()?;
         }
+        self.child = None;
         self.remove_owned_test_endpoint();
         Ok(())
     }
@@ -315,12 +350,127 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
+        if let Some(child) = self.child.as_mut() {
             if child.try_wait().ok().flatten().is_none() {
                 let _ = child.kill();
             }
             let _ = child.wait();
         }
+        self.child = None;
         self.remove_owned_test_endpoint();
+    }
+}
+
+fn run_bounded_cli(mut command: Command) -> Result<Output, Box<dyn std::error::Error>> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = CliChildGuard::spawn(command)?;
+    let stdout = child
+        .child_mut()?
+        .stdout
+        .take()
+        .ok_or("CLI stdout pipe was not created")?;
+    let stderr = child
+        .child_mut()?
+        .stderr
+        .take()
+        .ok_or("CLI stderr pipe was not created")?;
+    let stdout_reader = thread::spawn(|| read_bounded_output(stdout));
+    let stderr_reader = thread::spawn(|| read_bounded_output(stderr));
+
+    let deadline = Instant::now() + CLI_COMMAND_TIMEOUT;
+    let status = loop {
+        match child.child_mut()?.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let cleanup = child.kill_and_wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                cleanup?;
+                return Err("CLI process exceeded its bounded timeout".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill_and_wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(error.into());
+            }
+        }
+    };
+    child.disarm();
+    let stdout = join_bounded_reader(stdout_reader)?;
+    let stderr = join_bounded_reader(stderr_reader)?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_bounded_output(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(retained);
+        }
+        if retained.len() < MAX_CLI_OUTPUT_BYTES {
+            let keep = (MAX_CLI_OUTPUT_BYTES - retained.len()).min(read);
+            retained.extend_from_slice(&buffer[..keep]);
+        }
+    }
+}
+
+fn join_bounded_reader(
+    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    reader
+        .join()
+        .map_err(|_| "CLI output reader panicked")?
+        .map_err(Into::into)
+}
+
+struct CliChildGuard {
+    child: Option<Child>,
+}
+
+impl CliChildGuard {
+    fn spawn(mut command: Command) -> std::io::Result<Self> {
+        Ok(Self {
+            child: Some(command.spawn()?),
+        })
+    }
+
+    fn child_mut(&mut self) -> std::io::Result<&mut Child> {
+        self.child
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("CLI child guard lost its child"))
+    }
+
+    fn kill_and_wait(&mut self) -> std::io::Result<()> {
+        let Some(child) = self.child.as_mut() else {
+            return Ok(());
+        };
+        if child.try_wait()?.is_none() {
+            child.kill()?;
+        }
+        child.wait().map(|_| ())
+    }
+
+    fn disarm(&mut self) {
+        self.child = None;
+    }
+}
+
+impl Drop for CliChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        }
+        self.child = None;
     }
 }

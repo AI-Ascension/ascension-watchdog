@@ -11,6 +11,7 @@
 use crate::PlatformError;
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::slice;
@@ -547,17 +548,125 @@ pub fn validate_protected_credential_file(path: &Path) -> Result<(), PlatformErr
         )
     };
     let file = OwnedHandle::new(raw_file, "CreateFileW(credential)")?;
+    validate_protected_file_handle(&file, "credential")
+}
+
+/// Read one owner-protected payload through a held Windows file handle.
+///
+/// Every directory between the local drive root and the target is opened with
+/// `OPEN_REPARSE_POINT` and retained until the target read completes.  The
+/// handles do not share delete access, so a caller cannot replace an approved
+/// ancestor while the final path is being opened.  The target itself uses a
+/// no-share handle and is checked for a regular, non-reparse file plus an
+/// owner-only protected DACL before any bytes are read.
+pub fn read_protected_payload_file(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Vec<u8>, PlatformError> {
+    if max_bytes == 0 || max_bytes > MAX_ADMIN_PIPE_FRAME {
+        return Err(PlatformError::Invalid(
+            "protected payload bound is outside the platform limit".to_owned(),
+        ));
+    }
+    let _ancestors = open_protected_ancestors(path)?;
+    let wide_path = wide_path(path)?;
+    let raw_file = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            GENERIC_READ | FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_SHARE_NONE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        )
+    };
+    let file = OwnedHandle::new(raw_file, "CreateFileW(payload)")?;
+    validate_protected_file_handle(&file, "payload")?;
+    read_protected_file_handle(&file, max_bytes)
+}
+
+fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformError> {
+    let components = path.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || !path.is_absolute()
+        || !matches!(components.last(), Some(std::path::Component::Normal(_)))
+    {
+        return Err(PlatformError::Invalid(
+            "protected payload path must be an absolute local file".to_owned(),
+        ));
+    }
+    let mut current = PathBuf::new();
+    let mut ancestors = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                current.push(component.as_os_str());
+            }
+            std::path::Component::Normal(value) => {
+                current.push(value);
+                if index + 1 == components.len() {
+                    continue;
+                }
+                let wide = wide_path(&current)?;
+                let raw = unsafe {
+                    CreateFileW(
+                        wide.as_ptr(),
+                        FILE_READ_ATTRIBUTES | READ_CONTROL,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        null(),
+                        OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL
+                            | FILE_FLAG_OPEN_REPARSE_POINT
+                            | FILE_FLAG_BACKUP_SEMANTICS,
+                        null_mut(),
+                    )
+                };
+                let handle = OwnedHandle::new(raw, "CreateFileW(payload ancestor)")?;
+                validate_directory_handle(&handle)?;
+                ancestors.push(handle);
+            }
+            std::path::Component::CurDir | std::path::Component::ParentDir => {
+                return Err(PlatformError::Invalid(
+                    "protected payload path contains traversal".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(ancestors)
+}
+
+fn validate_directory_handle(handle: &OwnedHandle) -> Result<(), PlatformError> {
+    let mut information =
+        windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(handle.raw(), &raw mut information) } == 0 {
+        return Err(last_error("GetFileInformationByHandle(payload ancestor)"));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(PlatformError::IdentityMismatch(
+            "protected payload ancestor must not be a reparse point".to_owned(),
+        ));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(PlatformError::Invalid(
+            "protected payload ancestor must be a directory".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_protected_file_handle(file: &OwnedHandle, label: &str) -> Result<(), PlatformError> {
     let mut file_information =
         windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(file.raw(), &raw mut file_information) } == 0 {
-        return Err(last_error("GetFileInformationByHandle(credential)"));
+        return Err(last_error(&format!("GetFileInformationByHandle({label})")));
     }
     if file_information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
         || file_information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
     {
-        return Err(PlatformError::Invalid(
-            "credential path must be a regular non-reparse file".to_owned(),
-        ));
+        return Err(PlatformError::Invalid(format!(
+            "{label} must be a regular non-reparse file"
+        )));
     }
     let mut owner = null_mut();
     let mut dacl = null_mut();
@@ -575,13 +684,61 @@ pub fn validate_protected_credential_file(path: &Path) -> Result<(), PlatformErr
         )
     };
     if status != 0 {
-        return Err(win32_error("GetSecurityInfo(credential)", status));
+        return Err(win32_error(&format!("GetSecurityInfo({label})"), status));
     }
     let result = validate_credential_acl(owner, dacl, descriptor);
     if !descriptor.is_null() {
         unsafe { LocalFree(descriptor) };
     }
     result
+}
+
+fn read_protected_file_handle(
+    file: &OwnedHandle,
+    max_bytes: usize,
+) -> Result<Vec<u8>, PlatformError> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(16 * 1024));
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let remaining = max_bytes.saturating_add(1).saturating_sub(bytes.len());
+        if remaining == 0 {
+            return Err(PlatformError::Invalid(
+                "protected payload file exceeds the payload bound".to_owned(),
+            ));
+        }
+        let count = u32::try_from(remaining.min(buffer.len()))
+            .map_err(|_| PlatformError::Invalid("payload read size overflow".to_owned()))?;
+        let mut read = 0_u32;
+        let ok = unsafe {
+            ReadFile(
+                file.raw(),
+                buffer.as_mut_ptr().cast(),
+                count,
+                &raw mut read,
+                null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error("ReadFile(payload)"));
+        }
+        if read > count {
+            return Err(PlatformError::Invalid(
+                "payload read count exceeds requested buffer".to_owned(),
+            ));
+        }
+        if read == 0 {
+            break;
+        }
+        let read = usize::try_from(read)
+            .map_err(|_| PlatformError::Invalid("payload read count overflow".to_owned()))?;
+        bytes.extend_from_slice(&buffer[..read]);
+        if bytes.len() > max_bytes {
+            return Err(PlatformError::Invalid(
+                "protected payload file exceeds the payload bound".to_owned(),
+            ));
+        }
+    }
+    Ok(bytes)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1096,13 +1253,13 @@ fn wide(value: &str) -> Result<Vec<u16>, PlatformError> {
 }
 
 fn wide_path(path: &Path) -> Result<Vec<u16>, PlatformError> {
-    let value = path.as_os_str().to_string_lossy();
-    if value.contains('\0') {
+    let value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if value.contains(&0) {
         return Err(PlatformError::Invalid(
             "Windows path contains NUL".to_owned(),
         ));
     }
-    Ok(value.encode_utf16().chain(std::iter::once(0)).collect())
+    Ok(value.into_iter().chain(std::iter::once(0)).collect())
 }
 
 fn last_error(operation: &str) -> PlatformError {

@@ -7,6 +7,8 @@ use crate::storage::{Store, now_unix_ms};
 use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 use std::io::Read;
+#[cfg(windows)]
+use std::path::Prefix;
 use std::path::{Component, Path, PathBuf};
 
 const DEFAULT_CONFIG: &str = "config/watchdog.json";
@@ -459,10 +461,21 @@ fn read_protected_job_payload(path: &Path) -> Result<String> {
     }
     #[cfg(windows)]
     {
-        Err(WatchdogError::Unsupported(
-            "--payload-file is unavailable on Windows until protected-handle ACL reading is enabled"
-                .to_owned(),
-        ))
+        let bytes = ascension_platform_windows::read_protected_payload_file(
+            path,
+            crate::admin::MAX_JOB_PAYLOAD_BYTES,
+        )
+        .map_err(|error| match error {
+            ascension_platform_windows::PlatformError::IdentityMismatch(message) => {
+                WatchdogError::Unauthorized(message)
+            }
+            ascension_platform_windows::PlatformError::Invalid(message) => {
+                WatchdogError::InvalidInput(message)
+            }
+            other => WatchdogError::Unsupported(other.to_string()),
+        })?;
+        String::from_utf8(bytes)
+            .map_err(|_| WatchdogError::InvalidInput("job payload file is not UTF-8".to_owned()))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -477,11 +490,10 @@ fn validate_job_payload_path(path: &Path) -> Result<()> {
         || path.as_os_str().is_empty()
         || path.as_os_str().to_string_lossy().len() > 4 * 1024
         || path.as_os_str().to_string_lossy().contains('\0')
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::CurDir | Component::ParentDir | Component::Prefix(_)
-            )
+        || path.components().any(|component| match component {
+            Component::CurDir | Component::ParentDir => true,
+            Component::Prefix(prefix) => !valid_job_payload_prefix(prefix),
+            _ => false,
         })
     {
         return Err(WatchdogError::InvalidInput(
@@ -525,10 +537,11 @@ fn open_linux_job_payload(path: &Path) -> Result<std::fs::File> {
     // windows. These Linux values are stable fcntl constants; no libc/unsafe
     // boundary is needed here.
     const O_DIRECTORY: i32 = 0o200_000;
+    const O_NONBLOCK: i32 = 0o4_000;
     const O_NOFOLLOW: i32 = 0o400_000;
     let mut directory = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
         .open("/")?;
     let components = path
         .components()
@@ -543,19 +556,29 @@ fn open_linux_job_payload(path: &Path) -> Result<std::fs::File> {
         if index + 1 == components.len() {
             let file = std::fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(O_NOFOLLOW)
+                .custom_flags(O_NOFOLLOW | O_NONBLOCK)
                 .open(anchored)?;
             validate_linux_job_payload_handle(&file)?;
             return Ok(file);
         }
         directory = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
             .open(anchored)?;
     }
     Err(WatchdogError::InvalidInput(
         "job payload file must name a regular file".to_owned(),
     ))
+}
+
+#[cfg(windows)]
+fn valid_job_payload_prefix(prefix: std::path::PrefixComponent<'_>) -> bool {
+    matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+}
+
+#[cfg(not(windows))]
+fn valid_job_payload_prefix(_prefix: std::path::PrefixComponent<'_>) -> bool {
+    false
 }
 
 #[cfg(target_os = "linux")]

@@ -24,9 +24,10 @@ a conflict. Submission never changes desired mode, and a stopped deployment
 cannot claim the queued job until an operator separately admits running mode.
 On Linux, payload files are opened through owner-anchored directory handles and
 read only from the validated regular-file handle; ancestor and leaf symlinks are
-rejected. Other Unix targets and Windows fail closed for `--payload-file` until
-an equivalent protected-handle and ACL reader is available; use inline `--payload`
-there instead.
+rejected. Windows accepts only local absolute drive paths, rejects reparse-point
+ancestors and leaves, holds the checked handles through the bounded read, and
+requires the current user as owner with a protected owner-only DACL. Other Unix
+targets fail closed for `--payload-file`; use inline `--payload` there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
@@ -188,7 +189,7 @@ avoid a client reconnect causing a second durable stop/pause/recovery action.
 The root service owns the following integration points:
 
 1. Add `pub mod admin;` and include the package's source files. On Unix, add
-   the direct `rustix = { version = "1.1.4", features = ["process"] }`
+   the direct `rustix = { version = "1.1.4", features = ["fs", "process"] }`
    dependency for process-effective-UID checks; do not infer the current UID
    from the service's current working directory. Windows uses the isolated
    `ascension-platform-windows` dependency for named pipes and ACL checks.
