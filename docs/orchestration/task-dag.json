@@ -8,7 +8,7 @@
     {"id":"A1","workstream":"architecture","status":"contract-committed-integration-pending","reserved_threads":0,"depends_on":[]},
     {"id":"V1","workstream":"independent-verification","status":"full-release-review-pending","reserved_threads":0,"depends_on":[]},
     {"id":"W1","workstream":"watchdog","status":"core-integrated-native-runtime-pending","reserved_threads":0,"depends_on":["A1"],"acceptance":"durable stop, real subprocess restart and completion deduplication"},
-    {"id":"G1","workstream":"gateway-host","status":"G4R-active","agent":"/root/gateway_finish","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable boot fence and operation reconciliation in actual runtime"},
+    {"id":"G1","workstream":"gateway-host","status":"G5-V20-repair-active","agent":"/root/gateway_finish","reserved_threads":1,"depends_on":["A1"],"acceptance":"durable boot fence and operation reconciliation in actual runtime"},
     {"id":"H1","workstream":"harness-mcp","status":"committed-full-consumer-integration-pending","reserved_threads":0,"depends_on":["A1"],"acceptance":"durable resume, accounting and reconstruction handoff"},
     {"id":"P1","workstream":"platform-operations","status":"native-runtime-source-integrated-independent-review-active","reserved_threads":0,"depends_on":[],"acceptance":"native adapters, packaging and release operations"},
     {"id":"P7","workstream":"synthetic-process-containment","status":"active","agent":"/root/native_runtime","reserved_threads":1,"depends_on":["W1"],"acceptance":"owned synthetic descendants and inherited pipes are cleaned with bounded exact authority"},
@@ -25,7 +25,8 @@
     {"id":"P6L","workstream":"linux-boundary","status":"source-integrated-native-service-unverified","reserved_threads":0,"depends_on":["V4"],"acceptance":"identity-safe signaling, failed-launch uncertainty and protected executable launch"},
     {"id":"P8","workstream":"native-bootstrap-authority","status":"active","agent":"/root/linux_boundary","reserved_threads":1,"depends_on":["V18"],"acceptance":"trusted delegated root and bootstrap identity, conservative post-spawn proof failure and incarnation binding"},
     {"id":"P6W","workstream":"windows-boundary","status":"source-integrated-native-execution-unverified","reserved_threads":0,"depends_on":["V4"],"acceptance":"verified IPC peer binding, replay control, FFI bounds and owned service lifecycle"},
-    {"id":"A7","workstream":"fixture-authority-repair","status":"active-after-V16-findings","agent":"/root/windows_boundary","reserved_threads":1,"depends_on":["V14"],"acceptance":"fresh restart authority, durable monotonic lease history, stale queue uncertainty and configured lease timing"},
+    {"id":"A7","workstream":"fixture-authority-repair","status":"ca4c663-root-review-pending","reserved_threads":0,"depends_on":["V14"],"acceptance":"fresh restart authority, durable monotonic lease history, stale queue uncertainty and configured lease timing"},
+    {"id":"G6","workstream":"managed-host-authority-repair","status":"active","agent":"/root/windows_boundary","reserved_threads":1,"depends_on":["V19","V20"],"acceptance":"gateway-issued boot installation through authenticated host fence, exact lease context and durable dispatch outcomes"},
     {"id":"V18","workstream":"native-runtime-independent-review","status":"active-uses-V4-reservation","agent":"/root/platform_review","reserved_threads":0,"depends_on":["P1"],"acceptance":"inspect exact runtime ownership, helper containment binding and failure paths"},
     {"id":"I1","workstream":"root-integration","status":"core-release-preflight-tests-pass-companions-pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
   ],
