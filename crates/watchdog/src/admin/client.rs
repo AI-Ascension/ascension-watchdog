@@ -55,7 +55,7 @@ impl AdminClientConfig {
             capability,
             timeout: Duration::from_secs(5),
             #[cfg(windows)]
-            expected_server_executable: None,
+            expected_server_executable: Some(std::env::current_exe()?),
         };
         config.validate()
     }
@@ -68,7 +68,8 @@ impl AdminClientConfig {
 
     /// Require the Windows server process image to match this executable.
     /// The native client always checks a held server PID and creation
-    /// identity; this option adds the exact image allowlist check.
+    /// identity and an exact image allowlist check. By default the server must
+    /// use the current executable; this overrides that explicit image identity.
     #[cfg(windows)]
     pub fn with_server_executable(mut self, executable: impl Into<PathBuf>) -> Result<Self> {
         self.expected_server_executable = Some(executable.into());
@@ -197,6 +198,25 @@ impl AdminClient {
             idempotency_key,
             AdminCommand::Status(super::protocol::EmptyParams::default()),
         )
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_server_identity_is_the_current_executable() -> Result<()> {
+        let config = AdminClientConfig::new(
+            r"\\.\pipe\ascension-watchdog-config-test",
+            r"C:\watchdog\read.token",
+            Capability::Read,
+        )?;
+        assert_eq!(
+            config.expected_server_executable,
+            Some(std::env::current_exe()?)
+        );
+        Ok(())
     }
 }
 

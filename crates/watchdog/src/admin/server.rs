@@ -68,7 +68,7 @@ impl AdminServerConfig {
             endpoint: endpoint.into(),
             auth,
             max_clients: MAX_CLIENTS,
-            worker_count: MAX_CLIENT_WORKERS,
+            worker_count: if cfg!(windows) { 1 } else { MAX_CLIENT_WORKERS },
             io_timeout: Duration::from_secs(5),
             idempotency_capacity: MAX_IDEMPOTENCY_RECORDS,
             #[cfg(windows)]
@@ -119,6 +119,11 @@ impl AdminServerConfig {
 
     fn validate(self) -> Result<Self> {
         super::validate_endpoint_path(&self.endpoint)?;
+        if cfg!(windows) && self.worker_count != 1 {
+            return Err(WatchdogError::InvalidInput(
+                "Windows admin transport requires exactly one exclusive pipe worker".to_string(),
+            ));
+        }
         if self.max_clients == 0 || self.max_clients > MAX_CLIENTS {
             return Err(WatchdogError::InvalidInput(format!(
                 "max_clients must be 1..={MAX_CLIENTS}"
@@ -811,6 +816,20 @@ fn read_frame(
         .read_exact(&mut frame)
         .map_err(|_| FrameReadError::Io)?;
     Ok(frame)
+}
+
+#[cfg(all(test, windows))]
+mod windows_config_tests {
+    use super::*;
+
+    #[test]
+    fn exclusive_endpoint_defaults_to_one_worker_and_rejects_more() -> Result<()> {
+        let auth = AuthReferences::new(r"C:\watchdog\read.token", r"C:\watchdog\admin.token")?;
+        let config = AdminServerConfig::new(r"\\.\pipe\ascension-watchdog-config-test", auth)?;
+        assert_eq!(config.worker_count, 1);
+        assert!(config.with_worker_count(2).is_err());
+        Ok(())
+    }
 }
 
 fn decode_request(frame: &[u8]) -> std::result::Result<AdminRequest, String> {
