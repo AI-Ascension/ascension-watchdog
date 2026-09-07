@@ -57,6 +57,71 @@ fn claim_witness(binding: &WorkerBinding, control: &WorkerControlWitness) -> Wor
 }
 
 #[test]
+fn failed_terminal_acknowledgment_remains_readable_after_reopen() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (mut store, config) = fixture(&temp);
+    let binding = binding(&config);
+    let control = control(&binding);
+    store
+        .configure_worker_binding_at(&binding, 1)
+        .expect("binding");
+    store.set_worker_control_at(&control, 2).expect("control");
+    let witness = claim_witness(&binding, &control);
+    store
+        .submit_job_at(WORKER_HANDOFF_OPERATION, &json!({}), 3)
+        .expect("job");
+    let claim = store
+        .claim_next_worker_handoff(&witness, 3)
+        .expect("claim")
+        .expect("handoff");
+    let tuple = claim.tuple();
+    store
+        .mark_worker_handoff_may_have_been_dispatched_at(&tuple, 4)
+        .expect("dispatch");
+    let receipt = WorkerTerminalReceipt {
+        status: WorkerTerminalStatus::Failed,
+        checkpoint_sequence: 1,
+        terminal_ref: "failed-terminal-ref".to_owned(),
+        result_digest: "f".repeat(64),
+    };
+    let completion = store
+        .complete_worker_handoff_at(&tuple, &receipt, 5)
+        .expect("failure");
+    store
+        .acknowledge_worker_handoff_at(&tuple, &completion.terminal_digest, 6)
+        .expect("ack");
+    let acknowledged = store
+        .worker_handoff(&claim.handoff_id)
+        .expect("acknowledged read")
+        .expect("retained handoff");
+    assert_eq!(acknowledged.state, WorkerHandoffState::Acknowledged);
+    assert_eq!(
+        acknowledged.job.status,
+        ascension_watchdog::JobStatus::Failed
+    );
+    drop(store);
+    let mut reopened = Store::open(&config.database, &config).expect("reopen");
+    assert!(
+        reopened
+            .acknowledge_worker_handoff_at(&tuple, &completion.terminal_digest, 7)
+            .expect("duplicate ack")
+            .already_acknowledged
+    );
+    assert!(
+        reopened
+            .complete_worker_handoff_at(&tuple, &receipt, 8)
+            .expect("duplicate failure")
+            .already_completed
+    );
+    assert!(
+        reopened
+            .claim_next_worker_handoff(&witness, 9)
+            .expect("no retry")
+            .is_none()
+    );
+}
+
+#[test]
 fn claim_persists_full_tuple_and_requires_exact_preflight() {
     let temp = tempfile::tempdir().expect("tempdir");
     let (mut store, config) = fixture(&temp);

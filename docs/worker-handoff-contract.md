@@ -117,6 +117,9 @@ claim. Dispatch, lookup, and acknowledgment carry the complete handoff tuple.
 5. The watchdog validates and commits its matching completion plus acknowledgment
    intent atomically, then sends acknowledgment. Repeated matching acknowledgments
    are harmless. Lost acknowledgment never returns the job to the queue.
+   Acknowledgment is delivery state, not a successful execution outcome. The
+   retained terminal receipt determines whether job/attempt projections must
+   remain completed or failed, including after owner-store reopen.
 
 The only commands are probe, dispatch, lookup, acknowledge, and set-control-mode.
 Lookup never starts/resumes an episode; missing, running, rejected, transport
