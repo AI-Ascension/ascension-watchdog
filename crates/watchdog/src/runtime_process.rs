@@ -1153,11 +1153,7 @@ fn authorize_linux_helper(
             "Linux helper has no unique prepared durable launch intent".to_owned(),
         ));
     }
-    if !planned.as_str().starts_with("cgroup-v2:") {
-        return Err(AdapterError::Invalid(
-            "Linux containment identity is malformed".to_owned(),
-        ));
-    }
+    validate_planned_cgroup_leaf(&request.cgroup_path, planned.as_str())?;
     verify_current_cgroup_full_path(&request.cgroup_path)?;
     if !request.cgroup_path.is_absolute() {
         return Err(AdapterError::IdentityMismatch(
@@ -1179,12 +1175,28 @@ fn authorize_linux_helper(
     })
 }
 
-/// Verify the helper's complete cgroup path, not only the generated leaf
-/// name.  A basename check could authorize an identically named cgroup below
-/// another mount or delegated subtree.  `/proc/self/cgroup` supplies the
-/// process-relative path and `/proc/self/mountinfo` supplies the cgroup v2
-/// mount point; both are compared after canonicalization.
+/// Bind the requested leaf to the exact containment persisted before launch.
 #[cfg(target_os = "linux")]
+fn validate_planned_cgroup_leaf(
+    requested: &Path,
+    planned: &str,
+) -> std::result::Result<(), AdapterError> {
+    let leaf = planned
+        .strip_prefix("cgroup-v2:")
+        .filter(|leaf| !leaf.is_empty())
+        .ok_or_else(|| {
+            AdapterError::Invalid("Linux containment identity is malformed".to_owned())
+        })?;
+    if requested.file_name().and_then(|name| name.to_str()) != Some(leaf) {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper cgroup path differs from durable containment intent".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+/// Also verify actual membership using the complete cgroup path.
 fn verify_current_cgroup_full_path(requested: &Path) -> std::result::Result<(), AdapterError> {
     if !requested.is_absolute() {
         return Err(AdapterError::Invalid(
@@ -1289,6 +1301,22 @@ fn watchdog_to_adapter_error(error: WatchdogError) -> AdapterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn helper_membership_cannot_substitute_another_planned_containment() {
+        assert!(
+            validate_planned_cgroup_leaf(Path::new("/sys/fs/cgroup/owned"), "cgroup-v2:owned")
+                .is_ok()
+        );
+        assert!(
+            validate_planned_cgroup_leaf(Path::new("/sys/fs/cgroup/other"), "cgroup-v2:owned")
+                .is_err()
+        );
+        assert!(
+            validate_planned_cgroup_leaf(Path::new("/sys/fs/cgroup/owned"), "cgroup-v2:").is_err()
+        );
+    }
 
     #[test]
     fn incarnation_requires_positive_generation() {

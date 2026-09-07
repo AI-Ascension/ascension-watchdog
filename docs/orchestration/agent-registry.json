@@ -15,7 +15,7 @@
       {"path":"/root/job_admission","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"W9"},
       {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V18"},
       {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G4R"},
-      {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P5R"},
+      {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P7"},
       {"path":"/root/fixture_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V16"},
       {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G3R"},
       {"path":"/root/linux_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P6L"},
