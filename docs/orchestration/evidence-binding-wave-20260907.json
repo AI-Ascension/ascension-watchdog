@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-09-07T22:02:34Z",
+  "classification": "confirmed-local-candidates-not-a-release",
+  "root_parent_thread_id": "01a078a4-d17d-7101-afa1-9e68655beedd",
+  "maximum_reserved_descendants": 12,
+  "reserved_descendants": 7,
+  "open_descendants": 5,
+  "observed_depth": 1,
+  "required_depth": 3,
+  "nested_orchestration_status": "unmet; two additional slots reserved for native descendants only if the current lead exposes genuine delegation tools",
+  "model_evidence": "Native session_meta parent/depth/path plus executed turn_context model and effort; not self-description.",
+  "agents": [
+    {
+      "path": "/root/g62_allocation_review",
+      "thread_id": "01a07dc6-4d67-76a0-b036-8ed77460b5ef",
+      "depth": 1,
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "settings": "requested-accepted-observed",
+      "task": "G62-V2",
+      "status": "independent review rejected candidate; three executable negative regressions committed at 1b578573d1d50e83dab4dc8c7b4b0dc4d3097844; awaiting root repair"
+    },
+    {
+      "path": "/root/g63_storage_review_lead",
+      "thread_id": "01a07dc8-8998-7853-8c7e-6013de5e9ad4",
+      "depth": 1,
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "settings": "requested-accepted-observed",
+      "task": "G63-V",
+      "reserved_subtree_slots": 3,
+      "status": "independent protected recovery journal and native storage review executing; nested capability answer pending"
+    },
+    {
+      "path": "/root/h32_allocation_consumer_finish",
+      "thread_id": "01a07dcd-a963-7172-944e-16fd05ea730f",
+      "depth": 1,
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "settings": "requested-accepted-observed",
+      "task": "H32",
+      "status": "isolated allocation authority consumer and strict raw HTTP validation implementation; original dirty worktree preserved"
+    },
+    {
+      "path": "/root/w36_worker_storage_finish",
+      "thread_id": "01a07dce-9d0c-7f33-8415-f200d7547472",
+      "depth": 1,
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "settings": "requested-accepted-observed",
+      "task": "W36",
+      "status": "isolated durable worker handoff storage implementation and fault tests; original dirty worktree preserved"
+    },
+    {
+      "path": "/root/h27_recovery_evidence_review",
+      "depth": 1,
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "settings": "requested-accepted; native execution metadata not yet inspected",
+      "task": "H27-V2",
+      "status": "independent review assigned against exact 431359d39fa05981f036861d7ee8d59643b47e41"
+    }
+  ],
+  "candidate_commits": {
+    "ascension-watchdog": {
+      "implementation_head": "89071d742376978ca1465bacd070cf3c0f0b903c",
+      "note": "No companion candidate in this wave has been integrated into the release manifest."
+    },
+    "sts2-gateway": {
+      "implementation": "773da0051d0d815fee814d639bcc937494866c84",
+      "evidence": "6ce8638b99d0cb45b7a6f80a27e17f2ddf1fca10",
+      "status": "rejected by independent review; three failing regression tests now reproduced"
+    },
+    "sts2-game-mod": {
+      "implementation": "0d86eedee208bb773dad5fa2aaa362325846c4b4",
+      "evidence": "13a488fd815415f7453b820d771196dc5883528a",
+      "status": "root Linux and native Windows synthetic storage/crash checks passed; independent review pending"
+    },
+    "sts2-harness": {
+      "implementation": "431359d39fa05981f036861d7ee8d59643b47e41",
+      "base_integration": "eace7adafdb3676ab3d797d5b14e5c6141333d96",
+      "preserved_base": "8f6bf7d030556ed42c28a88eb11fe5d59864ca50",
+      "status": "root gates passed; independent review pending; immutable per-operation original context remains unfinished",
+      "root_tests": "248 workspace tests including 97 runtime tests; format, strict policy, Clippy and build passed",
+      "debug_runtime_sha256": "3bc746ded1417739ea3d91ca367e93822d0803c1dea50114f0809e7c2f500d6e"
+    }
+  },
+  "next_dependency_edges": [
+    "G62 negative regressions -> root cleanup/activation/grant-binding repair -> independent re-review",
+    "G63 independent findings -> owner repair -> exact Linux and Windows rerun",
+    "H32 validated allocation capture + H27 reviewed evidence consumer -> H33 immutable original context per operation and fresh authority handoff",
+    "W36 storage -> worker client/config integration -> durable completion handoff fault campaign",
+    "all reviewed companions -> immutable release manifest -> exact cross-binary fault campaign -> authorized platform/live/reboot/soak lanes"
+  ],
+  "release_ready": false,
+  "remote_delivery_completed": false,
+  "services_installed_in_this_wave": false,
+  "game_or_provider_launched_in_this_wave": false,
+  "hosts_rebooted_in_this_wave": false,
+  "release_activated_in_this_wave": false
+}
