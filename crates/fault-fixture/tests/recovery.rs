@@ -73,6 +73,7 @@ fn remove_database(path: &PathBuf) {
     let _ = fs::remove_file(path);
     let _ = fs::remove_file(path.with_extension("sqlite-wal"));
     let _ = fs::remove_file(path.with_extension("sqlite-shm"));
+    let _ = fs::remove_file(path.with_extension("sqlite.lock"));
 }
 
 trait ChildWaitTimeout {
@@ -137,9 +138,14 @@ fn digest(value: &str) -> String {
 
 fn operation(lease: &Value, suffix: &str) -> (Value, Value) {
     let operation_id = Uuid::new_v4().to_string();
-    let payload_digest = digest(suffix);
+    // RCJ-1 canonical bytes are the payload identity. `suffix` is retained in
+    // the test name/effect campaign, never smuggled into the action digest.
+    let canonical_json = "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"action-end-turn\"}";
+    let canonical_json_b64 =
+        "eyJhY3Rpb24iOnsia2luZCI6ImVuZF90dXJuIn0sImFjdGlvbl9pZCI6ImFjdGlvbi1lbmQtdHVybiJ9";
+    let payload_digest = digest(canonical_json);
     let original_context = json!({
-        "deployment_id": Uuid::new_v4(), "instance_id": Uuid::new_v4(),
+        "deployment_id": lease["deployment_id"], "instance_id": lease["instance_id"],
         "instance_incarnation": lease["instance_incarnation"], "boot_id": lease["boot_id"],
         "authority_generation": lease["authority_generation"], "lease_id": lease["lease_id"],
         "lease_epoch": lease["lease_epoch"]
@@ -149,7 +155,7 @@ fn operation(lease: &Value, suffix: &str) -> (Value, Value) {
     });
     let action = json!({
         "schema_digest": RUNTIME_V3_SCHEMA_DIGEST,
-        "canonical_json_b64": "eyJhY3Rpb25faWQiOiJlbmRfdHVybiJ9",
+        "canonical_json_b64": canonical_json_b64,
         "payload_digest": payload_digest
     });
     let value = json!({
@@ -160,6 +166,7 @@ fn operation(lease: &Value, suffix: &str) -> (Value, Value) {
         "operation_id": value["operation_id"], "payload_digest": value["payload_digest"],
         "original_context": value["original_context"]
     });
+    let _ = suffix;
     (value, reference)
 }
 

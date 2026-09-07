@@ -1,0 +1,24 @@
+{
+  "contract": "watchdog-recovery-v1",
+  "schema_digest": "fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217",
+  "message_id": "55090000-5555-4555-8555-555555555555",
+  "correlation_id": "66666666-6666-4666-8666-666666666666",
+  "sent_at": "2026-09-06T22:30:00Z",
+  "actor": {
+    "principal_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    "role": "gateway"
+  },
+  "auth": {
+    "principal_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    "capability": "lease_revoke",
+    "proof": "contract-test-proof"
+  },
+  "kind": "lease_revoke_response",
+  "payload": {
+    "result": {
+      "status": "LEASE_REVOKED",
+      "retryable": false,
+      "retry_after_seconds": null
+    }
+  }
+}
