@@ -290,16 +290,15 @@ fn validate_canonical_number_lexemes(bytes: &[u8]) -> Result<(), ProtocolError> 
             byte if byte.is_ascii_digit() => {
                 let start = index;
                 while index < bytes.len()
-                    && matches!(
-                        bytes[index],
-                        b'0'..=b'9' | b'e' | b'E' | b'+' | b'-' | b'.'
-                    )
+                    && matches!(bytes[index], b'0'..=b'9' | b'e' | b'E' | b'+' | b'-' | b'.')
                 {
                     index += 1;
                 }
                 let lexeme = &bytes[start..index];
                 let is_decimal = lexeme == b"0"
-                    || (lexeme.first().is_some_and(|byte| (b'1'..=b'9').contains(byte))
+                    || (lexeme
+                        .first()
+                        .is_some_and(|byte| (b'1'..=b'9').contains(byte))
                         && lexeme[1..].iter().all(u8::is_ascii_digit));
                 if !is_decimal {
                     return Err(ProtocolError::InvalidNumber(

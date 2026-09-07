@@ -297,21 +297,13 @@ fn nested_terminal_fields_are_closed_and_status_correlated() {
 #[test]
 fn numeric_lexemes_are_canonical_unsigned_decimals() {
     for (fixture, needle, replacement) in [
-        (
-            "dispatch",
-            "\"timeout_ms\": 5000",
-            "\"timeout_ms\": 1.0",
-        ),
+        ("dispatch", "\"timeout_ms\": 5000", "\"timeout_ms\": 1.0"),
         (
             "dispatch",
             "\"attempt_number\": 1",
             "\"attempt_number\": 1e0",
         ),
-        (
-            "dispatch",
-            "\"mode_sequence\": 1",
-            "\"mode_sequence\": -0",
-        ),
+        ("dispatch", "\"mode_sequence\": 1", "\"mode_sequence\": -0"),
         (
             "dispatch-response",
             "\"checkpoint_sequence\": 12",
@@ -328,11 +320,7 @@ fn numeric_lexemes_are_canonical_unsigned_decimals() {
     }
 
     for (fixture, needle, replacement) in [
-        (
-            "dispatch",
-            "\"timeout_ms\": 5000",
-            "\"timeout_ms\": 5001",
-        ),
+        ("dispatch", "\"timeout_ms\": 5000", "\"timeout_ms\": 5001"),
         (
             "dispatch",
             "\"attempt_number\": 1",
