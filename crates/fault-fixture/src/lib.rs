@@ -1795,19 +1795,27 @@ impl DurableHost {
             .ok_or_else(|| FixtureError::Invalid("expected boundary missing".to_owned()))?;
         let context_json = bounded_json(original_context, 4096)?;
         let boundary_json = bounded_json(expected_boundary, 4096)?;
-        let existing: Option<(String, String, String, String)> = self
+        let existing: Option<(String, String, String, String, String)> = self
             .connection
             .query_row(
-                "SELECT payload_digest, state, original_context_json, action_json FROM operations WHERE operation_id = ?1",
+                "SELECT payload_digest, state, original_context_json, action_json, expected_boundary_json FROM operations WHERE operation_id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()
             .map_err(FixtureError::Sql)?;
-        if let Some((existing_digest, state, existing_context, existing_action)) = existing {
+        if let Some((
+            existing_digest,
+            state,
+            existing_context,
+            existing_action,
+            existing_boundary,
+        )) = existing
+        {
             if existing_digest != digest_value
                 || existing_context != context_json
                 || existing_action != action_json
+                || existing_boundary != boundary_json
             {
                 return self.operation_response(frame, "CONFLICT", &id);
             }
