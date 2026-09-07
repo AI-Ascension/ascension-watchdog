@@ -29,14 +29,6 @@ const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 #[cfg(unix)]
 const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[cfg(all(test, unix))]
-static PROCESS_GROUP_SIGNAL_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(all(test, unix))]
-static FORCE_GROUP_CLEANUP_FAILURE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
 /// Immutable launch identity.  It is persisted alongside the component state
 /// and is intentionally richer than a PID.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,6 +40,65 @@ pub struct ProcessIdentity {
     pub started_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creation_fingerprint: Option<String>,
+}
+
+/// Failure from the portable child launcher. `CleanupUncertain` means that
+/// the launch may have created a process group whose cleanup could not be
+/// proven before the bounded deadline; callers must retain/quarantine the
+/// corresponding launch intent instead of treating this as an ordinary
+/// rejected launch.
+#[derive(Debug)]
+pub enum ProcessSpawnError {
+    Ordinary(WatchdogError),
+    CleanupUncertain(WatchdogError),
+}
+
+impl ProcessSpawnError {
+    /// Convert to the legacy process error used by callers that do not need
+    /// cleanup classification.
+    #[must_use]
+    pub fn into_watchdog_error(self) -> WatchdogError {
+        match self {
+            Self::Ordinary(error) | Self::CleanupUncertain(error) => error,
+        }
+    }
+
+    /// True when process creation may have left exact containment unsettled.
+    #[must_use]
+    pub fn is_cleanup_uncertain(&self) -> bool {
+        matches!(self, Self::CleanupUncertain(_))
+    }
+}
+
+impl std::fmt::Display for ProcessSpawnError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ordinary(error) => write!(formatter, "ordinary process spawn failure: {error}"),
+            Self::CleanupUncertain(error) => {
+                write!(formatter, "process spawn cleanup is uncertain: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProcessSpawnError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Ordinary(error) | Self::CleanupUncertain(error) => Some(error),
+        }
+    }
+}
+
+impl From<WatchdogError> for ProcessSpawnError {
+    fn from(error: WatchdogError) -> Self {
+        Self::Ordinary(error)
+    }
+}
+
+impl From<std::io::Error> for ProcessSpawnError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Ordinary(WatchdogError::Io(error))
+    }
 }
 
 /// Bounded captured child output.  Output is diagnostic only and never used as
@@ -86,6 +137,10 @@ struct ProcessGroupAuthority {
     /// identifier is retained as diagnostic state but can never be signalled.
     pgid: Pid,
     leader_reaped: bool,
+    #[cfg(test)]
+    force_cleanup_failure: bool,
+    #[cfg(test)]
+    signal_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[cfg(unix)]
@@ -94,6 +149,10 @@ impl ProcessGroupAuthority {
         Self {
             pgid,
             leader_reaped: false,
+            #[cfg(test)]
+            force_cleanup_failure: false,
+            #[cfg(test)]
+            signal_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -114,6 +173,9 @@ impl ProcessGroupAuthority {
                 "owned child process-group authority was already disarmed".to_owned(),
             ));
         }
+        #[cfg(test)]
+        self.signal_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match signal_process_group(self.pgid) {
             Ok(()) => Ok(()),
             Err(error)
@@ -132,7 +194,7 @@ impl ProcessGroupAuthority {
     /// `/proc` to distinguish the leader from remaining group members.
     fn cleanup_before_reap(&self, leader_pid: u32, deadline: Instant) -> Result<()> {
         #[cfg(test)]
-        if FORCE_GROUP_CLEANUP_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.force_cleanup_failure {
             return Err(WatchdogError::Timeout(
                 "injected process-group cleanup proof failure".to_owned(),
             ));
@@ -186,6 +248,18 @@ impl std::fmt::Debug for OwnedChild {
 impl OwnedChild {
     /// Spawn one approved component directly (without a shell or proxy).
     pub fn spawn(spec: &ComponentConfig, now_ms: u64) -> Result<Self> {
+        Self::spawn_with_cleanup_status(spec, now_ms)
+            .map_err(ProcessSpawnError::into_watchdog_error)
+    }
+
+    /// Spawn one approved component and preserve whether a failed launch left
+    /// exact process-group cleanup uncertain. This is the durable-runtime
+    /// entrypoint; [`OwnedChild::spawn`] remains the compatibility wrapper for
+    /// callers that only need a legacy `WatchdogError`.
+    pub fn spawn_with_cleanup_status(
+        spec: &ComponentConfig,
+        now_ms: u64,
+    ) -> std::result::Result<Self, ProcessSpawnError> {
         validate_component(spec)?;
         let executable = std::fs::canonicalize(&spec.executable).map_err(|error| {
             WatchdogError::InvalidInput(format!(
@@ -195,17 +269,18 @@ impl OwnedChild {
         })?;
         let metadata = std::fs::metadata(&executable)?;
         if !metadata.is_file() {
-            return Err(WatchdogError::InvalidInput(format!(
-                "component {} executable is not a regular file",
-                spec.id
+            return Err(ProcessSpawnError::Ordinary(WatchdogError::InvalidInput(
+                format!("component {} executable is not a regular file", spec.id),
             )));
         }
         let executable_digest = hash_file(&executable)?;
         if let Some(expected) = &spec.executable_sha256 {
             if expected != &executable_digest {
-                return Err(WatchdogError::Conflict(format!(
-                    "component {} executable digest does not match approved bytes",
-                    spec.id
+                return Err(ProcessSpawnError::Ordinary(WatchdogError::Conflict(
+                    format!(
+                        "component {} executable digest does not match approved bytes",
+                        spec.id
+                    ),
                 )));
             }
         }
@@ -213,9 +288,8 @@ impl OwnedChild {
             Some(path) => {
                 let canonical = std::fs::canonicalize(path)?;
                 if !canonical.is_dir() {
-                    return Err(WatchdogError::InvalidInput(format!(
-                        "component {} cwd is not a directory",
-                        spec.id
+                    return Err(ProcessSpawnError::Ordinary(WatchdogError::InvalidInput(
+                        format!("component {} cwd is not a directory", spec.id),
                     )));
                 }
                 Some(canonical)
@@ -277,7 +351,7 @@ impl OwnedChild {
                 {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(error);
+                    return Err(ProcessSpawnError::Ordinary(error));
                 }
             }
         };
@@ -298,7 +372,7 @@ impl OwnedChild {
             {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error);
+                return Err(ProcessSpawnError::Ordinary(error));
             }
         }
         let output = Arc::new(Mutex::new(BoundedOutput::default()));
@@ -550,8 +624,6 @@ fn observe_child_exit(child: &mut Child) -> Result<Option<()>> {
 
 #[cfg(unix)]
 fn signal_process_group(pgid: Pid) -> std::io::Result<()> {
-    #[cfg(test)]
-    PROCESS_GROUP_SIGNAL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     kill_process_group(pgid, Signal::KILL).map_err(std::io::Error::from)
 }
 
@@ -612,12 +684,14 @@ fn abort_spawned_child(
 }
 
 #[cfg(unix)]
-fn report_spawn_cleanup(original: WatchdogError, cleanup: Result<()>) -> WatchdogError {
+fn report_spawn_cleanup(original: WatchdogError, cleanup: Result<()>) -> ProcessSpawnError {
     match cleanup {
-        Ok(()) => original,
-        Err(cleanup_error) => WatchdogError::Conflict(format!(
-            "spawn failed ({original}); exact containment cleanup is uncertain ({cleanup_error})"
-        )),
+        Ok(()) => ProcessSpawnError::Ordinary(original),
+        Err(cleanup_error) => {
+            ProcessSpawnError::CleanupUncertain(WatchdogError::Conflict(format!(
+                "spawn failed ({original}); exact containment cleanup is uncertain ({cleanup_error})"
+            )))
+        }
     }
 }
 
@@ -917,10 +991,10 @@ mod tests {
 
     #[test]
     fn repeated_cleanup_after_reap_never_reuses_numeric_group_authority() {
-        PROCESS_GROUP_SIGNAL_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut child = OwnedChild::spawn(&immediate_component(), 1_000).expect("spawn");
+        let signal_count = Arc::clone(&child.process_group.signal_count);
         child.wait().expect("wait and clean exact group");
-        let after_reap = PROCESS_GROUP_SIGNAL_COUNT.load(std::sync::atomic::Ordering::SeqCst);
+        let after_reap = signal_count.load(std::sync::atomic::Ordering::SeqCst);
         assert!(after_reap > 0, "cleanup must signal the original group");
 
         let repeated = child.terminate(Duration::from_millis(100));
@@ -930,7 +1004,7 @@ mod tests {
         );
         drop(child);
         assert_eq!(
-            PROCESS_GROUP_SIGNAL_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            signal_count.load(std::sync::atomic::Ordering::SeqCst),
             after_reap,
             "terminate/Drop must not signal a recycled numeric PGID"
         );
@@ -938,16 +1012,8 @@ mod tests {
 
     #[test]
     fn injected_cleanup_proof_failure_returns_without_unbounded_reap() {
-        struct FailureGuard;
-        impl Drop for FailureGuard {
-            fn drop(&mut self) {
-                FORCE_GROUP_CLEANUP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
-
-        FORCE_GROUP_CLEANUP_FAILURE.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _guard = FailureGuard;
         let mut child = OwnedChild::spawn(&immediate_component(), 1_000).expect("spawn");
+        child.process_group.force_cleanup_failure = true;
         let started = Instant::now();
         let result = abort_spawned_child(
             &mut child.child,
@@ -960,7 +1026,7 @@ mod tests {
         );
         assert!(result.is_err(), "injected cleanup failure must be reported");
 
-        FORCE_GROUP_CLEANUP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
+        child.process_group.force_cleanup_failure = false;
         cleanup_spawned_child(
             &mut child.child,
             &mut child.process_group,
