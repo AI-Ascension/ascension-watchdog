@@ -85,6 +85,88 @@ impl std::fmt::Debug for ComponentConfig {
     }
 }
 
+/// References for authenticated local operator control. Validation is pure:
+/// credential files are opened only by the transport at service startup.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminConfig {
+    pub endpoint: PathBuf,
+    pub read_token_path: PathBuf,
+    pub admin_token_path: PathBuf,
+    #[serde(default)]
+    pub allowed_peer_sid: Option<String>,
+}
+
+impl std::fmt::Debug for AdminConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("AdminConfig { protected_references: <redacted> }")
+    }
+}
+
+impl AdminConfig {
+    /// Validate syntax without creating endpoints, reading secrets, or opening state.
+    pub fn validate(&self) -> Result<()> {
+        for path in [&self.read_token_path, &self.admin_token_path] {
+            validate_local_path(path, "admin credential reference")?;
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(WatchdogError::InvalidInput(
+                    "admin credential references must be absolute without traversal".to_owned(),
+                ));
+            }
+        }
+        if self.read_token_path == self.admin_token_path {
+            return Err(WatchdogError::InvalidInput(
+                "read and admin credential references must differ".to_owned(),
+            ));
+        }
+        let endpoint = self.endpoint.to_string_lossy();
+        if endpoint.len() > 240 || endpoint.contains('\0') || endpoint.is_empty() {
+            return Err(WatchdogError::InvalidInput(
+                "admin endpoint is outside bounds".to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            validate_local_path(&self.endpoint, "admin endpoint")?;
+            if !self.endpoint.is_absolute()
+                || endpoint.len() > 100
+                || self
+                    .endpoint
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+                || self.allowed_peer_sid.is_some()
+            {
+                return Err(WatchdogError::InvalidInput("Unix admin endpoint must be a bounded absolute socket path without a Windows SID".to_owned()));
+            }
+        }
+        #[cfg(windows)]
+        if !endpoint.starts_with(r"\\.\pipe\ascension-watchdog-")
+            || endpoint[9..].contains(['/', '\\'])
+        {
+            return Err(WatchdogError::InvalidInput(
+                "admin pipe must use the restricted local namespace".to_owned(),
+            ));
+        }
+        if let Some(sid) = &self.allowed_peer_sid {
+            if sid.len() > 184
+                || !sid.starts_with("S-1-")
+                || !sid[4..]
+                    .split('-')
+                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                return Err(WatchdogError::InvalidInput(
+                    "admin peer SID syntax is invalid".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Top-level watchdog configuration.  Unknown fields are rejected so a typo
 /// cannot silently weaken an admission or process policy.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -151,6 +233,9 @@ pub struct WatchdogConfig {
     /// harness roles, and pin executable bytes with SHA-256.
     #[serde(default)]
     pub allow_synthetic_children: bool,
+    /// Explicit local authenticated control endpoint and protected credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin: Option<AdminConfig>,
 }
 
 impl Default for WatchdogConfig {
@@ -175,6 +260,7 @@ impl Default for WatchdogConfig {
             provider_timeout_secs: default_provider_timeout_secs(),
             components: Vec::new(),
             allow_synthetic_children: false,
+            admin: None,
         }
     }
 }
@@ -213,6 +299,9 @@ impl WatchdogConfig {
 
     /// Validate closed bounded values and local-storage policy.
     pub fn validate(&self) -> Result<()> {
+        if let Some(admin) = &self.admin {
+            admin.validate()?;
+        }
         if self.schema_version != 1 {
             return Err(WatchdogError::InvalidInput(format!(
                 "unsupported config schema {}",
