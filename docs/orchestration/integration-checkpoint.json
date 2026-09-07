@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "superseded_by": "resumed-integration-checkpoint.json",
   "classification": "confirmed-source-state-not-a-release",
   "purpose": "Resumable source integration checkpoint; no binary activation authority",
   "root_commit": "4e555937b4bdbb6efc753dafd42d1658b8f5f815",
