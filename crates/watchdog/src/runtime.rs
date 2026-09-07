@@ -2,22 +2,26 @@
 
 #[path = "runtime_admin.rs"]
 pub(crate) mod runtime_admin;
+#[path = "runtime_process.rs"]
+pub(crate) mod runtime_process;
 
+use self::runtime_process::{
+    RuntimeChild, RuntimeObservation, RuntimeProcessManager, RuntimeStopOutcome,
+    platform_component_kind, runtime_incarnation,
+};
 use crate::config::{ComponentConfig, DesiredMode, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 use crate::policy::{
     ComponentObservation, ComponentState, ReconcileAction, ReconcileDecision, SupervisorPolicy,
 };
-use crate::process::{OwnedChild, ProcessIdentity, ensure_identity};
-use crate::storage::{ComponentRecord, SingletonLock, Store, now_unix_ms};
+use crate::process::{ProcessIdentity, ensure_identity};
+use crate::storage::{ComponentRecord, LaunchIntentState, SingletonLock, Store, now_unix_ms};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 use uuid::Uuid;
-
-const CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A single loop's bounded result, useful for diagnostics and tests.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -37,7 +41,8 @@ pub struct Supervisor {
     pub(crate) store: Store,
     config: WatchdogConfig,
     policy: SupervisorPolicy,
-    children: BTreeMap<String, OwnedChild>,
+    children: BTreeMap<String, RuntimeChild>,
+    process_manager: RuntimeProcessManager,
     lock: Option<SingletonLock>,
     worker_id: String,
     initialized_runtime: bool,
@@ -51,6 +56,25 @@ impl std::fmt::Debug for Supervisor {
             .field("children", &self.children.keys().collect::<Vec<_>>())
             .field("worker_id", &self.worker_id)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // Synthetic fixtures retain their direct Child drop semantics. Native
+        // handles carry only the durable platform identity after launch, so
+        // the platform authority must perform exact containment cleanup before
+        // those handles are discarded.
+        let ids = self
+            .children
+            .iter()
+            .filter_map(|(id, child)| child.is_native().then_some(id.clone()))
+            .collect::<Vec<_>>();
+        for id in ids {
+            if let Some(child) = self.children.get_mut(&id) {
+                let _ = self.process_manager.stop(child);
+            }
+        }
     }
 }
 
@@ -84,11 +108,13 @@ impl Supervisor {
 
     fn from_store(store: Store, config: WatchdogConfig) -> Self {
         let policy = SupervisorPolicy::from_config(&config);
+        let process_manager = RuntimeProcessManager::new(&config);
         Self {
             store,
             config,
             policy,
             children: BTreeMap::new(),
+            process_manager,
             lock: None,
             worker_id: format!("watchdog-{}", Uuid::new_v4()),
             initialized_runtime: false,
@@ -120,6 +146,7 @@ impl Supervisor {
             self.store.establish_new_generation(now_ms)?;
             self.store
                 .audit("reconciler_started", &self.worker_id, now_ms)?;
+            self.reconcile_persisted_launch_intents(now_ms)?;
             self.reconcile_persisted_identities(now_ms)?;
             self.initialized_runtime = true;
         }
@@ -144,6 +171,184 @@ impl Supervisor {
             now_ms,
         )?;
         Ok(report)
+    }
+
+    /// Reconcile launch intents before looking at legacy component rows.  A
+    /// proof-recorded/active native intent is the only durable route by which
+    /// a restarted supervisor may reconstruct an owned process handle.
+    #[allow(clippy::if_not_else)]
+    fn reconcile_persisted_launch_intents(&mut self, now_ms: u64) -> Result<()> {
+        let intents = self.store.unsettled_launch_intents()?;
+        for intent in intents {
+            let Some(component) = self
+                .config
+                .components
+                .iter()
+                .find(|component| component.id == intent.component_id)
+                .cloned()
+            else {
+                self.store.audit(
+                    "launch_intent_quarantined",
+                    &format!("{}:component_not_configured", intent.id),
+                    now_ms,
+                )?;
+                continue;
+            };
+            let Some(mut child) = self.process_manager.recover_intent(&self.config, &intent)?
+            else {
+                // A prepared intent has no proof, and a synthetic proof cannot
+                // reconstruct a Child handle.  Neither case authorizes a
+                // guessed PID cleanup or an immediate replacement launch.
+                let prior = self.store.component(&component.id)?;
+                self.store.upsert_component(
+                    &ComponentRecord {
+                        id: component.id.clone(),
+                        state: ComponentState::Quarantined,
+                        launch_nonce: Some(intent.launch_nonce.clone()),
+                        pid: prior.as_ref().and_then(|record| record.pid),
+                        executable_digest: prior
+                            .as_ref()
+                            .and_then(|record| record.executable_digest.clone()),
+                        started_at_ms: prior.as_ref().and_then(|record| record.started_at_ms),
+                        restart_attempts: prior
+                            .as_ref()
+                            .map_or(0, |record| record.restart_attempts),
+                        last_restart_at_ms: prior
+                            .as_ref()
+                            .and_then(|record| record.last_restart_at_ms),
+                        last_error: Some(
+                            "unreconstructable launch intent retained for operator quarantine"
+                                .to_owned(),
+                        ),
+                    },
+                    now_ms,
+                )?;
+                self.store.audit(
+                    "launch_intent_quarantined",
+                    &format!("{}:unreconstructable", intent.id),
+                    now_ms,
+                )?;
+                continue;
+            };
+            let observation = self.process_manager.inspect(&mut child)?;
+            match observation {
+                RuntimeObservation::Running => {
+                    if self.store.desired_mode()? != DesiredMode::Running {
+                        match self.process_manager.stop(&mut child) {
+                            Ok(
+                                RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited,
+                            ) => {
+                                self.store.clean_launch_intent(&intent.id, now_ms)?;
+                                self.store.clear_component_identity(&component.id, now_ms)?;
+                                self.store.upsert_component(
+                                    &ComponentRecord {
+                                        id: component.id.clone(),
+                                        state: ComponentState::Stopped,
+                                        launch_nonce: None,
+                                        pid: None,
+                                        executable_digest: None,
+                                        started_at_ms: None,
+                                        restart_attempts: self
+                                            .store
+                                            .component(&component.id)?
+                                            .map_or(0, |record| record.restart_attempts),
+                                        last_restart_at_ms: Some(now_ms),
+                                        last_error: None,
+                                    },
+                                    now_ms,
+                                )?;
+                            }
+                            Ok(RuntimeStopOutcome::TimedOut) | Err(_) => {
+                                self.store.audit(
+                                    "launch_intent_quarantined",
+                                    &format!("{}:stop_uncertain", intent.id),
+                                    now_ms,
+                                )?;
+                            }
+                        }
+                    } else {
+                        if intent.state == LaunchIntentState::ProofRecorded {
+                            self.store.activate_launch_intent(&intent.id, now_ms)?;
+                        }
+                        let identity = child.identity().clone();
+                        self.store
+                            .persist_component_identity(&component.id, &identity, now_ms)?;
+                        self.children.insert(component.id.clone(), child);
+                        self.store.audit(
+                            "launch_intent_recovered",
+                            &format!("{}:pid={}", intent.id, identity.pid),
+                            now_ms,
+                        )?;
+                    }
+                }
+                RuntimeObservation::Exited { .. } | RuntimeObservation::Missing => {
+                    match self.process_manager.stop(&mut child) {
+                        Ok(RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited) => {}
+                        Ok(RuntimeStopOutcome::TimedOut) | Err(_) => {
+                            self.store.audit(
+                                "launch_intent_quarantined",
+                                &format!("{}:exited_cleanup_uncertain", intent.id),
+                                now_ms,
+                            )?;
+                            continue;
+                        }
+                    }
+                    self.store.clean_launch_intent(&intent.id, now_ms)?;
+                    self.store.clear_component_identity(&component.id, now_ms)?;
+                    let prior = self.store.component(&component.id)?;
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Stopped,
+                            launch_nonce: None,
+                            pid: None,
+                            executable_digest: None,
+                            started_at_ms: None,
+                            restart_attempts: prior
+                                .as_ref()
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: prior
+                                .as_ref()
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some("persisted launch exited before recovery".to_owned()),
+                        },
+                        now_ms,
+                    )?;
+                }
+                RuntimeObservation::IdentityMismatch | RuntimeObservation::Ambiguous => {
+                    let identity = child.identity().clone();
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Quarantined,
+                            launch_nonce: Some(identity.launch_nonce),
+                            pid: Some(identity.pid),
+                            executable_digest: Some(identity.executable_digest),
+                            started_at_ms: Some(identity.started_at_ms),
+                            restart_attempts: self
+                                .store
+                                .component(&component.id)?
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: self
+                                .store
+                                .component(&component.id)?
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some(
+                                "persisted process authority is ambiguous during recovery"
+                                    .to_owned(),
+                            ),
+                        },
+                        now_ms,
+                    )?;
+                    self.store.audit(
+                        "launch_intent_quarantined",
+                        &format!("{}:authority_ambiguous", intent.id),
+                        now_ms,
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Reconcile identities left by an earlier controller generation without
@@ -261,15 +466,50 @@ impl Supervisor {
     ) -> Result<ReconcileDecision> {
         let mut exited = None;
         if let Some(child) = self.children.get_mut(&component.id) {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    exited = Some(
-                        status
-                            .code()
-                            .map_or_else(|| "signal".to_string(), |code| code.to_string()),
-                    )
+            match self.process_manager.inspect(child) {
+                Ok(RuntimeObservation::Running) => {}
+                Ok(RuntimeObservation::Exited { code }) => {
+                    exited =
+                        Some(code.map_or_else(|| "signal".to_string(), |value| value.to_string()));
                 }
-                Ok(None) => {}
+                Ok(RuntimeObservation::Missing) => {
+                    exited = Some("missing".to_owned());
+                }
+                Ok(RuntimeObservation::IdentityMismatch | RuntimeObservation::Ambiguous) => {
+                    let identity = child.identity().clone();
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Quarantined,
+                            launch_nonce: Some(identity.launch_nonce),
+                            pid: Some(identity.pid),
+                            executable_digest: Some(identity.executable_digest),
+                            started_at_ms: Some(identity.started_at_ms),
+                            restart_attempts: self
+                                .store
+                                .component(&component.id)?
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: self
+                                .store
+                                .component(&component.id)?
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some(
+                                "native process authority reported an ambiguous identity"
+                                    .to_owned(),
+                            ),
+                        },
+                        now_ms,
+                    )?;
+                    report.quarantined.push(component.id.clone());
+                    self.children.remove(&component.id);
+                    return Ok(ReconcileDecision {
+                        component_id: component.id.clone(),
+                        action: ReconcileAction::Quarantine,
+                        resulting_state: ComponentState::Quarantined,
+                        reason: "native process identity is ambiguous".to_owned(),
+                        retry_at_ms: None,
+                    });
+                }
                 Err(error) => {
                     self.store.upsert_component(
                         &ComponentRecord {
@@ -304,8 +544,52 @@ impl Supervisor {
             }
         }
         if let Some(exit_code) = exited {
-            if let Some(child) = self.children.remove(&component.id) {
+            if let Some(mut child) = self.children.remove(&component.id) {
+                let cleanup = self.process_manager.stop(&mut child);
+                if !matches!(
+                    cleanup,
+                    Ok(RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited)
+                ) {
+                    let cleanup_error = cleanup.err().map_or_else(
+                        || "native containment cleanup timed out".to_owned(),
+                        |value| value.to_string(),
+                    );
+                    let identity = child.identity().clone();
+                    self.children.insert(component.id.clone(), child);
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Quarantined,
+                            launch_nonce: Some(identity.launch_nonce),
+                            pid: Some(identity.pid),
+                            executable_digest: Some(identity.executable_digest),
+                            started_at_ms: Some(identity.started_at_ms),
+                            restart_attempts: self
+                                .store
+                                .component(&component.id)?
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: self
+                                .store
+                                .component(&component.id)?
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some(format!(
+                                "exited process containment cleanup failed: {cleanup_error}"
+                            )),
+                        },
+                        now_ms,
+                    )?;
+                    report.quarantined.push(component.id.clone());
+                    return Ok(ReconcileDecision {
+                        component_id: component.id.clone(),
+                        action: ReconcileAction::Quarantine,
+                        resulting_state: ComponentState::Quarantined,
+                        reason: cleanup_error,
+                        retry_at_ms: None,
+                    });
+                }
                 let output = child.output();
+                let identity = child.identity().clone();
+                let intent_id = child.intent_id().to_owned();
                 let detail = format!(
                     "component={} exit={} stdout_bytes={} stderr_bytes={}",
                     component.id,
@@ -314,19 +598,48 @@ impl Supervisor {
                     output.stderr.len()
                 );
                 self.store.audit("component_exited", &detail, now_ms)?;
+                if let Err(error) = self.store.clean_launch_intent(&intent_id, now_ms) {
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Quarantined,
+                            launch_nonce: Some(identity.launch_nonce),
+                            pid: Some(identity.pid),
+                            executable_digest: Some(identity.executable_digest),
+                            started_at_ms: Some(identity.started_at_ms),
+                            restart_attempts: self
+                                .store
+                                .component(&component.id)?
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: self
+                                .store
+                                .component(&component.id)?
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some(format!(
+                                "child exited but launch intent cleanup failed: {error}"
+                            )),
+                        },
+                        now_ms,
+                    )?;
+                    report.quarantined.push(component.id.clone());
+                    return Ok(ReconcileDecision {
+                        component_id: component.id.clone(),
+                        action: ReconcileAction::Quarantine,
+                        resulting_state: ComponentState::Quarantined,
+                        reason: format!("launch intent cleanup failed: {error}"),
+                        retry_at_ms: None,
+                    });
+                }
+                self.store.clear_component_identity(&component.id, now_ms)?;
                 let prior = self.store.component(&component.id)?;
                 self.store.upsert_component(
                     &ComponentRecord {
                         id: component.id.clone(),
                         state: ComponentState::Stopped,
-                        launch_nonce: prior
-                            .as_ref()
-                            .and_then(|record| record.launch_nonce.clone()),
-                        pid: prior.as_ref().and_then(|record| record.pid),
-                        executable_digest: prior
-                            .as_ref()
-                            .and_then(|record| record.executable_digest.clone()),
-                        started_at_ms: prior.as_ref().and_then(|record| record.started_at_ms),
+                        launch_nonce: None,
+                        pid: None,
+                        executable_digest: None,
+                        started_at_ms: None,
                         restart_attempts: prior
                             .as_ref()
                             .map_or(0, |record| record.restart_attempts),
@@ -480,10 +793,31 @@ impl Supervisor {
         if self.store.desired_mode()? != DesiredMode::Running {
             return Ok(());
         }
-        // Persist-before-effect: this audit row is the launch intent.  A crash
-        // after it and before spawn is recoverable without claiming a child.
-        self.store
-            .audit("component_start_intent", &component.id, now_ms)?;
+        let status = self.store.status()?;
+        let incarnation = runtime_incarnation(status.restart_generation)?;
+        let launch_nonce = Uuid::new_v4().to_string();
+        let specification =
+            launch_spec_for(&self.config, component, launch_nonce.clone(), incarnation)?;
+        // Native capability is established before the durable intent.  This
+        // prevents a permanently prepared row from being created for a host
+        // where containment is unavailable.
+        self.process_manager.ensure_ready(&self.config)?;
+        let planned_containment = self
+            .process_manager
+            .planned_containment(&self.config, &specification)?;
+        let intent = self.store.prepare_launch_intent(
+            &component.id,
+            &launch_nonce,
+            Some(&planned_containment),
+            now_ms,
+        )?;
+        // Stop/pause may have committed while capability probing and intent
+        // preparation were in flight.  The fresh durable read is the final
+        // admission barrier.
+        if self.store.desired_mode()? != DesiredMode::Running {
+            self.store.clean_launch_intent(&intent.id, now_ms)?;
+            return Ok(());
+        }
         let restart_count = self.store.record_restart(
             &component.id,
             now_ms,
@@ -508,46 +842,144 @@ impl Supervisor {
             },
             now_ms,
         )?;
-        match OwnedChild::spawn(component, now_ms) {
-            Ok(child) => {
-                let identity = child.identity().clone();
-                self.store.upsert_component(
-                    &component_record(component, &identity, attempts, now_ms, None),
-                    now_ms,
-                )?;
-                self.store
-                    .persist_component_identity(&component.id, &identity, now_ms)?;
-                self.store.audit(
-                    "component_started",
-                    &format!(
-                        "{}:pid={};restart_count={restart_count}",
-                        component.id, identity.pid
-                    ),
-                    now_ms,
-                )?;
-                self.children.insert(component.id.clone(), child);
-                report.started.push(component.id.clone());
-            }
+        let child = match self.process_manager.launch(
+            &self.config,
+            component,
+            &specification,
+            &planned_containment,
+            &intent.id,
+            now_ms,
+        ) {
+            Ok(child) => child,
             Err(error) => {
+                let cleanup = self.store.clean_launch_intent(&intent.id, now_ms);
                 self.store.upsert_component(
                     &ComponentRecord {
                         id: component.id.clone(),
-                        state: ComponentState::Stopped,
+                        state: if cleanup.is_ok() {
+                            ComponentState::Stopped
+                        } else {
+                            ComponentState::Quarantined
+                        },
                         launch_nonce: None,
                         pid: None,
                         executable_digest: None,
                         started_at_ms: Some(now_ms),
                         restart_attempts: attempts,
                         last_restart_at_ms: Some(now_ms),
-                        last_error: Some(error.to_string()),
+                        last_error: Some(match cleanup {
+                            Ok(_) => error.to_string(),
+                            Err(clean_error) => {
+                                format!("{error}; launch-intent cleanup failed: {clean_error}")
+                            }
+                        }),
                     },
                     now_ms,
                 )?;
                 self.store.clear_component_identity(&component.id, now_ms)?;
                 report.errors.push(format!("{}: {error}", component.id));
+                return Ok(());
             }
+        };
+        let identity = child.identity().clone();
+        let proof = match RuntimeProcessManager::ownership_proof(&child) {
+            Ok(proof) => proof,
+            Err(error) => {
+                return self
+                    .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+            }
+        };
+        if let Err(error) = self.store.record_launch_proof(&intent.id, &proof, now_ms) {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
         }
+        if let Err(error) = self.store.upsert_component(
+            &component_record(component, &identity, attempts, now_ms, None),
+            now_ms,
+        ) {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+        }
+        if let Err(error) = self
+            .store
+            .persist_component_identity(&component.id, &identity, now_ms)
+        {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+        }
+        if let Err(error) = self.store.activate_launch_intent(&intent.id, now_ms) {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+        }
+        if let Err(error) = self.store.audit(
+            "component_started",
+            &format!(
+                "{}:pid={};restart_count={restart_count}",
+                component.id, identity.pid
+            ),
+            now_ms,
+        ) {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+        }
+        self.children.insert(component.id.clone(), child);
+        report.started.push(component.id.clone());
         Ok(())
+    }
+
+    fn abort_launched_child(
+        &mut self,
+        component: &ComponentConfig,
+        intent_id: &str,
+        mut child: RuntimeChild,
+        attempts: u32,
+        now_ms: u64,
+        error: WatchdogError,
+    ) -> Result<()> {
+        let identity = child.identity().clone();
+        let cleanup = self.process_manager.stop(&mut child);
+        let cleanup_ok = matches!(
+            cleanup,
+            Ok(RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited)
+        );
+        let intent_clean = cleanup_ok && self.store.clean_launch_intent(intent_id, now_ms).is_ok();
+        if intent_clean {
+            let _ = self.store.clear_component_identity(&component.id, now_ms);
+            let _ = self.store.upsert_component(
+                &ComponentRecord {
+                    id: component.id.clone(),
+                    state: ComponentState::Stopped,
+                    launch_nonce: Some(identity.launch_nonce),
+                    pid: Some(identity.pid),
+                    executable_digest: Some(identity.executable_digest),
+                    started_at_ms: Some(identity.started_at_ms),
+                    restart_attempts: attempts,
+                    last_restart_at_ms: Some(now_ms),
+                    last_error: Some(error.to_string()),
+                },
+                now_ms,
+            );
+        } else {
+            let cleanup_error = cleanup.err().map_or_else(
+                || "launch cleanup or intent cleanup failed".to_owned(),
+                |value| value.to_string(),
+            );
+            let _ = self.store.upsert_component(
+                &ComponentRecord {
+                    id: component.id.clone(),
+                    state: ComponentState::Quarantined,
+                    launch_nonce: Some(identity.launch_nonce),
+                    pid: Some(identity.pid),
+                    executable_digest: Some(identity.executable_digest),
+                    started_at_ms: Some(identity.started_at_ms),
+                    restart_attempts: attempts,
+                    last_restart_at_ms: Some(now_ms),
+                    last_error: Some(format!("{error}; exact cleanup failed: {cleanup_error}")),
+                },
+                now_ms,
+            );
+        }
+        Err(error)
     }
 
     fn stop_component(
@@ -604,7 +1036,7 @@ impl Supervisor {
         self.store
             .audit("component_stop_intent", &component.id, now_ms)?;
         let result = match self.children.get_mut(&component.id) {
-            Some(child) => child.terminate(CHILD_STOP_TIMEOUT),
+            Some(child) => self.process_manager.stop(child),
             None => {
                 return Err(WatchdogError::Conflict(
                     "owned child disappeared during termination".to_string(),
@@ -612,13 +1044,60 @@ impl Supervisor {
             }
         };
         match result {
-            Ok(status) => {
-                // The exact child has exited; only now release the owned
-                // handle and clear its persisted identity.
+            Ok(RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited) => {
+                let intent_id = self
+                    .children
+                    .get(&component.id)
+                    .map(RuntimeChild::intent_id)
+                    .ok_or_else(|| {
+                        WatchdogError::Conflict(
+                            "owned child disappeared during intent cleanup".to_owned(),
+                        )
+                    })?
+                    .to_owned();
+                if let Err(error) = self.store.clean_launch_intent(&intent_id, now_ms) {
+                    let identity = self
+                        .children
+                        .get(&component.id)
+                        .map(RuntimeChild::identity)
+                        .ok_or_else(|| {
+                            WatchdogError::Conflict(
+                                "owned child disappeared during intent cleanup".to_owned(),
+                            )
+                        })?
+                        .clone();
+                    self.store.upsert_component(
+                        &ComponentRecord {
+                            id: component.id.clone(),
+                            state: ComponentState::Quarantined,
+                            launch_nonce: Some(identity.launch_nonce),
+                            pid: Some(identity.pid),
+                            executable_digest: Some(identity.executable_digest),
+                            started_at_ms: Some(identity.started_at_ms),
+                            restart_attempts: self
+                                .store
+                                .component(&component.id)?
+                                .map_or(0, |record| record.restart_attempts),
+                            last_restart_at_ms: self
+                                .store
+                                .component(&component.id)?
+                                .and_then(|record| record.last_restart_at_ms),
+                            last_error: Some(format!(
+                                "exact process stopped but launch intent cleanup failed: {error}"
+                            )),
+                        },
+                        now_ms,
+                    )?;
+                    report.quarantined.push(component.id.clone());
+                    report.errors.push(format!("{}: {error}", component.id));
+                    return Ok(());
+                }
+                // The exact authority is gone and the durable intent is now
+                // cleaned; only then release the in-memory handle/identity.
                 self.children.remove(&component.id);
                 self.store.audit(
                     "component_stopped",
-                    &format!("{}:status={status:?}", component.id),
+                    &format!("{}:status=exited", component.id),
                     now_ms,
                 )?;
                 self.store.upsert_component(
@@ -643,6 +1122,43 @@ impl Supervisor {
                 )?;
                 self.store.clear_component_identity(&component.id, now_ms)?;
                 report.stopped.push(component.id.clone());
+            }
+            Ok(RuntimeStopOutcome::TimedOut) => {
+                let identity = self
+                    .children
+                    .get(&component.id)
+                    .map(RuntimeChild::identity)
+                    .ok_or_else(|| {
+                        WatchdogError::Conflict(
+                            "owned child disappeared during termination".to_owned(),
+                        )
+                    })?
+                    .clone();
+                self.store.upsert_component(
+                    &ComponentRecord {
+                        id: component.id.clone(),
+                        state: ComponentState::Quarantined,
+                        launch_nonce: Some(identity.launch_nonce),
+                        pid: Some(identity.pid),
+                        executable_digest: Some(identity.executable_digest),
+                        started_at_ms: Some(identity.started_at_ms),
+                        restart_attempts: self
+                            .store
+                            .component(&component.id)?
+                            .map_or(0, |record| record.restart_attempts),
+                        last_restart_at_ms: self
+                            .store
+                            .component(&component.id)?
+                            .and_then(|record| record.last_restart_at_ms),
+                        last_error: Some("owned containment stop timed out".to_owned()),
+                    },
+                    now_ms,
+                )?;
+                report.quarantined.push(component.id.clone());
+                report.errors.push(format!(
+                    "{}: owned containment stop timed out",
+                    component.id
+                ));
             }
             Err(error) => {
                 // Keep the handle owned after a bounded termination failure so
@@ -704,7 +1220,7 @@ impl Supervisor {
 
     /// Expose the worker's child identity for integration diagnostics.
     pub fn child_identity(&self, component_id: &str) -> Option<&ProcessIdentity> {
-        self.children.get(component_id).map(OwnedChild::identity)
+        self.children.get(component_id).map(RuntimeChild::identity)
     }
 
     /// Submit a job through the durable store.
@@ -732,6 +1248,12 @@ impl Supervisor {
     }
 }
 
+/// Dispatch the hidden Linux launch-helper mode before ordinary CLI parsing.
+/// Normal invocations return Ok(None) and continue through the CLI.
+pub fn run_linux_helper_if_requested() -> Result<Option<i32>> {
+    runtime_process::run_linux_helper_if_requested()
+}
+
 fn component_record(
     component: &ComponentConfig,
     identity: &ProcessIdentity,
@@ -750,6 +1272,42 @@ fn component_record(
         last_restart_at_ms: Some(now_ms),
         last_error: error,
     }
+}
+
+fn launch_spec_for(
+    config: &WatchdogConfig,
+    component: &ComponentConfig,
+    launch_nonce: String,
+    incarnation: String,
+) -> Result<crate::platform::LaunchSpec> {
+    Ok(crate::platform::LaunchSpec {
+        deployment_id: config.deployment_id.clone(),
+        instance_id: component.id.clone(),
+        component: platform_component_kind(&component.id).or_else(|error| {
+            if config.allow_synthetic_children {
+                Ok(crate::platform::ComponentKind::Synthetic)
+            } else {
+                Err(error)
+            }
+        })?,
+        incarnation,
+        launch_nonce,
+        executable: component.executable.clone(),
+        executable_sha256: component
+            .executable_sha256
+            .clone()
+            .unwrap_or_else(|| "0".repeat(64)),
+        arguments: component.args.clone(),
+        working_directory: component.cwd.clone(),
+        environment: component
+            .environment
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        session: crate::platform::SessionSelector::Explicit(0),
+        graceful_timeout: Duration::from_secs(5),
+        force_timeout: Duration::from_secs(10),
+    })
 }
 
 /// A placeholder-neutral runtime adapter hook for future native Windows/WSL

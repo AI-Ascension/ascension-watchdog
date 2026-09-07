@@ -236,6 +236,12 @@ pub struct WatchdogConfig {
     /// Explicit local authenticated control endpoint and protected credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminConfig>,
+    /// Canonical source path captured when this configuration was loaded from
+    /// disk.  It is deliberately not part of the serialized configuration or
+    /// its digest; the Linux launch helper uses it only as a protected,
+    /// separately supplied bootstrap reference for fresh durable authorization.
+    #[serde(skip)]
+    pub source_path: Option<PathBuf>,
 }
 
 impl Default for WatchdogConfig {
@@ -261,6 +267,7 @@ impl Default for WatchdogConfig {
             components: Vec::new(),
             allow_synthetic_children: false,
             admin: None,
+            source_path: None,
         }
     }
 }
@@ -278,7 +285,12 @@ impl WatchdogConfig {
                 "configuration exceeds 65536-byte limit".to_owned(),
             ));
         }
-        let config: Self = serde_json::from_slice(&bytes)?;
+        let mut config: Self = serde_json::from_slice(&bytes)?;
+        // Keep the helper bootstrap independent from a caller-controlled
+        // relative path and reject a missing source before a daemon can start.
+        // The Linux helper performs a second owner/readability check immediately
+        // before it opens this path.
+        config.source_path = Some(std::fs::canonicalize(path)?);
         config.validate()?;
         Ok(config)
     }
