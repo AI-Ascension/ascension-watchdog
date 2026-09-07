@@ -334,7 +334,15 @@ impl ParentBootstrap {
                     "Linux helper readiness descriptor cannot be inspected: {error}"
                 ))
             })?;
-            if metadata.len() >= u64::try_from(expected_length).unwrap_or(u64::MAX) {
+            let expected_bytes = u64::try_from(expected_length).map_err(|_| {
+                AdapterError::Invalid("Linux helper readiness size exceeds bounds".to_owned())
+            })?;
+            if metadata.len() > expected_bytes {
+                return Err(AdapterError::IdentityMismatch(
+                    "Linux helper readiness acknowledgement contains trailing bytes".to_owned(),
+                ));
+            }
+            if metadata.len() == expected_bytes {
                 self.ready.seek(SeekFrom::Start(0)).map_err(|error| {
                     AdapterError::Unavailable(format!(
                         "Linux helper readiness descriptor cannot be rewound: {error}"
@@ -2254,6 +2262,25 @@ mod tests {
         parent.wait_for_ready("x", Duration::from_secs(1))?;
         assert!(started.elapsed() >= Duration::from_millis(30));
         assert!(delayed_helper.wait()?.success());
+        Ok(())
+    }
+
+    #[test]
+    fn readiness_ack_rejects_trailing_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ready = File::from(memfd_create("ascension-ready-extra", MemfdFlags::CLOEXEC)?);
+        ready.write_all(b"ASC-RDY1\x01\x00xextra")?;
+        let mut parent = ParentBootstrap {
+            config: File::open("/dev/null")?,
+            config_fd: 0,
+            root: File::open("/dev/null")?,
+            root_fd: 1,
+            ready_fd: ready.as_raw_fd(),
+            ready,
+        };
+        assert!(matches!(
+            parent.wait_for_ready("x", Duration::from_millis(10)),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
         Ok(())
     }
 

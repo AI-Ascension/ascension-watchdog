@@ -61,8 +61,8 @@ contract version and ship cross-language golden vectors before admission. A
 consumer must not substitute `serde_json::to_string`, a default C# serializer,
 or a JSON pretty-printer for RCJ-1.
 
-Artifact digests (`schema_digest`, release/config/profile/runtime-v3 schema, and
-catalog) are SHA-256 of the exact approved immutable artifact bytes named by the
+Release artifact digests (`schema_digest`, release/config/profile/runtime-v3 schema) are
+SHA-256 of the exact approved immutable artifact bytes named by the
 release manifest, not a reserialized object. This makes release inspection
 reproducible across languages. Producers still reject duplicate JSON member
 names, invalid UTF-8, and values outside the closed schema. The resulting
@@ -79,8 +79,22 @@ Digest meanings are distinct:
 | `profile_digest` | Exact approved runtime/profile declaration bytes | process restarts only when profile is unchanged |
 | `runtime_v3_schema_digest` | Exact frozen runtime-v3 schema bytes | all v3 participants in that release |
 | `payload_digest` | RCJ-1 bytes obtained by decoding `canonical_json_b64` | operation retries, reconciliation, and archival |
-| `catalog_digest` | Exact approved action-catalog bytes | the verified state boundary |
+| `catalog_digest` | Exact UTF-8 bytes of the `legal_actions` JSON value emitted by the authoritative host under the approved profile | the verified state boundary |
 | `effect_digest` | Exact approved witness bytes | only the exact witness, never an observation merely adjacent in time |
+
+The catalog is a state-scoped artifact, not the release's profile declaration.
+Its byte range starts at the array's opening bracket and ends at its matching
+closing bracket in a validated successful host response; outer whitespace and
+envelope fields are excluded. Inner whitespace, ordering and escapes remain
+part of the bytes. Consumers must retain/hash that raw value, not deserialize
+and reserialize it. Bind the catalog to instance incarnation, session/lease,
+state ID and gameplay generation. Retention is bounded; a missing current
+artifact requires a fresh observation, not a substitute digest. An existing
+operation retains its original binding across lookup, retries and archival.
+The approved release pins the producer/profile and byte rule, while each
+operation records its dynamic catalog digest. Frozen runtime-v3 wire fields
+are unchanged. Consumer conformance requires exact-byte cross-language tests;
+this clarification alone is not proof that existing consumers conform.
 
 `schema_digest` is listed in `manifest.json` and must match every frame. The
 sideband action's `schema_digest` is separately checked against the approved
