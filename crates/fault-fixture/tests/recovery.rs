@@ -337,6 +337,39 @@ fn stale_queued_fence_is_rejected_without_an_effect() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn conflicting_expected_boundary_reuse_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start(FaultPoint::None)?;
+    let client = server.client;
+    let (_boot, _fence, lease) = bootstrap(&client)?;
+    let (original, _reference) = operation(&lease, "boundary-conflict");
+    let first = client.request(&Frame::request(
+        "operation_intent_request",
+        "operation_submit",
+        json!({"lease":lease,"operation":original}),
+    ))?;
+    assert_eq!(first.payload["result"]["status"], "INTENT_RECORDED");
+
+    let mut conflicting = original;
+    conflicting["expected_boundary"]["generation"] = json!(2);
+    let second = client.request(&Frame::request(
+        "operation_intent_request",
+        "operation_submit",
+        json!({"lease":lease,"operation":conflicting}),
+    ))?;
+    assert_eq!(
+        second.payload["result"]["status"], "CONFLICT",
+        "operation identity must include the immutable expected boundary"
+    );
+    RunningServer {
+        child: server.child,
+        client,
+        database: server.database,
+    }
+    .stop()?;
+    Ok(())
+}
+
+#[test]
 fn crash_after_admission_survives_restart_and_executes_the_queued_operation()
 -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start(FaultPoint::AfterAdmission)?;

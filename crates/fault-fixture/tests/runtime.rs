@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use fault_fixture::{RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON};
+use fault_fixture::{Client, Frame, RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON};
 use jsonschema::{Draft, Validator};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -155,6 +155,44 @@ fn send_http(
     let mut response_body = vec![0_u8; content_length];
     std::io::Read::read_exact(&mut reader, &mut response_body)?;
     Ok((status, serde_json::from_slice(&response_body)?))
+}
+
+fn bootstrap(client: &Client) -> Result<Value, Box<dyn std::error::Error>> {
+    let boot = client
+        .request(&Frame::request(
+            "bootstrap_request",
+            "bootstrap",
+            json!({
+                "deployment_id": Uuid::new_v4(),
+                "instance_id": Uuid::new_v4(),
+                "instance_incarnation": Uuid::new_v4(),
+                "release": {
+                    "release_digest": "00".repeat(32),
+                    "config_digest": "11".repeat(32),
+                    "profile_digest": "22".repeat(32),
+                    "runtime_v3_schema_digest": RUNTIME_V3_SCHEMA_DIGEST
+                },
+                "lease_policy": {"ttl_seconds":30,"renewal_interval_seconds":10}
+            }),
+        ))?
+        .payload["boot"]
+        .clone();
+    let fence = client
+        .request(&Frame::request(
+            "host_fence_request",
+            "host_fence",
+            json!({"boot":boot}),
+        ))?
+        .payload["fence"]
+        .clone();
+    Ok(client
+        .request(&Frame::request(
+            "lease_acquire_request",
+            "lease_acquire",
+            json!({"boot":boot,"fence":fence}),
+        ))?
+        .payload["lease"]
+        .clone())
 }
 
 fn envelope(
@@ -319,6 +357,60 @@ fn http_runtime_action_and_wait_use_the_same_durable_queue()
     assert_schema(&validator, &settled);
     assert_eq!(settled["status"], "settled");
     assert_eq!(settled["generation"], 1);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn http_runtime_rejects_queued_old_lease_after_authority_rotation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let client = Client::new(server.address);
+    let lease = bootstrap(&client)?;
+    let session_id = "runtime-stale-session";
+    let mut action_request = envelope(
+        "dispatch_action_request",
+        0,
+        Some("state-stale"),
+        Some("stale-operation"),
+    );
+    action_request["instance_id"] = lease["instance_id"].clone();
+    action_request["session_id"] = json!(session_id);
+    action_request["lease_id"] = lease["lease_id"].clone();
+    action_request["lease_epoch"] = lease["lease_epoch"].clone();
+    action_request["action"] = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let (status, accepted) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/action",
+        &action_request,
+    )?;
+    assert_eq!(status, 200);
+    assert_eq!(accepted["status"], "accepted");
+
+    let replacement = bootstrap(&client)?;
+    assert_ne!(replacement["lease_id"], lease["lease_id"]);
+    let mut wait_request = envelope("wait_request", 0, None, Some("stale-operation"));
+    wait_request["instance_id"] = lease["instance_id"].clone();
+    wait_request["session_id"] = json!(session_id);
+    wait_request["lease_id"] = lease["lease_id"].clone();
+    wait_request["lease_epoch"] = lease["lease_epoch"].clone();
+    wait_request["wait_for_millis"] = json!(1);
+    let (status, settled) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/wait",
+        &wait_request,
+    )?;
+    assert_eq!(
+        status, 409,
+        "queued runtime work must not execute after authority rotation: {settled}"
+    );
+    assert_eq!(settled["status"], "rejected");
+    assert_eq!(settled["error_code"], "stale_lease");
     server.stop()?;
     Ok(())
 }
