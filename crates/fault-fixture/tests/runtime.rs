@@ -1,10 +1,11 @@
 //! Runtime-v3 newline-adapter coverage against the frozen Draft 2020-12 schema.
 
-use std::io::{BufRead, BufReader, Write};
+use std::fmt::Write as FmtWrite;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fault_fixture::{
     Client, Frame, MAX_RUNTIME_OPERATIONS, RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON,
@@ -104,6 +105,83 @@ fn failed_test_scope_reaps_its_owned_server() -> Result<(), Box<dyn std::error::
     assert!(!database.exists());
     assert!(TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_err());
     Ok(())
+}
+
+fn assert_connection_closed(peer: &mut TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+    peer.set_read_timeout(Some(Duration::from_secs(4)))?;
+    match peer.read(&mut [0; 1]) {
+        Ok(0) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => Ok(()),
+        other => Err(format!("expected bounded peer close, got {other:?}").into()),
+    }
+}
+
+fn assert_server_healthy(server: &RunningServer) -> Result<(), Box<dyn std::error::Error>> {
+    let response = Client::new(server.address).request(&Frame::request(
+        "stats",
+        "recovery_read",
+        json!({}),
+    ))?;
+    assert_eq!(response.kind, "stats_response");
+    Ok(())
+}
+
+#[test]
+fn silent_peer_cannot_block_or_terminate_the_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let mut peer = TcpStream::connect_timeout(&server.address, Duration::from_secs(1))?;
+    let started = Instant::now();
+    assert_connection_closed(&mut peer)?;
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_server_healthy(&server)?;
+    server.stop()
+}
+
+#[test]
+fn trickled_http_headers_cannot_extend_the_absolute_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let mut peer = TcpStream::connect_timeout(&server.address, Duration::from_secs(1))?;
+    peer.write_all(b"GET /api/v3/runtime/state HTTP/1.1\r\nX-Slow: ")?;
+    let mut sender = peer.try_clone()?;
+    sender.set_write_timeout(Some(Duration::from_secs(1)))?;
+    let trickle = std::thread::spawn(move || {
+        for _ in 0..12 {
+            if sender.write_all(b"a").is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+    let started = Instant::now();
+    let result = assert_connection_closed(&mut peer);
+    trickle.join().map_err(|_| "trickle thread failed")?;
+    result?;
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_server_healthy(&server)?;
+    server.stop()
+}
+
+#[test]
+fn aggregate_http_headers_are_bounded() -> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    for count in [64, 130] {
+        let mut peer = TcpStream::connect_timeout(&server.address, Duration::from_secs(1))?;
+        peer.set_write_timeout(Some(Duration::from_secs(1)))?;
+        let value = if count == 64 {
+            "a".repeat(300)
+        } else {
+            "a".to_owned()
+        };
+        let mut request = "GET /api/v3/runtime/state HTTP/1.1\r\n".to_owned();
+        for index in 0..count {
+            write!(request, "X-{index}: {value}\r\n")?;
+        }
+        peer.write_all(request.as_bytes())?;
+        assert_connection_closed(&mut peer)?;
+        assert_server_healthy(&server)?;
+    }
+    server.stop()
 }
 
 fn remove_database(path: &PathBuf) {

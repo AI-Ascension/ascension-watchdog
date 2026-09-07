@@ -13,7 +13,10 @@ use std::io::{BufReader, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+mod transport;
+use transport::{DeadlineReader, IO_TIMEOUT};
 
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -503,17 +506,12 @@ impl Client {
         if bytes.len() > MAX_FRAME_BYTES {
             return Err(FixtureError::Bounds("request frame"));
         }
-        let mut stream = TcpStream::connect(self.address).map_err(FixtureError::Io)?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .map_err(FixtureError::Io)?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .map_err(FixtureError::Io)?;
-        stream.write_all(&bytes).map_err(FixtureError::Io)?;
-        stream.write_all(b"\n").map_err(FixtureError::Io)?;
-        stream.flush().map_err(FixtureError::Io)?;
-        let mut reader = BufReader::new(stream);
+        let mut stream =
+            TcpStream::connect_timeout(&self.address, IO_TIMEOUT).map_err(FixtureError::Io)?;
+        write_raw_response(&mut stream, &bytes)?;
+        let mut reader = BufReader::new(
+            DeadlineReader::new(&stream, Instant::now() + IO_TIMEOUT).map_err(FixtureError::Io)?,
+        );
         let Some(line) = read_bounded_line(&mut reader)? else {
             return Err(FixtureError::ResponseLost);
         };
@@ -551,14 +549,15 @@ pub fn run_server(config: &ServerConfig) -> Result<(), FixtureError> {
     let listener = TcpListener::bind(config.bind).map_err(FixtureError::Io)?;
     listener.set_nonblocking(false).map_err(FixtureError::Io)?;
     let address = listener.local_addr().map_err(FixtureError::Io)?;
+    let store = Arc::new(Mutex::new(DurableHost::open(&config.database)?));
     println!("LISTEN {address}");
     std::io::stdout().flush().map_err(FixtureError::Io)?;
-    let store = Arc::new(Mutex::new(DurableHost::open(&config.database)?));
     let mut faults = FaultController::new(config.fault);
     for incoming in listener.incoming() {
         let stream = incoming.map_err(FixtureError::Io)?;
         let action = match serve_connection(stream, &store, &mut faults) {
             Ok(action) => action,
+            Err(FixtureError::Io(error)) if transport::is_peer_error(&error) => continue,
             Err(FixtureError::Io(error)) => return Err(FixtureError::Io(error)),
             Err(FixtureError::Sql(error)) => return Err(FixtureError::Sql(error)),
             Err(_) => continue,
@@ -591,15 +590,20 @@ fn serve_connection(
     store: &Arc<Mutex<DurableHost>>,
     faults: &mut FaultController,
 ) -> Result<ConnectionAction, FixtureError> {
+    let deadline = Instant::now() + IO_TIMEOUT;
+    stream
+        .set_read_timeout(Some(IO_TIMEOUT))
+        .map_err(FixtureError::Io)?;
     let mut first = [0_u8; 1];
     let count = stream.peek(&mut first).map_err(FixtureError::Io)?;
     if count > 0 && matches!(first[0], b'G' | b'P' | b'H') {
-        return serve_http_connection(stream, store, faults);
+        return serve_http_connection(stream, store, faults, deadline);
     }
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(FixtureError::Io)?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(FixtureError::Io)?);
+    let mut reader =
+        BufReader::new(DeadlineReader::new(&stream, deadline).map_err(FixtureError::Io)?);
     let line = match read_bounded_line(&mut reader) {
         Ok(Some(line)) => line,
         Ok(None) => return Ok(ConnectionAction::Continue),
@@ -743,13 +747,18 @@ fn serve_http_connection(
     mut stream: TcpStream,
     store: &Arc<Mutex<DurableHost>>,
     _faults: &mut FaultController,
+    deadline: Instant,
 ) -> Result<ConnectionAction, FixtureError> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(FixtureError::Io)?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(FixtureError::Io)?);
+    let mut reader =
+        BufReader::new(DeadlineReader::new(&stream, deadline).map_err(FixtureError::Io)?);
     let request_line = read_bounded_line(&mut reader)?
         .ok_or_else(|| FixtureError::Invalid("HTTP request line missing".to_owned()))?;
+    if request_line.len() > 8192 {
+        return Err(FixtureError::Bounds("HTTP request line"));
+    }
     let request_line = String::from_utf8(request_line)
         .map_err(|_| FixtureError::Invalid("HTTP request line encoding".to_owned()))?;
     let mut parts = request_line.split_whitespace();
@@ -763,26 +772,9 @@ fn serve_http_connection(
         write_http_error(&mut stream, 400, "http_version_required")?;
         return Ok(ConnectionAction::Continue);
     }
-    let mut headers = std::collections::BTreeMap::new();
-    loop {
-        let line = read_bounded_line(&mut reader)?
-            .ok_or_else(|| FixtureError::Invalid("HTTP headers truncated".to_owned()))?;
-        let line = String::from_utf8(line)
-            .map_err(|_| FixtureError::Invalid("HTTP header encoding".to_owned()))?;
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.is_empty() {
-            break;
-        }
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| FixtureError::Invalid("HTTP header malformed".to_owned()))?;
-        let name = name.trim().to_ascii_lowercase();
-        if headers.contains_key(&name) {
-            write_http_error(&mut stream, 400, "runtime_v3_duplicate_header")?;
-            return Ok(ConnectionAction::Continue);
-        }
-        headers.insert(name, value.trim().to_owned());
-    }
+    let Some(headers) = read_http_headers(&mut reader, &mut stream, request_line.len())? else {
+        return Ok(ConnectionAction::Continue);
+    };
     let body_length = headers
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
@@ -841,6 +833,37 @@ fn serve_http_connection(
     Ok(ConnectionAction::Continue)
 }
 
+fn read_http_headers(
+    reader: &mut impl Read,
+    stream: &mut TcpStream,
+    mut header_bytes: usize,
+) -> Result<Option<std::collections::BTreeMap<String, String>>, FixtureError> {
+    let mut headers = std::collections::BTreeMap::new();
+    loop {
+        let line = read_bounded_line(reader)?
+            .ok_or_else(|| FixtureError::Invalid("HTTP headers truncated".to_owned()))?;
+        header_bytes += line.len();
+        if header_bytes > 16_384 || headers.len() >= 128 {
+            return Err(FixtureError::Bounds("HTTP headers"));
+        }
+        let line = String::from_utf8(line)
+            .map_err(|_| FixtureError::Invalid("HTTP header encoding".to_owned()))?;
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            return Ok(Some(headers));
+        }
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| FixtureError::Invalid("HTTP header malformed".to_owned()))?;
+        let name = name.trim().to_ascii_lowercase();
+        if headers.contains_key(&name) {
+            write_http_error(stream, 400, "runtime_v3_duplicate_header")?;
+            return Ok(None);
+        }
+        headers.insert(name, value.trim().to_owned());
+    }
+}
+
 fn http_headers_match(value: &Value, headers: &std::collections::BTreeMap<String, String>) -> bool {
     let authorization = headers
         .get("authorization")
@@ -883,9 +906,9 @@ fn write_http_json(
         413 => "Payload Too Large",
         _ => "Bad Gateway",
     };
-    write!(stream, "HTTP/1.1 {status_code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).map_err(FixtureError::Io)?;
-    stream.write_all(&body).map_err(FixtureError::Io)?;
-    stream.flush().map_err(FixtureError::Io)
+    let mut bytes = format!("HTTP/1.1 {status_code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+    bytes.extend_from_slice(&body);
+    transport::write_bytes(stream, &bytes).map_err(FixtureError::Io)
 }
 
 fn write_frame(stream: &mut TcpStream, frame: &Frame) -> Result<(), FixtureError> {
@@ -897,11 +920,11 @@ fn write_frame(stream: &mut TcpStream, frame: &Frame) -> Result<(), FixtureError
 }
 
 fn write_raw_response(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), FixtureError> {
-    stream.write_all(bytes).map_err(FixtureError::Io)?;
+    let mut framed = bytes.to_vec();
     if !bytes.ends_with(b"\n") {
-        stream.write_all(b"\n").map_err(FixtureError::Io)?;
+        framed.push(b'\n');
     }
-    stream.flush().map_err(FixtureError::Io)
+    transport::write_bytes(stream, &framed).map_err(FixtureError::Io)
 }
 
 fn error_frame(request: &Frame, error: &FixtureError) -> Frame {
