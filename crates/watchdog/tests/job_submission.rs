@@ -335,6 +335,10 @@ fn old_v1_operator_ledger_migrates_transactionally_and_preserves_receipts() {
     // AUTOINCREMENT's durable high-water mark can exceed the retained row
     // maximum (for example after INSERT OR IGNORE). Rebuilding the table must
     // not reuse any previously allocated sequence namespace.
+    assert_fresh_submission_sequence(&mut reopened, &owner, 101);
+}
+
+fn assert_fresh_submission_sequence(store: &mut Store, owner: &SingletonLock, sequence: u64) {
     let payload = json!({"value": 1});
     let next = job_context(
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -343,13 +347,13 @@ fn old_v1_operator_ledger_migrates_transactionally_and_preserves_receipts() {
         &payload,
         Capability::Admin,
     );
-    let outcome = reopened
-        .admit_operator_job_submission(&owner, &next, "episode", &payload, 13)
+    let outcome = store
+        .admit_operator_job_submission(owner, &next, "episode", &payload, 13)
         .expect("post-migration submission");
     let OperatorCommandOutcome::Accepted(receipt) = outcome else {
         panic!("new submission was not accepted");
     };
-    assert_eq!(receipt.sequence, 101);
+    assert_eq!(receipt.sequence, sequence);
 }
 
 #[test]
