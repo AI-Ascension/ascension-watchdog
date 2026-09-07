@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use fault_fixture::{Client, Frame, RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON};
+use fault_fixture::{
+    Client, Frame, MAX_RUNTIME_OPERATIONS, RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON,
+};
 use jsonschema::{Draft, Validator};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -527,6 +529,78 @@ fn http_runtime_rejects_queued_old_lease_after_authority_rotation()
 }
 
 #[test]
+fn stale_authority_cannot_quarantine_a_new_authoritys_queued_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let client = Client::new(server.address);
+    let old_lease = bootstrap(&client)?;
+    let new_lease = bootstrap(&client)?;
+    let session_id = "runtime-new-authority-session";
+    let operation_id = "runtime-new-authority-operation";
+
+    let mut dispatch = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-new-authority"),
+            Some(operation_id),
+        ),
+        &new_lease,
+    );
+    dispatch["session_id"] = json!(session_id);
+    dispatch["action"] = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let accepted = send_raw(server.address, &dispatch)?;
+    assert_eq!(accepted["status"], "accepted");
+
+    // The old authority is allowed to report stale progress, but its request
+    // must be bound to the operation's complete original identity. It names
+    // the new operation id while carrying the old instance/lease authority.
+    let mut stale_wait = with_lease(
+        envelope("wait_request", 0, None, Some(operation_id)),
+        &old_lease,
+    );
+    stale_wait["session_id"] = json!(session_id);
+    stale_wait["wait_for_millis"] = json!(1);
+    let stale = send_raw(server.address, &stale_wait)?;
+    assert_eq!(stale["status"], "unknown");
+    assert_eq!(stale["error_code"], "stale_lease");
+    assert_eq!(stale["wait_outcome"], "recovery_required");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let queued: (String, i64) = connection.query_row(
+        "SELECT o.status,(SELECT COUNT(*) FROM runtime_queue WHERE operation_id=o.operation_id) FROM runtime_operations o WHERE o.operation_id=?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(queued, ("ADMITTED".to_owned(), 1));
+    drop(connection);
+
+    let mut valid_wait = with_lease(
+        envelope("wait_request", 0, None, Some(operation_id)),
+        &new_lease,
+    );
+    valid_wait["session_id"] = json!(session_id);
+    valid_wait["wait_for_millis"] = json!(1);
+    let settled = send_raw(server.address, &valid_wait)?;
+    assert_eq!(settled["status"], "settled");
+    assert_eq!(settled["operation_id"], operation_id);
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let final_state: (String, i64) = connection.query_row(
+        "SELECT o.status,(SELECT COUNT(*) FROM runtime_queue WHERE operation_id=o.operation_id) FROM runtime_operations o WHERE o.operation_id=?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(final_state, ("SETTLED".to_owned(), 0));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
 fn http_runtime_persists_unknown_when_queued_lease_is_revoked()
 -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start()?;
@@ -592,6 +666,107 @@ fn http_runtime_persists_unknown_when_queued_lease_is_revoked()
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     assert_eq!(durable, ("UNKNOWN".to_owned(), 0));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn runtime_operation_history_backpressures_without_eviction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
+    let validator = jsonschema::validator_for(&schema)?;
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let session_id = "runtime-retention-session";
+    let state_id = "state-retention";
+    let action = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let mut generation = 0_i64;
+    let mut last_operation_id = String::new();
+
+    for index in 0..MAX_RUNTIME_OPERATIONS {
+        let operation_id = format!("runtime-retained-operation-{index}");
+        let mut dispatch = with_lease(
+            envelope(
+                "dispatch_action_request",
+                generation,
+                Some(state_id),
+                Some(&operation_id),
+            ),
+            &lease,
+        );
+        dispatch["session_id"] = json!(session_id);
+        dispatch["action"] = action.clone();
+        let accepted = send_raw(server.address, &dispatch)?;
+        assert_schema(&validator, &accepted);
+        assert_eq!(accepted["status"], "accepted");
+
+        let mut wait = with_lease(
+            envelope("wait_request", generation, None, Some(&operation_id)),
+            &lease,
+        );
+        wait["session_id"] = json!(session_id);
+        wait["wait_for_millis"] = json!(1);
+        let settled = send_raw(server.address, &wait)?;
+        assert_schema(&validator, &settled);
+        assert_eq!(settled["status"], "settled");
+        generation = settled["generation"].as_i64().ok_or("settled generation")?;
+        last_operation_id = operation_id;
+    }
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let retained: i64 =
+        connection.query_row("SELECT COUNT(*) FROM runtime_operations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(retained, i64::try_from(MAX_RUNTIME_OPERATIONS)?);
+    drop(connection);
+
+    // Existing settled tombstones remain deduplicable even at capacity.
+    let mut replay = with_lease(
+        envelope(
+            "dispatch_action_request",
+            generation - 1,
+            Some(state_id),
+            Some(&last_operation_id),
+        ),
+        &lease,
+    );
+    replay["session_id"] = json!(session_id);
+    replay["action"] = action.clone();
+    let duplicate = send_raw(server.address, &replay)?;
+    assert_schema(&validator, &duplicate);
+    assert_eq!(duplicate["status"], "settled");
+    assert_eq!(duplicate["operation_id"], last_operation_id);
+
+    let mut overflow = with_lease(
+        envelope(
+            "dispatch_action_request",
+            generation,
+            Some(state_id),
+            Some("runtime-over-capacity"),
+        ),
+        &lease,
+    );
+    overflow["session_id"] = json!(session_id);
+    overflow["action"] = action;
+    let rejected = send_raw(server.address, &overflow)?;
+    assert_schema(&validator, &rejected);
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["error_code"], "runtime_capacity");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let retained_after_rejection: i64 =
+        connection.query_row("SELECT COUNT(*) FROM runtime_operations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(
+        retained_after_rejection,
+        i64::try_from(MAX_RUNTIME_OPERATIONS)?
+    );
     drop(connection);
     server.stop()?;
     Ok(())
