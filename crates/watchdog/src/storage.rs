@@ -1320,16 +1320,15 @@ impl Store {
             tx.commit()?;
             return Ok(None);
         }
-        // A running or unknown attempt is a durable reservation for its
-        // worker.  Do not let a reconnect or a caller reusing the same worker
-        // identifier claim another job while the earlier process may still be
-        // acting.  Only an explicit reconciliation/completion transition can
-        // release this backpressure; quarantine itself deliberately retains
-        // the reservation.
+        // This store owns one single-instance deployment. Any running or
+        // unknown attempt reserves that deployment, regardless of worker ID.
+        // A replacement worker/daemon boot cannot evade unresolved history by
+        // selecting a fresh name. Only explicit reconciliation/completion can
+        // release this reservation; quarantine deliberately retains it.
         let unresolved_attempt: Option<String> = tx
             .query_row(
-                "SELECT id FROM attempts WHERE worker_id=? AND status IN ('running','unknown') ORDER BY started_at_ms, sequence, id LIMIT 1",
-                params![worker_id],
+                "SELECT id FROM attempts WHERE status IN ('running','unknown') ORDER BY started_at_ms, sequence, id LIMIT 1",
+                [],
                 |row| row.get(0),
             )
             .optional()?;

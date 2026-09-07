@@ -121,8 +121,8 @@ credential is rejected before queue admission.
 thread refuses a completed attempt or completed job, records a running
 attempt's outcome as unknown, moves its job to the durable quarantined state,
 retains the original worker ownership, and commits that transition with the
-operator receipt and audit rows. A worker with a persisted running or unknown
-attempt remains backpressured from claiming another job until an explicit
+operator receipt and audit rows. Any persisted running or unknown attempt
+backpressures the whole single-instance deployment from claiming another job until an explicit
 reconciliation/completion transition releases the reservation; this survives
 store restart. A stale attempt id cannot quarantine a newer attempt in the same
 job. A replayed idempotency key returns the retained response without
@@ -131,9 +131,9 @@ cancel, settle, or retry a gateway, host, provider, or gameplay operation.
 
 Operational limitation: the current claim helper accepts a worker identifier
 from its caller. Automatic scheduler-to-harness binding and authenticated worker
-completion/recovery are not integrated yet. This reservation therefore protects
-the persisted identifier; it is not proof that a running harness is paused,
-terminated, or unable to obtain a different caller-supplied identifier. A
+completion/recovery are not integrated yet. The deployment-wide reservation
+cannot be bypassed by a different caller-supplied worker identifier, but it is
+not proof that a running harness is paused or terminated. A
 quarantine receipt confirms the durable watchdog disposition only. Use the
 separate exact-process stop authority when operational quiescence is required,
 and retain uncertainty if cleanup cannot be confirmed.

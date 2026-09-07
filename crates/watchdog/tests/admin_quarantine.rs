@@ -132,11 +132,51 @@ fn admin_quarantine_preserves_unknown_attempt_and_is_replayable_after_restart() 
             .expect("same worker remains backpressured after restart")
             .is_none()
     );
-    let other_worker_claim = reopened
-        .claim_next_job("worker-b", 100)
-        .expect("different worker claim")
-        .expect("queued work remains available to an unreserved worker");
-    assert_eq!(other_worker_claim.job.id, next_job.id);
+    assert!(
+        reopened
+            .claim_next_job("worker-b", 100)
+            .expect("replacement worker remains backpressured")
+            .is_none()
+    );
+}
+
+#[test]
+fn running_attempt_reserves_deployment_across_worker_restart_until_completion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (owner, mut store, config) = owner_store(&temp);
+    let first = store
+        .submit_job_at("synthetic", &json!({}), 10)
+        .expect("first");
+    let second = store
+        .submit_job_at("synthetic", &json!({}), 11)
+        .expect("second");
+    let claim = store
+        .claim_next_job("original-worker", 12)
+        .expect("claim")
+        .expect("row");
+    assert_eq!(claim.job.id, first.id);
+    assert!(
+        store
+            .claim_next_job("replacement-worker", 13)
+            .expect("blocked")
+            .is_none()
+    );
+    drop(store);
+    let mut reopened = Store::open_for_owner(&config.database, &config, &owner).expect("reopen");
+    assert!(
+        reopened
+            .claim_next_job("third-worker", 14)
+            .expect("blocked after restart")
+            .is_none()
+    );
+    reopened
+        .complete_job_at(&first.id, &claim.attempt_id, &json!({"done": true}), 15)
+        .expect("complete original");
+    let next = reopened
+        .claim_next_job("replacement-worker", 16)
+        .expect("next claim")
+        .expect("released reservation");
+    assert_eq!(next.job.id, second.id);
 }
 
 #[test]
