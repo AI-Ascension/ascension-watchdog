@@ -1,0 +1,200 @@
+schema_version: 1
+rules:
+  - id: X-ID-001
+    title: Preserve semantic identity
+    purpose: Keep identifiers typed, namespaced, and distinct across owners, lifetimes, restarts, and collision domains.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, contracts]
+    check: source-review-and-owner-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-VER-001
+    title: Bind version and provenance
+    purpose: Distinguish released versions, source revisions, profiles, schema versions, ABI versions, and content digests.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, contracts]
+    check: lock-and-manifest-validation
+    verification: automated
+    command: cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-AUTH-001
+    title: Keep authority at the owner boundary
+    purpose: Prevent harness, adapter, visualizer, operations, or web code from bypassing the authoritative owner.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations]
+    check: source-policy-and-boundary-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-ERR-001
+    title: Return structured safe errors
+    purpose: Preserve typed error and unknown-result distinctions while minimizing exposed diagnostics.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations]
+    check: typed-error-and-redaction-tests
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: reject
+  - id: X-LIFE-001
+    title: Own lifecycle and cancellation
+    purpose: Bound lifecycle transitions, cancellation, shutdown, cleanup, and reconciliation at the component that owns the work.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, operations]
+    check: lifecycle-fault-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-TIME-001
+    title: Bound time and resource admission
+    purpose: Bound bodies, responses, queues, retries, subprocesses, locks, and waits with explicit budgets.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations]
+    check: bounds-and-timeout-tests
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: reject
+  - id: X-PRIV-001
+    title: Minimize private data
+    purpose: Keep credentials, proprietary files, personal paths, private prompts, model output, and valued data out of products and evidence.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, brand, contracts]
+    check: secret-and-path-hygiene
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-OWN-001
+    title: Preserve ownership and dependency direction
+    purpose: Keep compile-time dependencies acyclic and runtime communication explicit between named owners.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, brand]
+    check: architecture-and-dependency-review
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-BYTE-001
+    title: Protect frozen bytes
+    purpose: Keep schemas, golden vectors, checksum inventories, ABI spellings, and historical evidence unchanged without an approved contract change.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, contracts, brand]
+    check: digest-inventory
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-CI-001
+    title: Use deterministic local checks
+    purpose: Run pinned, local-first checks that fail visibly when a prerequisite is unavailable and have no provider or deployment side effect.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, brand, contracts]
+    check: profile-lock-validation
+    verification: automated
+    command: cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .
+    exception_eligible: false
+    failure_behavior: reject
+  - id: X-EXC-001
+    title: Validate exception evidence
+    purpose: Require exact paths, named owners, compensating tests, separate review, expiry, and removal criteria for every exception.
+    severity: mandatory
+    classification: blocking
+    scope: [rust, managed, web_php, operations, brand, contracts]
+    check: exception-schema-and-review-validation
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: RUST-LINT-001
+    title: Inherit Rust policy at every member
+    purpose: Ensure every workspace and package entry point receives the intended lint, format, and test policy without weak overrides.
+    severity: mandatory
+    classification: blocking
+    scope: [rust]
+    check: cargo-metadata-and-policy-tool
+    verification: automated
+    command: cargo run --locked --package repo-policy -- --strict
+    exception_eligible: false
+    failure_behavior: reject
+  - id: RUST-BOUND-001
+    title: Keep production failure constructs explicit
+    purpose: Reject ordinary production unwrap, expect, panic, todo, and unimplemented while permitting narrow reviewed test fixtures.
+    severity: mandatory
+    classification: blocking
+    scope: [rust]
+    check: compiler-clippy-and-source-linked-negative-tests
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: reject
+  - id: MANAGED-BOUND-001
+    title: Separate source-only and exact-host evidence
+    purpose: Keep managed probes useful without treating a synthetic build as host load or gameplay compatibility.
+    severity: mandatory
+    classification: blocking
+    scope: [managed]
+    check: evaluated-project-settings-and-source-probes
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: WEB-ORIGIN-001
+    title: Parse origins exactly
+    purpose: Use scheme, host, and effective port membership with deliberate missing-Origin behavior; suffix matching is insufficient.
+    severity: mandatory
+    classification: blocking
+    scope: [web_php]
+    check: origin-regression-tests
+    verification: automated
+    command: composer run test
+    exception_eligible: false
+    failure_behavior: reject
+  - id: WEB-CONCUR-001
+    title: Serialize persistent read-modify-write
+    purpose: Keep subscriber and rate-limit updates under the complete lock and expose write failures without false success.
+    severity: mandatory
+    classification: blocking
+    scope: [web_php]
+    check: concurrent-persistence-regression-tests
+    verification: automated
+    command: composer run test
+    exception_eligible: false
+    failure_behavior: reject
+  - id: OPS-LISTENER-001
+    title: Keep default listeners private
+    purpose: Preserve loopback host exposure and separate container binds from published ports until a reviewed boundary change.
+    severity: mandatory
+    classification: blocking
+    scope: [operations]
+    check: compose-invariants
+    verification: automated
+    command: bash tests/compose-invariants.sh
+    exception_eligible: false
+    failure_behavior: reject
+  - id: DOC-EVIDENCE-001
+    title: Label evidence at its actual boundary
+    purpose: Keep source, build, CI, host, runtime, deployment, and release claims distinct and scoped to exact revisions.
+    severity: mandatory
+    classification: blocking
+    scope: [brand, contracts, rust, managed, web_php, operations]
+    check: documentation-review
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: reject

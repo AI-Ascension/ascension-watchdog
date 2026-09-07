@@ -1,0 +1,14 @@
+id: EXC-TEST-003
+rule_ids: [X-TIME-001]
+paths: [.] 
+owner: test-owner
+rationale: A broad path cannot hide an unbounded operation.
+compensating_tests: [cargo test --locked --package fixture]
+approval:
+  reviewer: maintainer
+  record: local-review:fixture-review
+  status: approved
+reviewed_on: 2026-09-07
+expires_on: 2026-10-07
+removal_criteria: Remove after the bounded operation is implemented.
+

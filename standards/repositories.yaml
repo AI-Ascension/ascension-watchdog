@@ -1,0 +1,134 @@
+schema_version: 1
+refreshed: 2026-09-07
+source: reviewed repository inventory and exact baseline heads
+repositories:
+  - repository: AI-Ascension/aiascension.tech
+    repository_id: 1209899690
+    node_id: R_kgDOSB2aqg
+    default_branch: codex/wire-mailing-list-email
+    baseline_commit: 4e2d99c95d89ce3d18981d331faad10c9f1f7376
+    owner: ORG
+    profile_id: web-php
+    adoption: prepared
+    language_scopes: [html, css, javascript, php]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-game-core
+    repository_id: 1354377929
+    node_id: R_kgDOULoqyQ
+    default_branch: main
+    baseline_commit: 87e0f3d9355c0827e989d9fbc31804440852519b
+    owner: CORE
+    profile_id: rust-pure
+    adoption: prepared
+    language_scopes: [rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-game-mod
+    repository_id: 1354377975
+    node_id: R_kgDOULoq9w
+    default_branch: main
+    baseline_commit: 8b71150895ea95c0625afc1389bb08e4034d9350
+    owner: MOD
+    profile_id: rust-managed
+    adoption: prepared
+    language_scopes: [rust, csharp, shell, powershell, json]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-gateway
+    repository_id: 1354378018
+    node_id: R_kgDOULorIg
+    default_branch: main
+    baseline_commit: 33ea48f3b549f08e19db80d8c68c1438fa12a60a
+    owner: GW
+    profile_id: rust-service
+    adoption: prepared
+    language_scopes: [rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-mcp-server
+    repository_id: 1354378057
+    node_id: R_kgDOULorSQ
+    default_branch: main
+    baseline_commit: eb89ab251665f263c2fe3e6b735eeae3d3e40c83
+    owner: MCP
+    profile_id: rust-service
+    adoption: prepared
+    language_scopes: [rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-harness
+    repository_id: 1354378100
+    node_id: R_kgDOULordA
+    default_branch: main
+    baseline_commit: cb17b6c15262ce9356f1e85fd475af997aedc445
+    owner: HARNESS
+    profile_id: rust-service
+    adoption: prepared
+    language_scopes: [rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/sts2-protocol
+    repository_id: 1354378136
+    node_id: R_kgDOULormA
+    default_branch: main
+    baseline_commit: 8874b0951289fd943c7e14dea36557fa24c401d1
+    owner: PROTO
+    profile_id: rust-pure
+    adoption: prepared
+    language_scopes: [rust, json]
+    exclusion_reason: null
+  - repository: AI-Ascension/.github
+    repository_id: 1354466045
+    node_id: R_kgDOULuC_Q
+    default_branch: main
+    baseline_commit: d8fb867dede3ec1cde424d7f6f6f56e49dc21227
+    owner: ORG
+    profile_id: org-governance
+    adoption: ready
+    language_scopes: [markdown, yaml, json, rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/AI-Ascension.github.io
+    repository_id: 1354473981
+    node_id: R_kgDOULuh_Q
+    default_branch: main
+    baseline_commit: e81dd4e9ff2f8e5f8ffafc8b1a489d1e1cc7ef9f
+    owner: ORG
+    profile_id: web-static
+    adoption: prepared
+    language_scopes: [html, css, javascript, rust]
+    exclusion_reason: null
+  - repository: AI-Ascension/ai-agent-observability
+    repository_id: 1357224960
+    node_id: R_kgDOUOWcAA
+    default_branch: main
+    baseline_commit: b25880376d3a3334c77f58637267db93581c4c77
+    owner: ORG
+    profile_id: operations
+    adoption: prepared
+    language_scopes: [shell, yaml, dockerfile, systemd]
+    exclusion_reason: null
+  - repository: AI-Ascension/ascension-watchdog
+    repository_id: 1359537708
+    node_id: R_kgDOUQjmLA
+    default_branch: bootstrap
+    baseline_commit: dc2d20badb9e86c12067316b92d6c8289b2e6995
+    owner: ARCH
+    profile_id: planning-bootstrap
+    adoption: prepared
+    language_scopes: [markdown, json, rust-planned, rust-tooling]
+    exclusion_reason: null
+  - repository: AI-Ascension/ascension-map-visualizer
+    repository_id: 1359701124
+    node_id: R_kgDOUQtkhA
+    default_branch: bootstrap
+    baseline_commit: 18915e5571829e582f460bf14b674cc2db39d9c5
+    owner: ARCH
+    profile_id: planning-bootstrap
+    adoption: prepared
+    language_scopes: [markdown, rust-planned, browser-planned, rust-tooling]
+    exclusion_reason: null
+  - repository: AI-Ascension/ascension-brand-overhaul
+    repository_id: 1359787764
+    node_id: R_kgDOUQy29A
+    default_branch: main
+    baseline_commit: 5a2acfd6690d2533af046a7afcf3a7782b29042b
+    owner: ORG
+    profile_id: brand-package
+    adoption: excluded
+    language_scopes: [python, html, json, markdown]
+    exclusion_reason: Historical CHECKSUMS.sha256 currently has a known .gitignore mismatch and its recursive validator would scan the added bundle and build targets; retain the package's frozen checksum boundary until an owner-reviewed source-aware adoption plan exists.

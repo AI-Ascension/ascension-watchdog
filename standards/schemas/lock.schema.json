@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.github.io/standards/schemas/lock.schema.json",
+  "title": "AI-Ascension standards lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lock_version",
+    "repository",
+    "profile_id",
+    "source",
+    "files",
+    "protected_paths",
+    "generated_by",
+    "profile_sha256"
+  ],
+  "properties": {
+    "lock_version": {
+      "const": 1
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^AI-Ascension/[A-Za-z0-9._-]+$"
+    },
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,48}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "bundle_digest",
+        "distribution",
+        "published"
+      ],
+      "properties": {
+        "repository": {
+          "const": "AI-Ascension/.github"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "bundle_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "distribution": {
+          "const": "local"
+        },
+        "published": {
+          "const": false
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^standards/[A-Za-z0-9._/-]+$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "protected_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^standards/[A-Za-z0-9._/-]+$"
+      }
+    },
+    "generated_by": {
+      "const": "standards-sync/1"
+    },
+    "profile_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

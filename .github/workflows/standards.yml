@@ -1,0 +1,26 @@
+name: Standards baseline
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [bootstrap]
+
+permissions:
+  contents: read
+
+jobs:
+  standards:
+    name: Standards baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned policy toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+      - name: Validate local pinned standards
+        run: cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .
+      - name: Check bootstrap documentation and configuration
+        run: cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- check-bootstrap --root .

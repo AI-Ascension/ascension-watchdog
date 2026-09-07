@@ -1,0 +1,14 @@
+id: EXC-TEST-002
+rule_ids: [X-ERR-001]
+paths: [src/adapter.rs]
+owner: test-owner
+rationale: A pending exception cannot suppress a mandatory rule.
+compensating_tests: [cargo test --locked --package fixture]
+approval:
+  reviewer: self
+  record: pending
+  status: pending
+reviewed_on: 2026-09-07
+expires_on: 2026-10-07
+removal_criteria: Remove after the boundary error mapper is extracted.
+
