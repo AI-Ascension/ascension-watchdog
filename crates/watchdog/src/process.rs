@@ -386,6 +386,8 @@ fn validate_component(spec: &ComponentConfig) -> Result<()> {
     if spec.environment.len() > 64
         || spec.environment.iter().any(|(key, value)| {
             key.is_empty()
+                || key.len() > 128
+                || key.contains('=')
                 || key.as_bytes().contains(&0)
                 || value.as_bytes().len() > 8 * 1024
                 || value.as_bytes().contains(&0)
@@ -395,6 +397,21 @@ fn validate_component(spec: &ComponentConfig) -> Result<()> {
             "component {} environment is outside bounds",
             spec.id
         )));
+    }
+    let launch_bytes = spec
+        .args
+        .iter()
+        .map(String::len)
+        .chain(
+            spec.environment
+                .iter()
+                .map(|(key, value)| key.len().saturating_add(value.len())),
+        )
+        .fold(0_usize, usize::saturating_add);
+    if launch_bytes > 32 * 1024 {
+        return Err(WatchdogError::InvalidInput(
+            "component launch data exceeds aggregate byte limit".to_owned(),
+        ));
     }
     if let Some(digest) = &spec.executable_sha256 {
         crate::config::validate_digest(digest).map_err(|message| {

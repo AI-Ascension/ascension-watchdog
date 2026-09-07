@@ -58,3 +58,14 @@ fn environment_names_reject_unbounded_or_assignment_keys() {
         assert!(config.validate().is_err());
     }
 }
+
+#[test]
+fn direct_process_entry_rejects_aggregate_data_before_launch() {
+    let mut config = configuration();
+    config.components[0].args = vec!["x".repeat(8192); 5];
+    let result = ascension_watchdog::process::OwnedChild::spawn(&config.components[0], 0);
+    assert!(
+        matches!(result, Err(ascension_watchdog::error::WatchdogError::InvalidInput(message))
+        if message.contains("aggregate byte limit"))
+    );
+}
