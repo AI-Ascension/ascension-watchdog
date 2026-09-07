@@ -921,6 +921,9 @@ fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
 
 #[cfg(windows)]
 fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
+    specification
+        .validate()
+        .map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
     Ok(format!("windows-job:{}", specification.launch_nonce))
 }
 

@@ -6,7 +6,11 @@ fn configuration() -> WatchdogConfig {
         allow_synthetic_children: true,
         components: vec![ComponentConfig {
             id: "synthetic".to_owned(),
-            executable: std::env::current_exe().unwrap(),
+            executable: if cfg!(unix) {
+                "/bin/true".into()
+            } else {
+                std::env::current_exe().unwrap()
+            },
             args: Vec::new(),
             cwd: None,
             environment: BTreeMap::new(),
@@ -36,7 +40,7 @@ fn debug_omits_argument_and_environment_contents() {
 #[test]
 fn aggregate_launch_data_is_bounded_for_programmatic_configuration() {
     let mut config = configuration();
-    assert!(config.validate().is_ok());
+    assert!(config.validate().is_ok(), "{:?}", config.validate());
     config.components[0].args = vec!["x".repeat(8192); 5];
     assert!(config.validate().is_err());
     config.components[0].args.clear();
@@ -64,8 +68,10 @@ fn direct_process_entry_rejects_aggregate_data_before_launch() {
     let mut config = configuration();
     config.components[0].args = vec!["x".repeat(8192); 5];
     let result = ascension_watchdog::process::OwnedChild::spawn(&config.components[0], 0);
+    let diagnostic = result.as_ref().err().map(ToString::to_string);
     assert!(
         matches!(result, Err(ascension_watchdog::error::WatchdogError::InvalidInput(message))
-        if message.contains("aggregate byte limit"))
+        if message.contains("aggregate byte limit")),
+        "unexpected rejection: {diagnostic:?}"
     );
 }

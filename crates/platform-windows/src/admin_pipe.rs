@@ -650,7 +650,9 @@ fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformErr
                     CreateFileW(
                         wide.as_ptr(),
                         FILE_READ_ATTRIBUTES | READ_CONTROL,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        // Retain read sharing only: write access could change
+                        // reparse metadata after this ancestor was validated.
+                        FILE_SHARE_READ,
                         null(),
                         OPEN_EXISTING,
                         FILE_ATTRIBUTE_NORMAL
@@ -1374,5 +1376,55 @@ impl Drop for SecurityDescriptor {
         if !self.0.is_null() {
             unsafe { LocalFree(self.0) };
         }
+    }
+}
+
+#[cfg(test)]
+mod ancestor_lock_tests {
+    use super::*;
+
+    struct TestDirectory(PathBuf);
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+
+    fn open_writer(path: &Path) -> Result<OwnedHandle, PlatformError> {
+        let path = wide_path(path)?;
+        let raw = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                null_mut(),
+            )
+        };
+        OwnedHandle::new(raw, "open test ancestor writer")
+    }
+
+    #[test]
+    fn retained_ancestor_prevents_write_open_until_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("watchdog-ancestor-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&path)?;
+        let directory = TestDirectory(path);
+        drop(open_writer(&directory.0)?);
+        let guards = open_protected_ancestors(&directory.0.join("payload.json"))?;
+        assert!(
+            open_writer(&directory.0).is_err(),
+            "validated ancestor remained writable"
+        );
+        drop(guards);
+        drop(open_writer(&directory.0)?);
+        Ok(())
     }
 }
