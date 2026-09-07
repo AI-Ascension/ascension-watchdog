@@ -6,12 +6,12 @@ use super::storage_worker_claims_validation::{
 use super::storage_worker_queries_handoff::require_handoff_tx;
 use super::storage_worker_queries_terminal::{
     compact_terminal_result, ensure_tuple_matches, terminal_digest,
-    validate_handoff_transition_time,
+    validate_current_worker_recovery_tx, validate_handoff_transition_time,
 };
 use super::storage_worker_schema::MAX_WORKER_WIRE_INTEGER;
 use super::storage_worker_types::{
-    WorkerCompletion, WorkerHandoffState, WorkerHandoffTuple, WorkerTerminalReceipt,
-    WorkerTerminalStatus,
+    WorkerCompletion, WorkerControlWitness, WorkerHandoffState, WorkerHandoffTuple,
+    WorkerTerminalReceipt, WorkerTerminalStatus,
 };
 use super::{Store, insert_audit_tx, sqlite_timestamp, validate_name};
 use crate::error::{Result, WatchdogError};
@@ -34,6 +34,12 @@ fn validate_terminal_receipt(receipt: &WorkerTerminalReceipt) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum TerminalAuthority<'a> {
+    OriginalIncarnation,
+    CurrentRecovery(&'a WorkerControlWitness),
+}
+
 impl Store {
     /// Atomically commit matching job/attempt terminal completion and the
     /// acknowledgment intent.  The transport may acknowledge after commit;
@@ -44,6 +50,42 @@ impl Store {
         receipt: &WorkerTerminalReceipt,
         now_ms: u64,
     ) -> Result<WorkerCompletion> {
+        self.complete_worker_handoff_with_authority_at(
+            tuple,
+            receipt,
+            TerminalAuthority::OriginalIncarnation,
+            now_ms,
+        )
+    }
+
+    /// Complete a handoff using a current authenticated worker-control
+    /// witness after a watchdog or worker replacement.  The witness is
+    /// checked against the current durable control row, while the original
+    /// handoff tuple and receipt remain the identity being completed.  This
+    /// path only accepts an already-dispatched handoff; it never claims or
+    /// dispatches a job and does not alter desired mode.
+    pub fn complete_worker_handoff_with_recovery_at(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        receipt: &WorkerTerminalReceipt,
+        recovery: &WorkerControlWitness,
+        now_ms: u64,
+    ) -> Result<WorkerCompletion> {
+        self.complete_worker_handoff_with_authority_at(
+            tuple,
+            receipt,
+            TerminalAuthority::CurrentRecovery(recovery),
+            now_ms,
+        )
+    }
+
+    fn complete_worker_handoff_with_authority_at(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        receipt: &WorkerTerminalReceipt,
+        authority: TerminalAuthority<'_>,
+        now_ms: u64,
+    ) -> Result<WorkerCompletion> {
         validate_tuple(tuple)?;
         validate_terminal_receipt(receipt)?;
         let (result_text, compact_result_digest) = compact_terminal_result(receipt)?;
@@ -52,7 +94,9 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = require_handoff_tx(&tx, tuple, self.max_payload_bytes)?;
         ensure_tuple_matches(&current, tuple)?;
-        validate_current_worker_incarnation_tx(&tx, &current)?;
+        if let TerminalAuthority::CurrentRecovery(recovery) = authority {
+            validate_current_worker_recovery_tx(&tx, &current, recovery)?;
+        }
         let expected_terminal_digest = terminal_digest(tuple, receipt)?;
         if current.state.is_terminal() {
             let Some(existing) = current.terminal.as_ref() else {
@@ -78,6 +122,12 @@ impl Store {
             return Err(WatchdogError::Conflict(
                 "handoff already has a different terminal receipt".to_owned(),
             ));
+        }
+        if matches!(authority, TerminalAuthority::OriginalIncarnation) {
+            // A terminal row is immutable historical evidence and was handled
+            // above without a current-incarnation check.  Only an unresolved
+            // handoff requires the original live authority.
+            validate_current_worker_incarnation_tx(&tx, &current)?;
         }
         if !matches!(
             current.state,
@@ -222,5 +272,21 @@ impl Store {
         receipt: &WorkerTerminalReceipt,
     ) -> Result<WorkerCompletion> {
         self.complete_worker_handoff_at(tuple, receipt, super::now_unix_ms())
+    }
+
+    /// Wall-clock convenience wrapper for current-authority historical
+    /// completion.
+    pub fn complete_worker_handoff_with_recovery(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        receipt: &WorkerTerminalReceipt,
+        recovery: &WorkerControlWitness,
+    ) -> Result<WorkerCompletion> {
+        self.complete_worker_handoff_with_recovery_at(
+            tuple,
+            receipt,
+            recovery,
+            super::now_unix_ms(),
+        )
     }
 }

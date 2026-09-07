@@ -1,11 +1,15 @@
 //! Durable acknowledgment and terminal receipt validation.
 
-use super::storage_worker_claims_validation::{validate_digest_value, validate_tuple};
+use super::storage_worker_claims_validation::{
+    validate_current_worker_incarnation_tx, validate_digest_value, validate_tuple,
+};
 use super::storage_worker_queries_handoff::require_handoff_tx;
 use super::storage_worker_queries_terminal::{
-    ensure_tuple_matches, validate_handoff_transition_time,
+    ensure_tuple_matches, validate_current_worker_recovery_tx, validate_handoff_transition_time,
 };
-use super::storage_worker_types::{WorkerAcknowledgment, WorkerHandoffState, WorkerHandoffTuple};
+use super::storage_worker_types::{
+    WorkerAcknowledgment, WorkerControlWitness, WorkerHandoffState, WorkerHandoffTuple,
+};
 use super::{Store, insert_audit_tx, sqlite_timestamp};
 use crate::error::{Result, WatchdogError};
 use rusqlite::{TransactionBehavior, params};
@@ -25,6 +29,12 @@ fn current_ack_intent(tx: &rusqlite::Transaction<'_>, handoff_id: &str) -> Resul
     }
 }
 
+#[derive(Clone, Copy)]
+enum AcknowledgmentAuthority<'a> {
+    OriginalIncarnation,
+    CurrentRecovery(&'a WorkerControlWitness),
+}
+
 impl Store {
     /// Commit a matching acknowledgment.  A duplicate matching acknowledgment
     /// is idempotent; mismatched terminal evidence is a conflict.
@@ -32,6 +42,41 @@ impl Store {
         &mut self,
         tuple: &WorkerHandoffTuple,
         terminal_digest_value: &str,
+        now_ms: u64,
+    ) -> Result<WorkerAcknowledgment> {
+        self.acknowledge_worker_handoff_with_authority_at(
+            tuple,
+            terminal_digest_value,
+            AcknowledgmentAuthority::OriginalIncarnation,
+            now_ms,
+        )
+    }
+
+    /// Acknowledge a terminal handoff with a current authenticated
+    /// worker-control witness after a watchdog or worker replacement.  The
+    /// original tuple and terminal digest remain immutable; this method only
+    /// advances delivery state and cannot claim, dispatch, or reactivate a
+    /// job.
+    pub fn acknowledge_worker_handoff_with_recovery_at(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        terminal_digest_value: &str,
+        recovery: &WorkerControlWitness,
+        now_ms: u64,
+    ) -> Result<WorkerAcknowledgment> {
+        self.acknowledge_worker_handoff_with_authority_at(
+            tuple,
+            terminal_digest_value,
+            AcknowledgmentAuthority::CurrentRecovery(recovery),
+            now_ms,
+        )
+    }
+
+    fn acknowledge_worker_handoff_with_authority_at(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        terminal_digest_value: &str,
+        authority: AcknowledgmentAuthority<'_>,
         now_ms: u64,
     ) -> Result<WorkerAcknowledgment> {
         validate_tuple(tuple)?;
@@ -53,6 +98,9 @@ impl Store {
                 "terminal acknowledgment digest does not match durable receipt".to_owned(),
             ));
         }
+        if let AcknowledgmentAuthority::CurrentRecovery(recovery) = authority {
+            validate_current_worker_recovery_tx(&tx, &current, recovery)?;
+        }
         if current.state == WorkerHandoffState::Acknowledged {
             tx.commit()?;
             return Ok(WorkerAcknowledgment {
@@ -70,6 +118,12 @@ impl Store {
             return Err(WatchdogError::Conflict(
                 "handoff is not awaiting terminal acknowledgment".to_owned(),
             ));
+        }
+        if matches!(authority, AcknowledgmentAuthority::OriginalIncarnation) {
+            // Acknowledged rows are immutable historical delivery evidence and
+            // were returned above without a current-incarnation check.  A
+            // pending acknowledgment still needs the original live authority.
+            validate_current_worker_incarnation_tx(&tx, &current)?;
         }
         validate_handoff_transition_time(&current, now_ms, "acknowledgment")?;
         let changed = tx.execute(
@@ -103,5 +157,21 @@ impl Store {
         terminal_digest_value: &str,
     ) -> Result<WorkerAcknowledgment> {
         self.acknowledge_worker_handoff_at(tuple, terminal_digest_value, super::now_unix_ms())
+    }
+
+    /// Wall-clock convenience wrapper for current-authority historical
+    /// acknowledgment.
+    pub fn acknowledge_worker_handoff_with_recovery(
+        &mut self,
+        tuple: &WorkerHandoffTuple,
+        terminal_digest_value: &str,
+        recovery: &WorkerControlWitness,
+    ) -> Result<WorkerAcknowledgment> {
+        self.acknowledge_worker_handoff_with_recovery_at(
+            tuple,
+            terminal_digest_value,
+            recovery,
+            super::now_unix_ms(),
+        )
     }
 }
