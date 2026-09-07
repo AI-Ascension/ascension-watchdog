@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "0f743fd4cce4428f813a6d6f50c51d4fb901561b",
-    "bundle_digest": "sha256:326b45c4ee3421788da0ec5c258b0c1fc9f562034a2fcac260c50223b5b9f13d",
+    "commit": "6066074db1840781282ec4e738bfe3921ff222b1",
+    "bundle_digest": "sha256:a283e56b1ca556d95a13cdbb615ab426c53cd523cdd5da30d60a070840b30123",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "5e702ba5c80832b8e9c9ff4aba27c2667c9ee428ae25699dcfb066ea7830f3c7",
+  "profile_sha256": "9f30d9738adcebf2e02e458ca4237aaf227797f6f41f45d7fb4efa18045481a6",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -25,7 +25,7 @@
     },
     {
       "path": "standards/RUST.md",
-      "sha256": "779db88b5573488b920c778b60dbbfa01df5a0091547fc23d6082cbb6e8131fd"
+      "sha256": "f575bb7af550163dd30513bea0212ff092c2efb2e212c0e1325485a08601a8ca"
     },
     {
       "path": "standards/TESTING_AND_CI.md",
@@ -89,7 +89,7 @@
     },
     {
       "path": "standards/profiles.yaml",
-      "sha256": "d07e3c3177bea12638887394aaa19f118130d6c38fd7c514c471bdc91821557a"
+      "sha256": "f766e00d5c5dd5c36e62309e0a2dba5ccb0677f27d678e592efc186a4c6b7e72"
     },
     {
       "path": "standards/repositories.yaml",

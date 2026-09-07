@@ -1,3 +1,6 @@
+# Profile classes describe common check families. The generated repository profile
+# is the exact command matrix; owner-specific plans retain existing standalone
+# metadata gates (protocol and MCP) without adding them to other Rust CI matrices.
 schema_version: 1
 profiles:
   - id: org-governance
