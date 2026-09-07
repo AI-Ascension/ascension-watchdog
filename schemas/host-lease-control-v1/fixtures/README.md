@@ -16,3 +16,10 @@ canonical bytes are directly inspectable in the contract test.
 Every retry keeps the same `installation_id` and exact grant. Duplicate
 acknowledgments retain the original durable acknowledgment identity and
 timestamp; only the bounded status distinguishes the duplicate result.
+
+The wire fixtures may contain the deterministic fake `fence_token` needed to
+exercise grant digests. A persisted-grant implementation must replace that
+field with `fence_token_digest` and retain the exact non-secret grant fields;
+the plaintext token is never durable. Deadline tests use an explicit
+received-at wall check and a clamped monotonic remaining TTL, and restart
+tests require a fresh install before the grant becomes active again.

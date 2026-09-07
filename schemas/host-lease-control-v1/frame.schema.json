@@ -49,7 +49,7 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?Z$",
       "minLength": 20,
       "maxLength": 30
     },
@@ -166,8 +166,8 @@
         "fence_token": { "$ref": "#/$defs/token" },
         "issued_at": { "$ref": "#/$defs/timestamp" },
         "expires_at": { "$ref": "#/$defs/timestamp" },
-        "ttl_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
-        "renewal_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 100 }
+        "ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "renewal_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 299 }
       }
     },
     "gateway_identity": {
@@ -278,7 +278,29 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["ack"],
-      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+      "properties": {
+        "ack": {
+          "allOf": [
+            { "$ref": "#/$defs/ack" },
+            {
+              "properties": {
+                "result": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "INSTALLED", "DUPLICATE", "CONFLICT", "STALE_BOOT",
+                        "STALE_FENCE", "RELEASE_MISMATCH", "LEASE_MISMATCH",
+                        "EXPIRED", "AUTH_REQUIRED", "PERSISTENCE_UNAVAILABLE",
+                        "INVALID", "BOUNDS_EXCEEDED"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     },
     "renew_request": {
       "type": "object",
@@ -295,7 +317,29 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["ack"],
-      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+      "properties": {
+        "ack": {
+          "allOf": [
+            { "$ref": "#/$defs/ack" },
+            {
+              "properties": {
+                "result": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "RENEWED", "RENEW_DUPLICATE", "CONFLICT", "STALE_BOOT",
+                        "STALE_FENCE", "RELEASE_MISMATCH", "LEASE_MISMATCH",
+                        "EXPIRED", "AUTH_REQUIRED", "PERSISTENCE_UNAVAILABLE",
+                        "INVALID", "BOUNDS_EXCEEDED"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     },
     "revoke_request": {
       "type": "object",
@@ -314,7 +358,29 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["ack"],
-      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+      "properties": {
+        "ack": {
+          "allOf": [
+            { "$ref": "#/$defs/ack" },
+            {
+              "properties": {
+                "result": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "REVOKED", "REVOKE_DUPLICATE", "CONFLICT", "STALE_BOOT",
+                        "STALE_FENCE", "RELEASE_MISMATCH", "LEASE_MISMATCH",
+                        "EXPIRED", "AUTH_REQUIRED", "PERSISTENCE_UNAVAILABLE",
+                        "INVALID", "BOUNDS_EXCEEDED"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     },
     "install_request_frame": {
       "allOf": [
@@ -323,6 +389,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_install_request" },
+            "actor": { "properties": { "role": { "const": "gateway" } } },
+            "auth": { "properties": { "capability": { "const": "lease_install" } } },
             "payload": { "$ref": "#/$defs/install_request" }
           }
         }
@@ -335,6 +403,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_install_response" },
+            "actor": { "properties": { "role": { "const": "host" } } },
+            "auth": { "properties": { "capability": { "const": "lease_install" } } },
             "payload": { "$ref": "#/$defs/install_response" }
           }
         }
@@ -347,6 +417,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_renew_request" },
+            "actor": { "properties": { "role": { "const": "gateway" } } },
+            "auth": { "properties": { "capability": { "const": "lease_renew" } } },
             "payload": { "$ref": "#/$defs/renew_request" }
           }
         }
@@ -359,6 +431,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_renew_response" },
+            "actor": { "properties": { "role": { "const": "host" } } },
+            "auth": { "properties": { "capability": { "const": "lease_renew" } } },
             "payload": { "$ref": "#/$defs/renew_response" }
           }
         }
@@ -371,6 +445,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_revoke_request" },
+            "actor": { "properties": { "role": { "const": "gateway" } } },
+            "auth": { "properties": { "capability": { "const": "lease_revoke" } } },
             "payload": { "$ref": "#/$defs/revoke_request" }
           }
         }
@@ -383,6 +459,8 @@
           "type": "object",
           "properties": {
             "kind": { "const": "lease_revoke_response" },
+            "actor": { "properties": { "role": { "const": "host" } } },
+            "auth": { "properties": { "capability": { "const": "lease_revoke" } } },
             "payload": { "$ref": "#/$defs/revoke_response" }
           }
         }

@@ -4,7 +4,7 @@
   "contract": "watchdog-host-lease-control-v1",
   "version": 1,
   "schema_file": "frame.schema.json",
-  "schema_digest": "80786332a8647b20f1a3c2a822fb200878f0677ea9676b0da3a27cc272ec9385",
+  "schema_digest": "e22faf0f7d3cd313a007b65e52058b3c255153d5778dd8124055c283adf977f9",
   "canonicalization": "HCJ-1 for grant and proof binding; compact JSON with UTF-8 key ordering",
   "digest_algorithm": "SHA-256",
   "limits": {

@@ -94,14 +94,34 @@ schema digest, correlation, operation kind, installation ID, grant digest, and
 all request or acknowledgment fields. Secrets and plaintext fence tokens are
 never written to logs or durable journals.
 
+### Protected persistence representation
+
+The wire grant contains the plaintext `fence_token` because the host transport
+needs the token to authenticate the request. Durable storage does not. A
+protected persisted grant record contains the exact non-secret `boot`, `fence`,
+`release`, `gateway`, and all non-token `lease` fields, together with
+`grant_digest` and `fence_token_digest = SHA-256(UTF-8(fence_token))`. It never
+contains a `fence_token` member or the plaintext token in a log, journal,
+backup, diagnostic, or acknowledgment record. The full `grant_digest` still
+covers the complete HCJ-1 wire grant, including the token; the token digest is
+only the durable comparison value.
+
+During one process lifetime, an in-memory protected copy may be used to retry a
+pending request with the same installation identity. After a gateway or host
+restart, a persisted grant is historical only: its monotonic deadline and
+active-token material are discarded. A pending request can be reconciled by
+installation ID, grant digest, and token digest, but it cannot be resent from
+durable state. A new install requires a fresh boot/fence context.
+
 ## Install, acknowledgment, and retry
 
-The gateway is the sole lease issuer. It transactionally persists the exact
-grant, installation ID, digest, current boot/fence, and state
-`PENDING_HOST_INSTALL` before sending the request. The host validates the
-current boot/fence/release and then durably journals the exact grant and active
-installation before returning `INSTALLED`. The host must fsync or use its
-equivalent durable commit boundary before emitting that acknowledgment.
+The gateway is the sole lease issuer. It transactionally persists the protected
+grant representation, installation ID, full grant digest, token digest,
+current boot/fence, and state `PENDING_HOST_INSTALL` before sending the
+request. The host validates the current boot/fence/release and then durably
+journals the protected grant representation and active installation before
+returning `INSTALLED`. The host must fsync or use its equivalent durable commit
+boundary before emitting that acknowledgment.
 
 The response payload contains one closed `ack` object. It echoes the
 installation ID, grant digest, boot/incarnation, host-fence identity, lease
@@ -150,10 +170,24 @@ new authority context does.
 ## Time, fences, and restart
 
 The lease policy is bounded by `1 <= renewal_interval < ttl <= 300`, with the
-usual default of 10 seconds and 30 seconds. Timestamps are audit data. Each
-implementation uses a monotonic deadline for in-process expiry and rejects an
-expired grant at install, renewal, admission, and execution time. Clock
-suspend/resume ambiguity blocks mutation and requires revocation/rekey.
+usual default of 10 seconds and 30 seconds. At every install, renewal,
+admission, and execution boundary, the implementation captures both
+`received_at_wall` and `received_at_monotonic` before accepting the grant. It
+parses the grant's UTC `expires_at`, rejects the grant when
+`received_at_wall >= expires_at`, and derives
+
+```text
+remaining = min(ttl_seconds, expires_at - received_at_wall)
+deadline = received_at_monotonic + remaining
+```
+
+where a non-positive `remaining` is rejected. This received-at wall check is
+the only use of wire timestamps for expiry; `issued_at` and `expires_at` remain
+audit data after that check. A renewal must pass the same check and derive a
+new deadline from its own received-at pair. The deadline is never extended from
+`ttl_seconds` alone and is never restored from durable state after restart.
+Clock suspend/resume or monotonic-clock ambiguity blocks mutation, discards the
+deadline, and requires revocation/rekey followed by a new install.
 
 Every queued ticket and host execution rechecks the installed grant against the
 current deployment, instance, incarnation, boot, authority generation,
@@ -162,12 +196,14 @@ observation or a current HTTP success cannot replace those checks.
 
 A gateway restart creates a fresh boot/incarnation/authority generation and
 does not expose a persisted lease as active. A host restart may replay its
-journal for history, but a replayed grant is not active until a fresh matching
-install is durably committed. Old boot, incarnation, fence, release, or gateway
+protected journal for history, but a replayed grant is not active until a fresh
+matching install is durably committed and a new monotonic deadline is derived
+from a new received-at pair. Old boot, incarnation, fence, release, or gateway
 session values are rejected. During one unchanged authority context, lost-ACK
-retries use the same grant. After authority rotation, the old grant is first
-retained as stale/unknown history; only then may a new grant be issued under
-the new boot and fence.
+retries use the same in-memory grant; after restart, reconciliation uses the
+durable digests and never resends a plaintext token. After authority rotation,
+the old grant is first retained as stale/unknown history; only then may a new
+grant be issued under the new boot and fence.
 
 ## Semantic test boundary
 
@@ -180,8 +216,11 @@ or crash/reconnect outcomes. The executable contract tests therefore assert:
 - unknown fields are rejected;
 - grant digests are exact HCJ-1 bytes;
 - mismatched boot/fence/release/gateway identities are rejected;
-- expired or non-advancing renewals are rejected; and
-- duplicate install/renew/revoke identities preserve the same grant lineage.
+- expired-at-receipt or non-advancing renewals are rejected;
+- duplicate install/renew/revoke identities preserve the same grant lineage;
+- an installation ID cannot bind two grants, and a lease cannot bind two
+  installation IDs; and
+- duplicate-member JSON text is rejected before parsing or persistence.
 
 These artifacts establish the wire contract only. They do not prove consumer
 integration, a durable gateway, a managed host, a live game, reboot recovery,
