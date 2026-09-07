@@ -13,9 +13,36 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 struct RunningServer {
-    child: Child,
+    child: OwnedChild,
     client: Client,
     database: PathBuf,
+}
+
+// Process lifetime is independent of the database: crash tests deliberately
+// carry the same durable database into a replacement server.
+struct OwnedChild(Child);
+
+impl std::ops::Deref for OwnedChild {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for OwnedChild {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
 }
 
 impl RunningServer {
@@ -29,14 +56,16 @@ impl RunningServer {
         database: PathBuf,
         fault: FaultPoint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
-            .arg("--db")
-            .arg(&database)
-            .arg("--fault")
-            .arg(fault.as_str())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+        let mut child = OwnedChild(
+            Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
+                .arg("--db")
+                .arg(&database)
+                .arg("--fault")
+                .arg(fault.as_str())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()?,
+        );
         let stdout = child.stdout.take().ok_or("server stdout unavailable")?;
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -74,6 +103,32 @@ fn remove_database(path: &PathBuf) {
     let _ = fs::remove_file(path.with_extension("sqlite-wal"));
     let _ = fs::remove_file(path.with_extension("sqlite-shm"));
     let _ = fs::remove_file(path.with_extension("sqlite.lock"));
+}
+
+#[test]
+fn unwinding_reaps_the_child_but_preserves_restart_state() -> Result<(), Box<dyn std::error::Error>>
+{
+    let server = RunningServer::start(FaultPoint::None)?;
+    let database = server.database;
+    let client = server.client;
+    let _ = bootstrap(&client)?;
+    let child = server.child;
+    let unwound = std::panic::catch_unwind(move || {
+        let _owned_child = child;
+        panic!("injected recovery test failure");
+    });
+    assert!(unwound.is_err());
+    assert!(
+        client
+            .request(&Frame::request("stats", "recovery_read", json!({})))
+            .is_err()
+    );
+    assert!(
+        database.is_file(),
+        "process cleanup must preserve durable state"
+    );
+    RunningServer::start_on_database(database, FaultPoint::None)?.stop()?;
+    Ok(())
 }
 
 trait ChildWaitTimeout {
