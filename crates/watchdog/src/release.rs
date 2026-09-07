@@ -26,6 +26,7 @@ const OPTIONAL_REPOSITORIES: [&str; 4] = [
     ".github",
     "AI-Ascension.github.io",
 ];
+const WINDOWS_SERVICE_EXECUTABLE: &str = "watchdog.exe";
 
 /// Exact original-source revision, independently of artifact byte identity.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -253,6 +254,7 @@ impl ReleaseManifest {
     pub fn inspect(&self, root: &Path) -> Result<ReleaseInspection, String> {
         self.validate()?;
         require_real_root(root)?;
+        self.validate_windows_service_candidate(root)?;
         let mut total_bytes = 0_u64;
         for artifact in &self.artifacts {
             inspect_artifact(root, artifact)?;
@@ -268,6 +270,35 @@ impl ReleaseManifest {
             total_bytes,
             manifest_sha256: digest_hex(&Sha256::digest(canonical)),
         })
+    }
+
+    /// Bind the fixed Windows service executable to the manifest's watchdog
+    /// artifact whenever an installer candidate is present.  The generic
+    /// inspector is also used for release-like fixtures that do not contain a
+    /// Windows executable, so absence of this exact candidate preserves that
+    /// portable use while its presence cannot be an unlisted extra file.
+    fn validate_windows_service_candidate(&self, root: &Path) -> Result<(), String> {
+        let candidate = root.join(WINDOWS_SERVICE_EXECUTABLE);
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {
+                let watchdog = self
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.role == ArtifactRole::Watchdog)
+                    .ok_or_else(|| "release has no watchdog artifact".to_owned())?;
+                if watchdog.path != Path::new(WINDOWS_SERVICE_EXECUTABLE) {
+                    return Err(
+                        "Windows service candidate watchdog.exe must be the manifest watchdog artifact"
+                            .to_owned(),
+                    );
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Windows service candidate watchdog.exe is unavailable: {error}"
+            )),
+        }
     }
 }
 
@@ -469,4 +500,101 @@ fn inspect_artifact(root: &Path, artifact: &Artifact) -> Result<(), String> {
         return Err("release artifact digest or size changed".to_owned());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BYTES: &[u8] = b"synthetic watchdog release artifact";
+
+    fn manifest(watchdog_path: &str) -> ReleaseManifest {
+        ReleaseManifest {
+            schema_version: 1,
+            release_id: "installer-candidate".to_owned(),
+            revisions: [
+                "ascension-watchdog",
+                "sts2-gateway",
+                "sts2-harness",
+                "sts2-mcp-server",
+                "sts2-game-mod",
+                "sts2-protocol",
+            ]
+            .into_iter()
+            .map(|repository| Revision {
+                repository: repository.to_owned(),
+                commit: "a".repeat(40),
+            })
+            .collect(),
+            artifacts: [
+                (ArtifactRole::Watchdog, watchdog_path),
+                (ArtifactRole::Gateway, "gateway"),
+                (ArtifactRole::Harness, "harness"),
+                (ArtifactRole::Mcp, "mcp"),
+                (ArtifactRole::Mod, "mod"),
+                (ArtifactRole::HostBroker, "broker"),
+            ]
+            .into_iter()
+            .map(|(role, path)| Artifact {
+                role,
+                path: path.into(),
+                sha256: digest_hex(&Sha256::digest(BYTES)),
+                bytes: BYTES.len() as u64,
+            })
+            .collect(),
+            compatibility: Compatibility {
+                game_build: "synthetic-1".to_owned(),
+                runtime_profile: "runtime-v3-gameplay".to_owned(),
+                runtime_profile_sha256: "a".repeat(64),
+                recovery_profile: "watchdog-recovery-v1".to_owned(),
+                recovery_profile_sha256: "b".repeat(64),
+                configuration_sha256: "c".repeat(64),
+                provider_adapter: "synthetic-provider".to_owned(),
+                provider_adapter_sha256: "d".repeat(64),
+                stores: ["watchdog", "gateway", "harness"]
+                    .into_iter()
+                    .map(|owner| StoreCompatibility {
+                        owner: owner.to_owned(),
+                        minimum_schema: 1,
+                        maximum_schema: 1,
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn stage(root: &Path, release: &ReleaseManifest) {
+        for artifact in &release.artifacts {
+            fs::write(root.join(&artifact.path), BYTES).expect("stage artifact");
+        }
+    }
+
+    #[test]
+    fn windows_candidate_cannot_be_an_unlisted_extra_file() {
+        let temporary = tempfile::tempdir().expect("temporary release root");
+        let release = manifest("watchdog");
+        stage(temporary.path(), &release);
+        fs::write(temporary.path().join(WINDOWS_SERVICE_EXECUTABLE), BYTES)
+            .expect("stage unlisted candidate");
+
+        let error = release
+            .inspect(temporary.path())
+            .expect_err("unlisted Windows candidate must be rejected");
+        assert!(error.contains("must be the manifest watchdog artifact"));
+    }
+
+    #[test]
+    fn windows_candidate_is_bound_to_manifest_digest() {
+        let temporary = tempfile::tempdir().expect("temporary release root");
+        let release = manifest(WINDOWS_SERVICE_EXECUTABLE);
+        stage(temporary.path(), &release);
+        assert_eq!(release.inspect(temporary.path()).unwrap().artifact_count, 6);
+
+        fs::write(
+            temporary.path().join(WINDOWS_SERVICE_EXECUTABLE),
+            b"tampered watchdog release artifact",
+        )
+        .expect("tamper candidate");
+        assert!(release.inspect(temporary.path()).is_err());
+    }
 }
