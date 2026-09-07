@@ -52,10 +52,17 @@ fn fixture() -> PathBuf {
 fn config(executable: &Path, pipe_suffix: &str) -> WindowsPlatformConfig {
     let mut allowlisted_executables = BTreeMap::new();
     allowlisted_executables.insert(ComponentKind::Synthetic, executable.to_owned());
+    let mut approved_executable_sha256 = BTreeMap::new();
+    approved_executable_sha256.insert(
+        ComponentKind::Synthetic,
+        ascension_platform_windows::executable_sha256(executable)
+            .expect("synthetic fixture digest must be readable"),
+    );
     WindowsPlatformConfig {
         service_name: "ascension-watchdog".to_owned(),
         pipe_name: format!(r"\\.\pipe\ascension-watchdog-{pipe_suffix}"),
         allowlisted_executables,
+        approved_executable_sha256,
         authorized_peer_executable: executable.to_owned(),
         max_arguments: 8,
         max_environment: 8,
@@ -97,6 +104,34 @@ where
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+#[test]
+fn native_launch_rejects_an_approved_digest_mismatch_before_job_creation()
+-> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let mut platform_config = config(&executable, &unique_nonce("digest-mismatch"));
+    platform_config
+        .approved_executable_sha256
+        .insert(ComponentKind::Synthetic, "0".repeat(64));
+    let launcher = WindowsProcessLauncher::new(platform_config)?;
+    let error = launcher
+        .launch(&launch_spec(
+            &executable,
+            directory.path(),
+            0,
+            &unique_nonce("digest-mismatch-child"),
+            vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
+        ))
+        .expect_err("a digest mismatch must reject before creating a Job Object");
+    assert!(matches!(
+        error,
+        ascension_platform_windows::WindowsLaunchError::Ordinary(
+            PlatformError::IdentityMismatch(message)
+        ) if message.contains("configured release digest")
+    ));
+    Ok(())
 }
 
 fn unique_nonce(label: &str) -> String {

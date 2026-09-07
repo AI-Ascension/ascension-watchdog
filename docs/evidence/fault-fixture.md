@@ -17,11 +17,22 @@ controlled host tick. Frozen runtime-v3 route kinds are accepted as bounded
 unknown-result adapters; they do not claim a settled game action.
 
 The server uses one closed JSON frame per authenticated loopback TCP connection.
-The SQLite database uses WAL and `synchronous=FULL`. Operations, admission
-tickets, queued work, effect witnesses, and receipts are separate durable rows.
-The effect row is committed before the receipt row, so a crash in that window
-leaves an operation unknown with a witness instead of fabricating exactly-once
-semantics. Historical lookup always returns `mutation_authorized: false`.
+The SQLite database uses WAL and `synchronous=FULL`, with a process lock that
+rejects a second owner and refuses symlinked database or lock paths. Operations,
+admission tickets, queued work, effect witnesses, and receipts are separate
+durable rows. The effect row is committed before the receipt row, so a crash in
+that window leaves an operation unknown with a witness instead of fabricating
+exactly-once semantics. Historical lookup always returns
+`mutation_authorized: false`.
+
+The fixture also exposes the frozen runtime-v3 newline and loopback HTTP
+adapters. Runtime action admission records an immutable pre-state in a separate
+durable queue; only a queued operation whose pre-state still matches may drain
+and produce a settled result. Replays are served from the journal, one
+unresolved operation blocks a second dispatch, and stop/recovery paths retain
+unknown outcomes without inventing an effect witness. Runtime responses are
+checked against the Draft 2020-12 schema and nested duplicate JSON members are
+rejected.
 
 ## Fault controls
 
@@ -41,14 +52,17 @@ The receipt retention bound is 64. A 65th new dispatch receives
 From this package worktree, with the pinned toolchain:
 
 ```text
-RUSTUP_TOOLCHAIN=1.97.1 cargo test --offline --all-targets -- --test-threads=1
+RUSTUP_TOOLCHAIN=1.97.1 cargo test --locked --offline --all-targets --all-features -- --test-threads=1
 ```
 
-Result: 9 tests passed (3 library tests and 6 real subprocess/loopback tests).
-The subprocess tests cover response loss with a durable witness and receipt,
-malformed responses with durable receipt, stale queued-fence rejection with
-zero effect, 64-receipt backpressure, crash after admission and restart, and
-crash after mutation with witness-only reconciliation and no second effect.
+Result: 16 tests passed (6 library tests, 6 real subprocess/loopback recovery
+tests, 2 runtime adapter tests, and 2 schema tests). The recovery subprocess tests cover
+response loss with a durable witness and receipt, malformed responses with
+durable receipt, stale queued-fence rejection with zero effect, 64-receipt
+backpressure, crash after admission and restart, and crash after mutation with
+witness-only reconciliation and no second effect. The runtime tests cover the
+newline and HTTP adapters, queue admission/drain/replay, active-operation
+guarding, stop-to-unknown recovery, and Draft 2020-12 validation.
 
 This evidence does not establish integration with the real gateway, harness,
 MCP, mod, watchdog, native service manager, game host, reboot, or soak lanes.

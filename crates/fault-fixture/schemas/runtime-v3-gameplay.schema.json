@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sts2-runtime-v3-gameplay",
+  "title": "STS2 fair-play semantic gameplay contract",
+  "description": "Bounded ordinary player-visible observations and host-generated semantic LegalActions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version", "schema_digest", "provenance", "correlation_id", "instance_id",
+    "session_id", "lease_id", "lease_epoch", "generation", "kind", "state_id",
+    "operation_id", "observation", "legal_actions", "action", "status", "transition",
+    "error_code", "wait_for_millis", "wait_outcome", "recovery"
+  ],
+  "properties": {
+    "protocol_version": { "const": "runtime-v3-gameplay" },
+    "schema_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "correlation_id": { "$ref": "#/$defs/identity" },
+    "instance_id": { "$ref": "#/$defs/identity" },
+    "session_id": { "$ref": "#/$defs/identity" },
+    "lease_id": { "$ref": "#/$defs/identity" },
+    "lease_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "kind": {
+      "enum": [
+        "state_request", "state_response", "legal_actions_request", "legal_actions_response",
+        "dispatch_action_request", "dispatch_action_response", "wait_request", "wait_response",
+        "reobserve_request", "reobserve_response", "recover_request", "recover_response"
+      ]
+    },
+    "state_id": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] },
+    "operation_id": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] },
+    "observation": { "anyOf": [{ "$ref": "#/$defs/observation" }, { "type": "null" }] },
+    "legal_actions": {
+      "anyOf": [
+        { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/legal_action" } },
+        { "type": "null" }
+      ]
+    },
+    "action": { "anyOf": [{ "$ref": "#/$defs/legal_action" }, { "type": "null" }] },
+    "status": {
+      "anyOf": [
+        { "enum": ["accepted", "settled", "rejected", "unknown", "cancelled"] },
+        { "type": "null" }
+      ]
+    },
+    "transition": { "anyOf": [{ "$ref": "#/$defs/transition" }, { "type": "null" }] },
+    "error_code": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] },
+    "wait_for_millis": {
+      "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 120000 }, { "type": "null" }]
+    },
+    "wait_outcome": {
+      "anyOf": [
+        { "enum": ["successor", "same_state_mutation", "timeout", "recovery_required"] },
+        { "type": "null" }
+      ]
+    },
+    "recovery": { "anyOf": [{ "$ref": "#/$defs/recovery" }, { "type": "null" }] }
+  },
+  "allOf": [
+    {"if":{"properties":{"kind":{"enum":["state_request","reobserve_request"]}}},"then":{"properties":{"state_id":{"type":"null"},"operation_id":{"type":"null"},"observation":{"type":"null"},"legal_actions":{"type":"null"},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["state_response","reobserve_response"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"operation_id":{"type":"null"},"observation":{"not":{"type":"null"}},"legal_actions":{"not":{"type":"null"}},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["legal_actions_request"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"operation_id":{"type":"null"},"observation":{"type":"null"},"legal_actions":{"type":"null"},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["legal_actions_response"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"operation_id":{"type":"null"},"observation":{"type":"null"},"legal_actions":{"not":{"type":"null"}},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["dispatch_action_request"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"operation_id":{"not":{"type":"null"}},"observation":{"type":"null"},"legal_actions":{"type":"null"},"action":{"not":{"type":"null"}},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["wait_request"]}}},"then":{"properties":{"state_id":{"type":"null"},"operation_id":{"not":{"type":"null"}},"observation":{"type":"null"},"legal_actions":{"type":"null"},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"not":{"type":"null"}},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["recover_request"]}}},"then":{"properties":{"state_id":{"type":"null"},"operation_id":{"type":"null"},"observation":{"type":"null"},"legal_actions":{"type":"null"},"action":{"type":"null"},"status":{"type":"null"},"transition":{"type":"null"},"error_code":{"type":"null"},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"not":{"type":"null"}}}}},
+    {"if":{"properties":{"kind":{"enum":["dispatch_action_response","recover_response"]}}},"then":{"properties":{"state_id":{},"operation_id":{"not":{"type":"null"}},"observation":{},"legal_actions":{},"action":{"type":"null"},"status":{"not":{"type":"null"}},"transition":{},"error_code":{},"wait_for_millis":{"type":"null"},"wait_outcome":{"type":"null"},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"kind":{"enum":["wait_response"]}}},"then":{"properties":{"state_id":{},"operation_id":{"not":{"type":"null"}},"observation":{},"legal_actions":{},"action":{"type":"null"},"status":{"not":{"type":"null"}},"transition":{},"error_code":{},"wait_for_millis":{"type":"null"},"wait_outcome":{"not":{"type":"null"}},"recovery":{"type":"null"}}}},
+    {"if":{"properties":{"status":{"enum":["settled"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"observation":{"not":{"type":"null"}},"legal_actions":{"not":{"type":"null"}},"transition":{"not":{"type":"null"}},"error_code":{"type":"null"}}}},
+    {"if":{"properties":{"status":{"enum":["accepted","rejected","cancelled"]}}},"then":{"properties":{"state_id":{"not":{"type":"null"}},"observation":{"not":{"type":"null"}},"legal_actions":{"not":{"type":"null"}},"transition":{"type":"null"}}}},
+    {"if":{"properties":{"status":{"enum":["accepted"]}}},"then":{"properties":{"error_code":{"type":"null"}}}},
+    {"if":{"properties":{"status":{"enum":["unknown","rejected","cancelled"]}}},"then":{"properties":{"error_code":{"not":{"type":"null"}}}}},
+    {"if":{"properties":{"status":{"enum":["unknown"]}}},"then":{"properties":{"observation":{"type":"null"},"legal_actions":{"type":"null"},"transition":{"type":"null"}}}},
+    {"if":{"properties":{"wait_outcome":{"enum":["successor","same_state_mutation"]}}},"then":{"properties":{"status":{"const":"settled"}}}},
+    {"if":{"properties":{"wait_outcome":{"enum":["timeout","recovery_required"]}}},"then":{"properties":{"status":{"const":"unknown"}}}}
+  ],
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:/-]{1,512}$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "source", "generator"],
+      "properties": {
+        "artifact": { "const": "sts2-protocol/runtime-v3-gameplay" },
+        "source": { "const": "schemas/runtime-v3-gameplay.schema.json" },
+        "generator": { "const": "hand-authored" }
+      }
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["card_id", "name", "cost", "upgraded"],
+      "properties": {
+        "card_id": { "$ref": "#/$defs/identity" },
+        "name": { "$ref": "#/$defs/text" },
+        "cost": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "upgraded": { "type": "boolean" }
+      }
+    },
+    "enemy_intent": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "damage", "hits"],
+          "properties": {
+            "kind": { "const": "attack" },
+            "damage": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "hits": { "type": "integer", "minimum": 1, "maximum": 255 }
+          }
+        },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "enum": ["defend", "buff", "debuff", "unknown"] } } }
+      ]
+    },
+    "enemy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enemy_id", "name", "hp", "max_hp", "intent"],
+      "properties": {
+        "enemy_id": { "$ref": "#/$defs/identity" },
+        "name": { "$ref": "#/$defs/text" },
+        "hp": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "max_hp": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "intent": { "$ref": "#/$defs/enemy_intent" }
+      }
+    },
+    "player": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hp", "max_hp", "energy", "gold", "hand", "deck", "discard", "exhaust"],
+      "properties": {
+        "hp": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "max_hp": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "energy": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "gold": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "hand": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/card" } },
+        "deck": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/card" } },
+        "discard": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/card" } },
+        "exhaust": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/card" } }
+      }
+    },
+    "shop_item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "name", "price"],
+      "properties": {
+        "item_id": { "$ref": "#/$defs/identity" },
+        "name": { "$ref": "#/$defs/text" },
+        "price": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "state": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["state", "characters"], "properties": { "state": { "const": "setup" }, "characters": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "node_id", "options"], "properties": { "state": { "const": "map" }, "node_id": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] }, "options": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "turn_index", "enemies"], "properties": { "state": { "const": "combat" }, "turn_index": { "type": "integer", "minimum": 0, "maximum": 65535 }, "enemies": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/enemy" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "options"], "properties": { "state": { "const": "reward" }, "options": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "items"], "properties": { "state": { "const": "shop" }, "items": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/shop_item" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "choices"], "properties": { "state": { "const": "event" }, "choices": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "options"], "properties": { "state": { "const": "rest" }, "options": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "choices"], "properties": { "state": { "const": "selection" }, "choices": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/identity" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["state"], "properties": { "state": { "const": "victory" } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "reason"], "properties": { "state": { "const": "defeat" }, "reason": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["state", "code"], "properties": { "state": { "const": "recovery" }, "code": { "$ref": "#/$defs/identity" } } }
+      ]
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state_id", "generation", "visible_seed", "player", "state"],
+      "properties": {
+        "state_id": { "$ref": "#/$defs/identity" },
+        "generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "visible_seed": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+        "player": { "$ref": "#/$defs/player" },
+        "state": { "$ref": "#/$defs/state" }
+      }
+    },
+    "action_payload": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "character_id"], "properties": { "kind": { "const": "start_run" }, "character_id": { "$ref": "#/$defs/identity" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "node_id"], "properties": { "kind": { "const": "select_map_node" }, "node_id": { "$ref": "#/$defs/identity" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "card_id", "target_id"], "properties": { "kind": { "const": "play_card" }, "card_id": { "$ref": "#/$defs/identity" }, "target_id": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "enum": ["end_turn", "skip_reward", "rest", "confirm_victory", "save_quit", "proceed", "confirm_selection", "cancel_selection"] } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "reward_id"], "properties": { "kind": { "const": "choose_reward" }, "reward_id": { "$ref": "#/$defs/identity" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "item_id"], "properties": { "kind": { "const": "shop_purchase" }, "item_id": { "$ref": "#/$defs/identity" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "card_id"], "properties": { "kind": { "enum": ["shop_remove", "smith", "select_card"] }, "card_id": { "$ref": "#/$defs/identity" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "choice_id"], "properties": { "kind": { "const": "event_choice" }, "choice_id": { "$ref": "#/$defs/identity" } } }
+      ]
+    },
+    "legal_action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action_id", "action"],
+      "properties": { "action_id": { "$ref": "#/$defs/identity" }, "action": { "$ref": "#/$defs/action_payload" } }
+    },
+    "transition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["from_generation", "to_generation", "state_id", "effect_kind"],
+      "properties": {
+        "from_generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "to_generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "state_id": { "$ref": "#/$defs/identity" },
+        "effect_kind": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "recovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "operation_id"],
+      "allOf": [{ "if": { "properties": { "kind": { "const": "reconcile" } } }, "then": { "properties": { "operation_id": { "type": "string" } } }, "else": { "properties": { "operation_id": { "type": "null" } } } }],
+      "properties": {
+        "kind": { "enum": ["reobserve", "reconcile", "release_lease", "stop_episode"] },
+        "operation_id": { "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] }
+      }
+    }
+  }
+}

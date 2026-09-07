@@ -176,6 +176,8 @@ impl RuntimeProcessManager {
         now_ms: u64,
     ) -> std::result::Result<RuntimeChild, RuntimeLaunchError> {
         if self.synthetic {
+            preflight_synthetic_proof_budget(intent_id, specification, planned_containment)
+                .map_err(RuntimeLaunchError::Ordinary)?;
             let child = OwnedChild::spawn_with_cleanup_status(component, now_ms)
                 .map_err(RuntimeLaunchError::from)?;
             let mut portable_identity = child.identity().clone();
@@ -188,7 +190,11 @@ impl RuntimeProcessManager {
                 planned_containment,
                 &portable_identity,
             )
-            .map_err(RuntimeLaunchError::Ordinary)?;
+            // The process already exists at this point.  A proof-size failure
+            // therefore keeps the launch intent unsettled until exact
+            // containment is reconciled instead of becoming an ordinary
+            // rejected launch.
+            .map_err(RuntimeLaunchError::CleanupUncertain)?;
             return Ok(RuntimeChild {
                 portable_identity,
                 intent_id: intent_id.to_owned(),
@@ -273,6 +279,11 @@ impl RuntimeProcessManager {
             ));
         }
         let proof: OwnershipProof = serde_json::from_value(proof_value.clone())?;
+        if proof.backend == "synthetic" && !self.synthetic {
+            return Err(WatchdogError::Unsupported(
+                "synthetic launch proof cannot be recovered by the native authority".to_owned(),
+            ));
+        }
         if proof.backend == "synthetic" {
             if proof.version != 1
                 || proof.intent_id != intent.id
@@ -466,6 +477,10 @@ impl NativeBackend {
         let allowlist = native_allowlist(config)?;
         #[cfg(target_os = "linux")]
         {
+            let allowlist: BTreeMap<PlatformComponentKind, PathBuf> = allowlist
+                .into_iter()
+                .map(|(kind, (path, _digest))| (kind, path))
+                .collect();
             let probe = crate::platform::LinuxProcessAdapter::new(allowlist.clone())
                 .map_err(map_adapter_error)?;
             let root = probe.cgroup_root().to_path_buf();
@@ -489,13 +504,24 @@ impl NativeBackend {
         }
         #[cfg(windows)]
         {
+            let (allowlisted_executables, approved_executable_sha256): (
+                BTreeMap<_, _>,
+                BTreeMap<_, _>,
+            ) = allowlist
+                .into_iter()
+                .map(|(kind, (path, digest))| ((kind, path), (kind, digest)))
+                .unzip();
             let launcher = ascension_platform_windows::WindowsProcessLauncher::new(
                 ascension_platform_windows::WindowsPlatformConfig {
                     service_name: "ascension-watchdog".to_owned(),
                     pipe_name: r"\\.\pipe\ascension-watchdog-runtime".to_owned(),
-                    allowlisted_executables: allowlist
+                    allowlisted_executables: allowlisted_executables
                         .into_iter()
                         .map(|(kind, path)| (windows_component_kind(kind), path))
+                        .collect(),
+                    approved_executable_sha256: approved_executable_sha256
+                        .into_iter()
+                        .map(|(kind, digest)| (windows_component_kind(kind), digest))
                         .collect(),
                     authorized_peer_executable: std::env::current_exe()?,
                     max_arguments: 64,
@@ -546,7 +572,14 @@ impl NativeBackend {
                     .launcher
                     .launch(&windows_spec)
                     .map(NativeChild::Windows)
-                    .map_err(|error| RuntimeLaunchError::Ordinary(map_windows_error(error)))
+                    .map_err(|error| match error {
+                        ascension_platform_windows::WindowsLaunchError::Ordinary(error) => {
+                            RuntimeLaunchError::Ordinary(map_windows_error(error))
+                        }
+                        ascension_platform_windows::WindowsLaunchError::CleanupUncertain(error) => {
+                            RuntimeLaunchError::CleanupUncertain(map_windows_error(error))
+                        }
+                    })
             }
         }
     }
@@ -843,6 +876,38 @@ fn bound_proof(proof: OwnershipProof) -> Result<OwnershipProof> {
     Ok(proof)
 }
 
+/// Check the synthetic proof envelope before creating a child.  The runtime
+/// still repeats the real check after spawn because the child identity is part
+/// of the persisted proof; that second failure is classified as cleanup
+/// uncertainty by the caller.
+fn preflight_synthetic_proof_budget(
+    intent_id: &str,
+    specification: &LaunchSpec,
+    planned_containment: &str,
+) -> Result<()> {
+    // The real synthetic identity is produced only after the child exists.
+    // Use the largest scalar identity values here so a proof that can pass
+    // this preflight cannot become oversized merely because the OS selected a
+    // larger PID, creation token, or timestamp.  The executable is resolved
+    // with the same canonicalization used by the child launcher when possible;
+    // retaining the requested path on lookup failure still lets this check
+    // reject an oversized request before process creation.
+    let executable = std::fs::canonicalize(&specification.executable)
+        .unwrap_or_else(|_| specification.executable.clone());
+    let portable = ProcessIdentity {
+        pid: u32::MAX,
+        launch_nonce: specification.launch_nonce.clone(),
+        executable,
+        executable_digest: specification.executable_sha256.clone(),
+        started_at_ms: u64::MAX,
+        // Linux's /proc start time is an unsigned 64-bit decimal value; the
+        // non-Linux fallback is shorter. Twenty decimal digits therefore
+        // conservatively cover either identity source.
+        creation_fingerprint: Some("9".repeat(20)),
+    };
+    OwnershipProof::synthetic(intent_id, specification, planned_containment, &portable).map(|_| ())
+}
+
 #[cfg(target_os = "linux")]
 fn map_platform_observation(observation: &PlatformObservation) -> RuntimeObservation {
     match observation {
@@ -1027,18 +1092,20 @@ pub(crate) fn platform_component_kind(value: &str) -> Result<PlatformComponentKi
     }
 }
 
-fn native_allowlist(config: &WatchdogConfig) -> Result<BTreeMap<PlatformComponentKind, PathBuf>> {
+fn native_allowlist(
+    config: &WatchdogConfig,
+) -> Result<BTreeMap<PlatformComponentKind, (PathBuf, String)>> {
     let mut allowlist = BTreeMap::new();
     for component in &config.components {
         let kind = component_kind(component)?;
-        if component.executable_sha256.is_none() {
-            return Err(WatchdogError::InvalidInput(format!(
+        let digest = component.executable_sha256.clone().ok_or_else(|| {
+            WatchdogError::InvalidInput(format!(
                 "native component {} requires an approved executable hash",
                 component.id
-            )));
-        }
+            ))
+        })?;
         if allowlist
-            .insert(kind, component.executable.clone())
+            .insert(kind, (component.executable.clone(), digest))
             .is_some()
         {
             return Err(WatchdogError::Conflict(format!(
@@ -1444,6 +1511,85 @@ mod tests {
         assert!(matches!(
             RuntimeLaunchError::from(ProcessSpawnError::Ordinary(error)),
             RuntimeLaunchError::Ordinary(_)
+        ));
+    }
+
+    #[test]
+    fn synthetic_proof_preflight_accounts_for_runtime_identity_width() {
+        let mut specification = LaunchSpec {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "synthetic".to_owned(),
+            component: PlatformComponentKind::Synthetic,
+            incarnation: "incarnation".to_owned(),
+            launch_nonce: "nonce".to_owned(),
+            executable: PathBuf::from("/bin/true"),
+            executable_sha256: "a".repeat(64),
+            arguments: Vec::new(),
+            working_directory: None,
+            environment: Vec::new(),
+            session: PlatformSessionSelector::Explicit(0),
+            graceful_timeout: Duration::from_secs(1),
+            force_timeout: Duration::from_secs(2),
+        };
+        // Leave enough room for the normal proof fields while making the
+        // executable itself consume the remaining envelope. The preflight
+        // must account for the maximal post-spawn identity values rather than
+        // accepting a short synthetic placeholder.
+        let mut length = 7_700;
+        loop {
+            specification.executable = PathBuf::from(format!("/{:0width$}", 7, width = length));
+            if preflight_synthetic_proof_budget("intent", &specification, "containment").is_err() {
+                break;
+            }
+            length += 1;
+            assert!(length < 8_192, "proof preflight accepted an unbounded path");
+        }
+    }
+
+    #[test]
+    fn native_recovery_rejects_a_synthetic_launch_proof() {
+        let intent = LaunchIntent {
+            id: "intent".to_owned(),
+            deployment_id: "deployment".to_owned(),
+            component_id: "gateway".to_owned(),
+            launch_nonce: "nonce".to_owned(),
+            expected_incarnation: Some("incarnation".to_owned()),
+            expected_launch_spec_digest: Some("a".repeat(64)),
+            planned_containment_id: Some("synthetic-child:nonce".to_owned()),
+            state: LaunchIntentState::Active,
+            ownership_proof_json: Some(
+                serde_json::to_value(OwnershipProof {
+                    version: 1,
+                    backend: "synthetic".to_owned(),
+                    intent_id: "intent".to_owned(),
+                    deployment_id: "deployment".to_owned(),
+                    instance_id: "gateway".to_owned(),
+                    component: "gateway".to_owned(),
+                    incarnation: "incarnation".to_owned(),
+                    launch_nonce: "nonce".to_owned(),
+                    containment_id: "synthetic-child:nonce".to_owned(),
+                    pid: 1,
+                    creation_token: "synthetic:1".to_owned(),
+                    executable: PathBuf::from("/bin/true"),
+                    executable_sha256: "a".repeat(64),
+                    session_id: None,
+                    started_at_ms: 1,
+                })
+                .expect("synthetic proof serializes"),
+            ),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        let mut manager = RuntimeProcessManager {
+            synthetic: false,
+            backend: None,
+        };
+
+        let result = manager.recover_intent(&WatchdogConfig::default(), &intent);
+        assert!(matches!(
+            result,
+            Err(WatchdogError::Unsupported(message))
+                if message.contains("synthetic launch proof")
         ));
     }
 

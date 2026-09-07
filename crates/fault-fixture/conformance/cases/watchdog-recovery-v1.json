@@ -1,0 +1,77 @@
+{
+  "case_id": "CT-WATCHDOG-RECOVERY-V1-001",
+  "contract": "sts2-protocol/watchdog-recovery-v1",
+  "profile": "watchdog-recovery-v1",
+  "source_schema": "schemas/watchdog-recovery-v1.schema.json",
+  "artifact_manifest": "artifacts/watchdog-recovery-v1/manifest.json",
+  "schema_digest": "fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217",
+  "consumers": [
+    "ascension-watchdog",
+    "sts2-game-mod",
+    "sts2-gateway",
+    "sts2-harness",
+    "sts2-mcp-server"
+  ],
+  "coverage": {
+    "request_kinds": [
+      "bootstrap_request",
+      "host_fence_request",
+      "lease_acquire_request",
+      "lease_renew_request",
+      "lease_revoke_request",
+      "operation_intent_request",
+      "operation_dispatch_request",
+      "operation_lookup_request",
+      "operation_reconcile_request"
+    ],
+    "response_kinds": [
+      "bootstrap_response",
+      "host_fence_response",
+      "lease_acquire_response",
+      "lease_renew_response",
+      "lease_revoke_response",
+      "operation_intent_response",
+      "operation_dispatch_response",
+      "operation_lookup_response",
+      "operation_reconcile_response"
+    ]
+  },
+  "fixtures": {
+    "valid": [
+      "artifacts/watchdog-recovery-v1/fixtures/valid/bootstrap-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/bootstrap-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/host-fence-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/host-fence-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-acquire-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-acquire-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-renew-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-renew-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-revoke-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/lease-revoke-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-intent-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-intent-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-dispatch-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-dispatch-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-lookup-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-lookup-response.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-reconcile-request.json",
+      "artifacts/watchdog-recovery-v1/fixtures/valid/operation-reconcile-response.json"
+    ],
+    "invalid": [
+      "artifacts/watchdog-recovery-v1/fixtures/invalid/oversized-action.json",
+      "artifacts/watchdog-recovery-v1/fixtures/invalid/stale-contract.json",
+      "artifacts/watchdog-recovery-v1/fixtures/invalid/unknown-field.json"
+    ]
+  },
+  "rcj_vectors": "artifacts/watchdog-recovery-v1/rcj-vectors.json",
+  "assertions": {
+    "closed_objects": true,
+    "explicit_request_response_kinds": true,
+    "current_and_original_authority_contexts_are_distinct": true,
+    "historical_lookup_cannot_authorize_mutation": true,
+    "unknown_is_retained_until_reconciled": true,
+    "rcj_requires_exact_canonical_bytes": true,
+    "rcj_rejects_duplicate_unicode_float_escape_and_malformed_base64_inputs": true,
+    "runtime_v3_artifact_is_unchanged": true
+  }
+}

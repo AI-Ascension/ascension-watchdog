@@ -1,0 +1,118 @@
+{
+  "profile": "watchdog-recovery-v1/RCJ-1",
+  "description": "Cross-language golden vectors for the bounded frozen-v3 legal_action grammar.",
+  "valid_actions": [
+    {
+      "name": "end_turn",
+      "canonical_json": "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"action-end-turn\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsia2luZCI6ImVuZF90dXJuIn0sImFjdGlvbl9pZCI6ImFjdGlvbi1lbmQtdHVybiJ9",
+      "payload_digest": "4fd3e287a56eda15d4454d4b15a576110db374d68eecb1a82445ce4a9ea21159"
+    },
+    {
+      "name": "start_run",
+      "canonical_json": "{\"action\":{\"character_id\":\"ironclad\",\"kind\":\"start_run\"},\"action_id\":\"action-start-run\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsiY2hhcmFjdGVyX2lkIjoiaXJvbmNsYWQiLCJraW5kIjoic3RhcnRfcnVuIn0sImFjdGlvbl9pZCI6ImFjdGlvbi1zdGFydC1ydW4ifQ==",
+      "payload_digest": "6464c6d2571ce0c697b147c1554625e1128d730f131969b52c5c2d85ccea6c1c"
+    },
+    {
+      "name": "select_map_node",
+      "canonical_json": "{\"action\":{\"kind\":\"select_map_node\",\"node_id\":\"node-1\"},\"action_id\":\"action-select-map-node\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsia2luZCI6InNlbGVjdF9tYXBfbm9kZSIsIm5vZGVfaWQiOiJub2RlLTEifSwiYWN0aW9uX2lkIjoiYWN0aW9uLXNlbGVjdC1tYXAtbm9kZSJ9",
+      "payload_digest": "02877d732323ad614fbf9f376626b65a33d88856af5e96a7b552ab8da9b55781"
+    },
+    {
+      "name": "play_card",
+      "canonical_json": "{\"action\":{\"card_id\":\"strike\",\"kind\":\"play_card\",\"target_id\":null},\"action_id\":\"action-play-card\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsiY2FyZF9pZCI6InN0cmlrZSIsImtpbmQiOiJwbGF5X2NhcmQiLCJ0YXJnZXRfaWQiOm51bGx9LCJhY3Rpb25faWQiOiJhY3Rpb24tcGxheS1jYXJkIn0=",
+      "payload_digest": "d4abf283c21ca197d6d90257731d47e1d233da9a98035f8414ddda21c33328c2"
+    },
+    {
+      "name": "choose_reward",
+      "canonical_json": "{\"action\":{\"kind\":\"choose_reward\",\"reward_id\":\"reward-1\"},\"action_id\":\"action-choose-reward\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsia2luZCI6ImNob29zZV9yZXdhcmQiLCJyZXdhcmRfaWQiOiJyZXdhcmQtMSJ9LCJhY3Rpb25faWQiOiJhY3Rpb24tY2hvb3NlLXJld2FyZCJ9",
+      "payload_digest": "156456e58713a140576919e95035938c2f15639fc2e171e750a5726057c6f4fd"
+    },
+    {
+      "name": "shop_purchase",
+      "canonical_json": "{\"action\":{\"item_id\":\"item-1\",\"kind\":\"shop_purchase\"},\"action_id\":\"action-shop-purchase\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsiaXRlbV9pZCI6Iml0ZW0tMSIsImtpbmQiOiJzaG9wX3B1cmNoYXNlIn0sImFjdGlvbl9pZCI6ImFjdGlvbi1zaG9wLXB1cmNoYXNlIn0=",
+      "payload_digest": "c0f408b94538f2749e1af046487af84d5e9d56b071429cb9849adbcee4c06220"
+    },
+    {
+      "name": "shop_remove",
+      "canonical_json": "{\"action\":{\"card_id\":\"card-1\",\"kind\":\"shop_remove\"},\"action_id\":\"action-shop-remove\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsiY2FyZF9pZCI6ImNhcmQtMSIsImtpbmQiOiJzaG9wX3JlbW92ZSJ9LCJhY3Rpb25faWQiOiJhY3Rpb24tc2hvcC1yZW1vdmUifQ==",
+      "payload_digest": "1204f8dcc9e1618d39d40b64040827be208717008ddb2b241a39c666c58ef3e5"
+    },
+    {
+      "name": "event_choice",
+      "canonical_json": "{\"action\":{\"choice_id\":\"choice-1\",\"kind\":\"event_choice\"},\"action_id\":\"action-event-choice\"}",
+      "canonical_json_b64": "eyJhY3Rpb24iOnsiY2hvaWNlX2lkIjoiY2hvaWNlLTEiLCJraW5kIjoiZXZlbnRfY2hvaWNlIn0sImFjdGlvbl9pZCI6ImFjdGlvbi1ldmVudC1jaG9pY2UifQ==",
+      "payload_digest": "680994e7a534d3b24090dbd825d25aa9269eb6417c3351ac00900b77391c1b9e"
+    }
+  ],
+  "malformed_actions": [
+    {
+      "name": "duplicate-member",
+      "wire": "{\"action\":{\"kind\":\"end_turn\"},\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"action-end-turn\"}",
+      "reason": "duplicate object member"
+    },
+    {
+      "name": "unicode-identity",
+      "wire": "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"é\"}",
+      "reason": "non-ASCII action identity"
+    },
+    {
+      "name": "float-value",
+      "wire": "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":1.0}",
+      "reason": "action identity is not a string and RCJ-1 has no floats"
+    },
+    {
+      "name": "escaped-identity",
+      "wire": "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"action\\u002dend-turn\"}",
+      "reason": "RCJ-1 rejects escapes even when decoded value is otherwise legal"
+    },
+    {
+      "name": "duplicate-action-id",
+      "wire": "{\"action\":{\"kind\":\"end_turn\"},\"action_id\":\"action-end-turn\",\"action_id\":\"other\"}",
+      "reason": "duplicate top-level action_id member"
+    },
+    {
+      "name": "duplicate-nested-kind",
+      "wire": "{\"action\":{\"kind\":\"end_turn\",\"kind\":\"end_turn\"},\"action_id\":\"action-end-turn\"}",
+      "reason": "duplicate nested action kind member"
+    },
+    {
+      "name": "unsorted-top-level-keys",
+      "wire": "{\"action_id\":\"action-end-turn\",\"action\":{\"kind\":\"end_turn\"}}",
+      "reason": "top-level member names are not in RCJ-1 order"
+    },
+    {
+      "name": "unsorted-nested-keys",
+      "wire": "{\"action\":{\"kind\":\"start_run\",\"character_id\":\"ironclad\"},\"action_id\":\"action-start-run\"}",
+      "reason": "nested member names are not in RCJ-1 order"
+    }
+  ],
+  "malformed_base64": [
+    {
+      "name": "invalid-length",
+      "value": "not-base64",
+      "reason": "base64 length is not a multiple of four"
+    },
+    {
+      "name": "padding-before-final-quantum",
+      "value": "AA=A",
+      "reason": "padding is only legal in the final quantum"
+    },
+    {
+      "name": "padding-without-second-marker",
+      "value": "A===",
+      "reason": "padding must occupy the final two positions"
+    },
+    {
+      "name": "non-zero-unused-bits",
+      "value": "AB==",
+      "reason": "unused bits in a padded quantum must be zero"
+    }
+  ]
+}

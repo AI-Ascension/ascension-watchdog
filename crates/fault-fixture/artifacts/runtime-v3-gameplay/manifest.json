@@ -1,0 +1,27 @@
+{
+  "artifact": "sts2-protocol/runtime-v3-gameplay",
+  "protocol_version": "runtime-v3-gameplay",
+  "schema": "schema.json",
+  "schema_digest": "8e99cea36b7ede97532348fd8efe302ca79260895265a7bf14ddf7e006d8ff63",
+  "provenance": {
+    "source": "schemas/runtime-v3-gameplay.schema.json",
+    "generator": "hand-authored",
+    "license": "MIT"
+  },
+  "consumers": [
+    "sts2-game-mod",
+    "sts2-gateway",
+    "sts2-harness",
+    "sts2-mcp-server"
+  ],
+  "goldens": [
+    "golden/state-request.json",
+    "golden/state-response.json",
+    "golden/dispatch-action-request.json",
+    "golden/dispatch-action-settled.json",
+    "golden/dispatch-proceed-request.json",
+    "golden/dispatch-confirm-selection-request.json",
+    "golden/dispatch-cancel-selection-request.json"
+  ],
+  "checksums": "SHA256SUMS"
+}

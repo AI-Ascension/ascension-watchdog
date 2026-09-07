@@ -1,0 +1,27 @@
+{
+  "contract": "watchdog-host-lease-control-v1",
+  "schema_digest": "e22faf0f7d3cd313a007b65e52058b3c255153d5778dd8124055c283adf977f9",
+  "message_id": "00000000-0000-4000-8000-000000000017",
+  "correlation_id": "00000000-0000-4000-8000-000000000016",
+  "sent_at": "2026-09-07T00:00:11Z",
+  "actor": {"principal_id": "00000000-0000-4000-8000-00000000000a", "role": "host"},
+  "auth": {"principal_id": "00000000-0000-4000-8000-00000000000a", "capability": "lease_renew", "proof": "host-renew-proof-00000000000000"},
+  "kind": "lease_renew_response",
+  "payload": {
+    "ack": {
+      "result": {"status": "RENEWED", "retryable": false, "retry_after_seconds": null},
+      "installation_id": "00000000-0000-4000-8000-000000000009",
+      "grant_digest": "e10593e83d68404ac27c8a2fb3d936fd400b35ec226624f35ecd00f56b63d605",
+      "boot_id": "00000000-0000-4000-8000-000000000004",
+      "instance_incarnation": "00000000-0000-4000-8000-000000000003",
+      "host_fence_id": "00000000-0000-4000-8000-000000000005",
+      "fence_generation": 3,
+      "lease_id": "00000000-0000-4000-8000-000000000006",
+      "lease_epoch": 1,
+      "host_install_generation": 1,
+      "recorded_at": "2026-09-07T00:00:10Z",
+      "renew_sequence": 1,
+      "expires_at": "2026-09-07T00:01:00Z"
+    }
+  }
+}

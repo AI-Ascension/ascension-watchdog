@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/watchdog-host-lease-control-v1/manifest.json",
+  "contract": "watchdog-host-lease-control-v1",
+  "version": 1,
+  "schema_file": "frame.schema.json",
+  "schema_digest": "e22faf0f7d3cd313a007b65e52058b3c255153d5778dd8124055c283adf977f9",
+  "canonicalization": "HCJ-1 for grant and proof binding; compact JSON with UTF-8 key ordering",
+  "digest_algorithm": "SHA-256",
+  "limits": {
+    "max_frame_bytes": 262144,
+    "max_payload_bytes": 65536,
+    "max_auth_proof_bytes": 512,
+    "max_wire_integer": 9007199254740991
+  },
+  "compatibility": {
+    "recovery_v1": "frozen; no implicit compatibility or field extension"
+  },
+  "publication": {
+    "owner": "architecture-contracts",
+    "consumer_owners": ["gateway", "host-mod"],
+    "mixed_digest_policy": "reject"
+  }
+}

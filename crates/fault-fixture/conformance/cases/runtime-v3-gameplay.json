@@ -1,0 +1,101 @@
+{
+  "case_id": "CT-RUNTIME-V3-GAMEPLAY-001",
+  "contract": "sts2.protocol/runtime-v3-gameplay",
+  "profile": "runtime-v3-gameplay",
+  "schema": "schemas/runtime-v3-gameplay.schema.json",
+  "artifacts": [
+    "artifacts/runtime-v3-gameplay/manifest.json",
+    "artifacts/runtime-v3-gameplay/schema.json"
+  ],
+  "checksums": "artifacts/runtime-v3-gameplay/SHA256SUMS",
+  "consumers": [
+    "sts2-game-mod",
+    "sts2-gateway",
+    "sts2-harness",
+    "sts2-mcp-server"
+  ],
+  "contract_assertions": {
+    "fair_play_projection": true,
+    "visible_seed_is_text_only": true,
+    "legal_actions_are_host_generated": true,
+    "typed_action_kinds": [
+      "start_run",
+      "select_map_node",
+      "play_card",
+      "end_turn",
+      "choose_reward",
+      "skip_reward",
+      "shop_purchase",
+      "shop_remove",
+      "rest",
+      "smith",
+      "event_choice",
+      "select_card",
+      "confirm_victory",
+      "save_quit",
+      "proceed",
+      "confirm_selection",
+      "cancel_selection"
+    ],
+    "outcomes": [
+      "accepted",
+      "settled",
+      "rejected",
+      "unknown",
+      "cancelled"
+    ],
+    "unknown_requires_recovery": true,
+    "stale_generation_must_fail_closed": true,
+    "duplicate_action_ids_are_rejected": true,
+    "recovery_cannot_select_strategy": true,
+    "unrevealed_randomness_absent": true
+  },
+  "fixtures": [
+    {
+      "id": "state",
+      "request": "artifacts/runtime-v3-gameplay/golden/state-request.json",
+      "response": "artifacts/runtime-v3-gameplay/golden/state-response.json"
+    },
+    {
+      "id": "settled_action",
+      "request": "artifacts/runtime-v3-gameplay/golden/dispatch-action-request.json",
+      "response": "artifacts/runtime-v3-gameplay/golden/dispatch-action-settled.json",
+      "expected_status": "settled",
+      "requires": [
+        "observation",
+        "legal_actions",
+        "transition"
+      ]
+    },
+    {
+      "id": "proceed",
+      "request": "artifacts/runtime-v3-gameplay/golden/dispatch-proceed-request.json",
+      "requires": [
+        "state_id",
+        "generation",
+        "operation_id",
+        "action"
+      ]
+    },
+    {
+      "id": "confirm_selection",
+      "request": "artifacts/runtime-v3-gameplay/golden/dispatch-confirm-selection-request.json",
+      "requires": [
+        "state_id",
+        "generation",
+        "operation_id",
+        "action"
+      ]
+    },
+    {
+      "id": "cancel_selection",
+      "request": "artifacts/runtime-v3-gameplay/golden/dispatch-cancel-selection-request.json",
+      "requires": [
+        "state_id",
+        "generation",
+        "operation_id",
+        "action"
+      ]
+    }
+  ]
+}

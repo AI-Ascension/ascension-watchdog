@@ -3,7 +3,7 @@
 use super::Supervisor;
 use crate::admin::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminResult,
-    Capability, DispatchContext, MainLoopHealth, StatusView, command_fingerprint,
+    BackupView, Capability, DispatchContext, MainLoopHealth, StatusView, command_fingerprint,
 };
 use crate::config::DesiredMode;
 use crate::storage::{
@@ -41,6 +41,7 @@ impl AdminDispatcher for Dispatcher<'_> {
             AdminCommand::Jobs(_) => OperatorCommand::Jobs,
             AdminCommand::JobSubmit(_) => OperatorCommand::JobSubmit,
             AdminCommand::Attempt(_) => OperatorCommand::Attempt,
+            AdminCommand::Backup(_) => OperatorCommand::Backup,
             _ => return Err(AdminDispatchError::Unsupported),
         };
         let durable_context = OperatorCommandContext::new(
@@ -115,6 +116,34 @@ impl AdminDispatcher for Dispatcher<'_> {
                 }
                 OperatorCommandOutcome::ReadOnly => Err(AdminDispatchError::Internal),
             };
+        }
+        if let AdminCommand::Backup(request) = command {
+            let owner = self
+                .supervisor
+                .lock
+                .as_ref()
+                .ok_or(AdminDispatchError::Unauthorized)?;
+            let pending = AdminResult::Backup(BackupView {
+                backup_id: request.backup_id.clone(),
+                durable: false,
+            });
+            let pending_response =
+                serde_json::to_value(&pending).map_err(|_| AdminDispatchError::Internal)?;
+            let durable = self
+                .supervisor
+                .store
+                .perform_operator_backup(
+                    owner,
+                    &durable_context,
+                    &request.backup_id,
+                    &pending_response,
+                    now_unix_ms(),
+                )
+                .map_err(|error| AdminDispatchError::from(&error))?;
+            return Ok(AdminResult::Backup(BackupView {
+                backup_id: request.backup_id.clone(),
+                durable,
+            }));
         }
         let result = AdminResult::Accepted(AcceptedView {
             command: command.name(),
