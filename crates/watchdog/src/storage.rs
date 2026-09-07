@@ -1267,16 +1267,27 @@ impl Store {
     /// crash; callers must reconcile them explicitly.
     pub fn claim_next_job(&mut self, worker_id: &str, now_ms: u64) -> Result<Option<JobClaim>> {
         validate_name(worker_id, "worker id", 128)?;
-        if self.desired_mode()? != DesiredMode::Running {
-            return Ok(None);
-        }
+        let payload_read_limit = self
+            .max_payload_bytes
+            .checked_add(1)
+            .and_then(|limit| i64::try_from(limit).ok())
+            .ok_or_else(|| {
+                WatchdogError::InvalidInput("job payload bound exceeds SQLite range".to_owned())
+            })?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let desired = metadata_from_conn(&tx, "desired_mode")?.ok_or_else(|| {
+            WatchdogError::Conflict("desired mode metadata is missing".to_owned())
+        })?;
+        if parse_mode(&desired)? != DesiredMode::Running {
+            tx.commit()?;
+            return Ok(None);
+        }
         let row: Option<(String, String, String, String, i64, i64, i64)> = tx
             .query_row(
-                "SELECT id, kind, payload, payload_digest, created_at_ms, attempt_count, next_retry_at_ms FROM jobs WHERE status = 'queued' AND next_retry_at_ms <= ? ORDER BY created_at_ms, id LIMIT 1",
-                params![sqlite_timestamp(now_ms)?],
+                "SELECT id, kind, substr(payload, 1, ?2), payload_digest, created_at_ms, attempt_count, next_retry_at_ms FROM jobs WHERE status = 'queued' AND next_retry_at_ms <= ?1 ORDER BY created_at_ms, id LIMIT 1",
+                params![sqlite_timestamp(now_ms)?, payload_read_limit],
                 |row| {
                     Ok((
                         row.get(0)?,
@@ -1296,6 +1307,12 @@ impl Store {
             tx.commit()?;
             return Ok(None);
         };
+        validate_name(&id, "job id", 128)?;
+        validate_name(&kind, "job kind", 128)?;
+        let payload =
+            validate_claim_payload(&payload_text, &payload_digest, self.max_payload_bytes)?;
+        let created_at_ms = u64::try_from(created_at)
+            .map_err(|_| WatchdogError::Conflict("job creation timestamp is invalid".to_owned()))?;
         let next_attempt = u32::try_from(attempt_count)
             .map_err(|_| WatchdogError::Conflict("job attempt counter overflow".to_string()))?
             .checked_add(1)
@@ -1316,7 +1333,6 @@ impl Store {
         )?;
         insert_audit_tx(&tx, "job_claimed", &format!("{id}:{attempt_id}"), now_ms)?;
         tx.commit()?;
-        let payload: Value = serde_json::from_str(&payload_text)?;
         Ok(Some(JobClaim {
             job: JobRecord {
                 id,
@@ -1324,7 +1340,7 @@ impl Store {
                 payload,
                 payload_digest,
                 status: JobStatus::Running,
-                created_at_ms: u64::try_from(created_at).unwrap_or_default(),
+                created_at_ms,
                 claimed_at_ms: Some(now_ms),
                 completed_at_ms: None,
                 attempt_count: next_attempt,
@@ -2131,6 +2147,16 @@ fn has_any_user_tables(conn: &Connection) -> Result<bool> {
         |row| row.get(0),
     )?;
     Ok(count > 0)
+}
+
+fn validate_claim_payload(text: &str, expected_digest: &str, bound: usize) -> Result<Value> {
+    if text.len() > bound || hex_digest(text.as_bytes()) != expected_digest {
+        return Err(WatchdogError::Conflict(
+            "stored job payload exceeds its bound or differs from its admission digest".to_owned(),
+        ));
+    }
+    serde_json::from_str(text)
+        .map_err(|_| WatchdogError::Conflict("stored job payload is not valid JSON".to_owned()))
 }
 
 fn require_running_launch_intent(tx: &Transaction<'_>) -> Result<()> {
