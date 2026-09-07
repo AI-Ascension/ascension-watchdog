@@ -11,6 +11,17 @@ validation does not open credentials; the server validates and loads them at sta
 authenticated IPC and persists intent, response, and audit before acknowledgment.
 Reuse the exact key and command after an uncertain response. `status` uses the
 read credential. Acknowledgment means intent accepted, not completed cleanup.
+
+`watchdog job submit --config PATH --idempotency-key KEY --kind KIND
+--payload JSON` submits a bounded watchdog-owned job through the same
+authenticated queue. `--payload-file PATH` is also accepted for an absolute,
+regular, owner-only file; the file is read once and its JSON is validated before
+transport. The successful result contains only the durable `job_id`. The job
+row, `job_submitted` audit event, operator receipt, and operator audit event are
+one SQLite transaction. Reusing the exact key and payload returns the original
+job ID even after completion or while stopped; changing the kind or payload is
+a conflict. Submission never changes desired mode, and a stopped deployment
+cannot claim the queued job until an operator separately admits running mode.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
@@ -85,12 +96,18 @@ Every request contains:
 ```
 
 The command kind is one of `status`, `start`, `pause`, `resume`, `drain`,
-`stop`, `jobs`, `attempt`, `quarantine`, `retry`, `reconcile`, `backup`,
-`restore`, `release_inspect`, or `release_activate`. Each `params` object is a
+`stop`, `jobs`, `job_submit`, `attempt`, `quarantine`, `retry`, `reconcile`,
+`backup`, `restore`, `release_inspect`, or `release_activate`. Each `params` object is a
 closed typed structure. Jobs and attempts return bounded summaries without
 private payload/result text. Backup and restore take approved logical IDs,
 not arbitrary paths; restore requires explicit `rekey: true`. Release
 activation requires the exact expected SHA-256 digest.
+
+`job_submit` has exactly `{ "kind": "...", "payload": <JSON value> }` in its
+`params`; it is not a generic command proxy. Its payload is bounded by the
+transport and the configured owner-local store limit, and request `Debug`
+output redacts the payload. Only the admin credential may submit; the read
+credential is rejected before queue admission.
 
 Duplicate JSON member names are rejected recursively before typed decoding.
 Unknown fields, unknown command kinds, invalid UUIDs, unsafe identifiers,
@@ -142,11 +159,18 @@ time.
 ## Idempotency and deadlines
 
 `idempotency_key` identifies one logical command. The cache fingerprint covers
-the contract, claimed capability, and typed command but deliberately excludes
-credentials, request UUID, and transport deadline. A same-key/same-command
-retry returns the retained response without a second dispatch; a same-key
-different-command retry returns `CONFLICT`. A request already queued returns
+the contract, claimed capability, and typed command (including a job's kind and
+payload) but deliberately excludes credentials, request UUID, and transport
+deadline. A same-key/same-command retry returns the retained response without a
+second dispatch; a same-key different-command or job-payload retry returns
+`CONFLICT`. A request already queued returns
 `IN_PROGRESS`. Queue-full returns `BUSY` and releases the pending cache slot.
+
+The operator ledger is at schema v2. Opening an owner-held v1 store performs a
+transactional constrained-table migration that preserves every receipt,
+idempotency key, sequence, and stop record before `job_submit` is enabled. A
+marker/table mismatch or a missing ledger with an existing marker fails closed;
+read-only status and doctor paths never run this migration.
 
 If the caller's deadline expires while queued, the main loop records a
 `TIMEOUT` response without invoking the dispatcher. If the transport caller

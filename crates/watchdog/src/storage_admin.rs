@@ -12,11 +12,11 @@ use super::{
     open_connection_with_flags, parse_mode, sqlite_u64, to_sqlite_error, update_metadata_tx,
     validate_local_storage_path, validate_name,
 };
-use crate::config::{DesiredMode, validate_digest};
+use crate::config::{DesiredMode, hex_digest, validate_digest};
 use crate::error::Result;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ use uuid::Uuid;
 /// separate from the watchdog core schema version so old owner stores can be
 /// upgraded under the singleton lock without pretending to migrate unrelated
 /// state.
-pub const OPERATOR_LEDGER_SCHEMA_VERSION: i64 = 1;
+pub const OPERATOR_LEDGER_SCHEMA_VERSION: i64 = 2;
 
 /// Maximum rows retained in the durable command ledger.  Rows are never
 /// evicted: a full ledger backpressures a new command until an explicit,
@@ -99,6 +99,7 @@ pub enum OperatorCommand {
     Backup,
     Restore,
     ReleaseActivate,
+    JobSubmit,
 }
 
 impl OperatorCommand {
@@ -119,6 +120,7 @@ impl OperatorCommand {
             Self::Backup => "backup",
             Self::Restore => "restore",
             Self::ReleaseActivate => "release_activate",
+            Self::JobSubmit => "job_submit",
         }
     }
 
@@ -139,6 +141,7 @@ impl OperatorCommand {
             "backup" => Ok(Self::Backup),
             "restore" => Ok(Self::Restore),
             "release_activate" => Ok(Self::ReleaseActivate),
+            "job_submit" => Ok(Self::JobSubmit),
             other => Err(WatchdogError::Conflict(format!(
                 "unknown operator command {other}"
             ))),
@@ -387,6 +390,156 @@ impl Store {
         }))
     }
 
+    /// Atomically admit one authenticated job submission. The job row, the
+    /// replayable operator receipt, and both audit records share one SQLite
+    /// transaction. A replay is accepted even when the original job is
+    /// completed or the deployment is stopped; it never changes desired mode
+    /// and therefore cannot revive the scheduler.
+    pub fn admit_operator_job_submission(
+        &mut self,
+        owner: &SingletonLock,
+        context: &OperatorCommandContext,
+        kind: &str,
+        payload: &Value,
+        now_ms: u64,
+    ) -> Result<OperatorCommandOutcome> {
+        ensure_owner_lock(&self.path, owner)?;
+        context.validate()?;
+        if context.capability != OperatorCapability::Admin {
+            return Err(WatchdogError::Unauthorized(
+                "read capability cannot admit a job submission".to_string(),
+            ));
+        }
+        validate_name(kind, "job kind", 128)?;
+        let encoded = serde_json::to_vec(payload)?;
+        if encoded.len() > self.max_payload_bytes {
+            return Err(WatchdogError::InvalidInput(format!(
+                "job payload exceeds {} bytes",
+                self.max_payload_bytes
+            )));
+        }
+        let payload_digest = hex_digest(&encoded);
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if let Some(existing) = find_operator_by_key(&tx, &context.idempotency_key)? {
+            if existing.principal != context.principal || existing.capability != context.capability
+            {
+                return Err(WatchdogError::Unauthorized(
+                    "idempotency key belongs to another operator context".to_string(),
+                ));
+            }
+            if existing.command_fingerprint != context.command_fingerprint
+                || existing.command != OperatorCommand::JobSubmit
+            {
+                return Err(WatchdogError::Conflict(
+                    "idempotency key was reused with a different command fingerprint".to_string(),
+                ));
+            }
+            let job_id = job_id_from_response(&existing.response)?;
+            let stored: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT kind, payload_digest FROM jobs WHERE id=?",
+                    params![job_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((stored_kind, stored_digest)) = stored else {
+                return Err(WatchdogError::Conflict(
+                    "job submission receipt has no durable job row".to_string(),
+                ));
+            };
+            if stored_kind != kind || stored_digest != payload_digest {
+                return Err(WatchdogError::Conflict(
+                    "idempotency key was reused with a different job payload".to_string(),
+                ));
+            }
+            tx.rollback()?;
+            return Ok(OperatorCommandOutcome::Replayed(
+                existing.with_replayed(true),
+            ));
+        }
+        if let Some(existing) = find_operator_by_request(&tx, &context.request_id)? {
+            return Err(WatchdogError::Conflict(format!(
+                "request id already belongs to idempotency key {}",
+                existing.idempotency_key
+            )));
+        }
+        enforce_ledger_capacity(&tx, OperatorCommand::JobSubmit)?;
+
+        let job_id = Uuid::new_v4().to_string();
+        let response = json!({
+            "kind": "JobSubmitted",
+            "value": {"job_id": job_id},
+        });
+        validate_response(&response)?;
+        let response_text = serde_json::to_string(&response)?;
+        super::insert_job_tx(
+            &tx,
+            &job_id,
+            kind,
+            &encoded,
+            &payload_digest,
+            self.max_jobs,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO operator_commands (request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+            params![
+                context.request_id,
+                context.idempotency_key,
+                context.principal,
+                context.capability.as_str(),
+                OperatorCommand::JobSubmit.as_str(),
+                context.command_fingerprint,
+                response_text,
+                super::sqlite_timestamp(now_ms)?,
+            ],
+        )?;
+        let sequence_i64 = tx.last_insert_rowid();
+        let detail = format!(
+            "sequence={};request_id={};key={};principal={};capability={};command={};fingerprint={}",
+            sequence_i64,
+            context.request_id,
+            context.idempotency_key,
+            context.principal,
+            context.capability.as_str(),
+            OperatorCommand::JobSubmit.as_str(),
+            context.command_fingerprint,
+        );
+        insert_audit_tx(&tx, "operator_command_accepted", &detail, now_ms)?;
+        let sequence = u64::try_from(sequence_i64).map_err(|_| {
+            WatchdogError::Conflict("operator command sequence overflow".to_string())
+        })?;
+        tx.commit()?;
+        Ok(OperatorCommandOutcome::Accepted(OperatorCommandReceipt {
+            sequence,
+            request_id: context.request_id.clone(),
+            idempotency_key: context.idempotency_key.clone(),
+            principal: context.principal.clone(),
+            capability: context.capability,
+            command: OperatorCommand::JobSubmit,
+            command_fingerprint: context.command_fingerprint.clone(),
+            desired_mode: None,
+            response,
+            recorded_at_ms: now_ms,
+            replayed: false,
+        }))
+    }
+
+    /// Compatibility spelling for callers that mirror the wire command name.
+    pub fn admit_operator_job_submit(
+        &mut self,
+        owner: &SingletonLock,
+        context: &OperatorCommandContext,
+        kind: &str,
+        payload: &Value,
+        now_ms: u64,
+    ) -> Result<OperatorCommandOutcome> {
+        self.admit_operator_job_submission(owner, context, kind, payload, now_ms)
+    }
+
     /// Read one retained mutation receipt without changing the database.
     pub fn operator_command(
         &self,
@@ -455,11 +608,64 @@ pub fn migrate_operator_ledger_for_owner(
             "store schema {schema} requires an explicit migration"
         )));
     }
-    if table_exists(&conn, "operator_commands")? {
+    let table_present = table_exists(&conn, "operator_commands")?;
+    let supports_job_submit = if table_present {
         validate_operator_table(&conn)?;
+        operator_table_supports_job_submit(&conn)?
+    } else {
+        false
+    };
+    let existing_version: Option<String> = conn
+        .query_row(
+            "SELECT value FROM metadata WHERE key='operator_ledger_schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let existing_version = existing_version
+        .map(|version| {
+            version.parse::<i64>().map_err(|_| {
+                WatchdogError::Conflict(
+                    "operator ledger schema version metadata is invalid".to_string(),
+                )
+            })
+        })
+        .transpose()?;
+    if existing_version
+        .is_some_and(|version| !(1..=OPERATOR_LEDGER_SCHEMA_VERSION).contains(&version))
+    {
+        return Err(WatchdogError::Unsupported(format!(
+            "operator ledger schema {} requires an explicit migration",
+            existing_version.unwrap_or_default()
+        )));
     }
+    if existing_version == Some(OPERATOR_LEDGER_SCHEMA_VERSION) && !table_present {
+        return Err(WatchdogError::Conflict(
+            "operator ledger schema marker exists but operator_commands is missing".to_string(),
+        ));
+    }
+    if existing_version == Some(1) && !table_present {
+        return Err(WatchdogError::Conflict(
+            "operator ledger schema v1 marker exists but operator_commands is missing".to_string(),
+        ));
+    }
+    if existing_version == Some(OPERATOR_LEDGER_SCHEMA_VERSION) && !supports_job_submit {
+        return Err(WatchdogError::Conflict(
+            "operator ledger schema v2 marker is paired with a v1 command constraint".to_string(),
+        ));
+    }
+
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute_batch(OPERATOR_TABLE_SQL)?;
+    if !table_present {
+        // A missing marker and missing operator table is the only recognized
+        // bootstrap case. A marker that already claimed a ledger was handled
+        // above as corruption, so receipts can never be silently discarded.
+        tx.execute_batch(OPERATOR_TABLE_SQL)?;
+    } else if !supports_job_submit {
+        migrate_operator_table_v1_to_v2(&tx)?;
+    } else {
+        tx.execute_batch(OPERATOR_INDEX_SQL)?;
+    }
     let existing_version: Option<String> = tx
         .query_row(
             "SELECT value FROM metadata WHERE key='operator_ledger_schema_version'",
@@ -468,12 +674,17 @@ pub fn migrate_operator_ledger_for_owner(
         )
         .optional()?;
     match existing_version {
-        Some(version) if version != OPERATOR_LEDGER_SCHEMA_VERSION.to_string() => {
+        Some(version) if version != "1" && version != "2" => {
             return Err(WatchdogError::Unsupported(format!(
                 "operator ledger schema {version} requires an explicit migration"
             )));
         }
-        Some(_) => {}
+        Some(_) => {
+            tx.execute(
+                "UPDATE metadata SET value=? WHERE key='operator_ledger_schema_version'",
+                params![OPERATOR_LEDGER_SCHEMA_VERSION.to_string()],
+            )?;
+        }
         None => {
             tx.execute(
                 "INSERT INTO metadata (key, value) VALUES ('operator_ledger_schema_version', ?)",
@@ -482,6 +693,55 @@ pub fn migrate_operator_ledger_for_owner(
         }
     }
     tx.commit()?;
+    Ok(())
+}
+
+const OPERATOR_INDEX_SQL: &str = "
+    CREATE INDEX IF NOT EXISTS operator_commands_order_idx ON operator_commands(sequence);
+    CREATE INDEX IF NOT EXISTS operator_commands_principal_idx ON operator_commands(principal, sequence);
+";
+
+const OPERATOR_TABLE_V2_REBUILD_SQL: &str = "
+    CREATE TABLE operator_commands_v2 (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        principal TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK(capability IN ('read','admin')),
+        command TEXT NOT NULL CHECK(command IN (
+            'status','jobs','attempt','release_inspect','start','pause',
+            'resume','drain','stop','quarantine','retry','reconcile',
+            'backup','restore','release_activate','job_submit'
+        )),
+        command_fingerprint TEXT NOT NULL,
+        desired_mode TEXT CHECK(desired_mode IS NULL OR desired_mode IN ('stopped','paused','running','draining')),
+        response_json TEXT NOT NULL,
+        recorded_at_ms INTEGER NOT NULL
+    );
+";
+
+fn operator_table_supports_job_submit(conn: &Connection) -> Result<bool> {
+    let ddl: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='operator_commands'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(ddl.to_ascii_lowercase().contains("'job_submit'"))
+}
+
+fn migrate_operator_table_v1_to_v2(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(OPERATOR_TABLE_V2_REBUILD_SQL)?;
+    tx.execute(
+        "INSERT INTO operator_commands_v2 (sequence, request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms) SELECT sequence, request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms FROM operator_commands ORDER BY sequence",
+        [],
+    )?;
+    tx.execute_batch(
+        "DROP INDEX IF EXISTS operator_commands_order_idx;
+         DROP INDEX IF EXISTS operator_commands_principal_idx;
+         DROP TABLE operator_commands;
+         ALTER TABLE operator_commands_v2 RENAME TO operator_commands;",
+    )?;
+    tx.execute_batch(OPERATOR_INDEX_SQL)?;
     Ok(())
 }
 
@@ -495,7 +755,7 @@ const OPERATOR_TABLE_SQL: &str = "
         command TEXT NOT NULL CHECK(command IN (
             'status','jobs','attempt','release_inspect','start','pause',
             'resume','drain','stop','quarantine','retry','reconcile',
-            'backup','restore','release_activate'
+            'backup','restore','release_activate','job_submit'
         )),
         command_fingerprint TEXT NOT NULL,
         desired_mode TEXT CHECK(desired_mode IS NULL OR desired_mode IN ('stopped','paused','running','draining')),
@@ -564,6 +824,19 @@ fn validate_response(response: &Value) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn job_id_from_response(response: &Value) -> Result<String> {
+    let job_id = response
+        .get("value")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("job_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            WatchdogError::Conflict("job submission receipt has no job id".to_string())
+        })?;
+    validate_name(job_id, "job id", 128)?;
+    Ok(job_id.to_string())
 }
 
 fn operator_receipt_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperatorCommandReceipt> {

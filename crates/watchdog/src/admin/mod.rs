@@ -20,14 +20,16 @@ mod server;
 pub use auth::{AuthReferences, AuthStore, Authz};
 pub use client::{AdminClient, AdminClientConfig};
 pub use endpoint::{EndpointGuard, validate_endpoint_path};
+pub(crate) use protocol::command_fingerprint;
 pub use protocol::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminRequest,
     AdminResponse, AdminResult, AttemptRequest, AttemptStatus, AttemptView,
     AuthenticatedPrincipalClass, BackupRequest, BackupView, Capability, CommandName,
-    ContractVersion, DispatchContext, EmptyParams, HealthSnapshot, JobFilter, JobStatus, JobView,
-    JobsRequest, JobsView, MainLoopHealth, MainLoopPhase, QuarantineRequest, ReconcileRequest,
-    ReconcileTarget, ReleaseActivateRequest, ReleaseInspectRequest, ReleaseInspection, ReplyStatus,
-    RestoreRequest, RestoreView, RetryPolicy, RetryRequest, StatusView,
+    ContractVersion, DispatchContext, EmptyParams, HealthSnapshot, JobFilter, JobStatus,
+    JobSubmitRequest, JobSubmitView, JobSubmittedView, JobView, JobsRequest, JobsView,
+    MainLoopHealth, MainLoopPhase, QuarantineRequest, ReconcileRequest, ReconcileTarget,
+    ReleaseActivateRequest, ReleaseInspectRequest, ReleaseInspection, ReplyStatus, RestoreRequest,
+    RestoreView, RetryPolicy, RetryRequest, StatusView,
 };
 pub use queue::{AdminQueue, MAX_DRAIN_BATCH};
 pub use server::{AdminServer, AdminServerConfig};
@@ -56,6 +58,9 @@ pub const MAX_IDEMPOTENCY_RECORDS: usize = 256;
 /// Maximum client-supplied deadline.  A shorter configured server deadline may
 /// reduce this value, but no caller can hold a worker indefinitely.
 pub const MAX_DEADLINE_MS: u32 = 30_000;
+
+/// Maximum serialized payload carried by an authenticated job submission.
+pub use protocol::MAX_JOB_PAYLOAD_BYTES;
 
 /// Maximum workers used to serve local clients.  Workers are fixed at startup;
 /// no request may create an unbounded thread.

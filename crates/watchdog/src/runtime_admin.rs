@@ -3,7 +3,7 @@
 use super::Supervisor;
 use crate::admin::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminResult,
-    Capability, DispatchContext, MainLoopHealth, StatusView,
+    Capability, DispatchContext, MainLoopHealth, StatusView, command_fingerprint,
 };
 use crate::config::DesiredMode;
 use crate::storage::{
@@ -25,6 +25,12 @@ impl AdminDispatcher for Dispatcher<'_> {
         context
             .validate()
             .map_err(|_| AdminDispatchError::Invalid)?;
+        command
+            .validate()
+            .map_err(|_| AdminDispatchError::Invalid)?;
+        if context.command_fingerprint() != command_fingerprint(context.capability(), command) {
+            return Err(AdminDispatchError::Conflict);
+        }
         let operation = match command {
             AdminCommand::Status(_) => OperatorCommand::Status,
             AdminCommand::Start(_) => OperatorCommand::Start,
@@ -33,6 +39,7 @@ impl AdminDispatcher for Dispatcher<'_> {
             AdminCommand::Drain(_) => OperatorCommand::Drain,
             AdminCommand::Stop(_) => OperatorCommand::Stop,
             AdminCommand::Jobs(_) => OperatorCommand::Jobs,
+            AdminCommand::JobSubmit(_) => OperatorCommand::JobSubmit,
             AdminCommand::Attempt(_) => OperatorCommand::Attempt,
             _ => return Err(AdminDispatchError::Unsupported),
         };
@@ -82,6 +89,32 @@ impl AdminDispatcher for Dispatcher<'_> {
                 config_digest: status.config_digest,
                 approved_release_digest: status.approved_release_digest,
             }));
+        }
+        if let AdminCommand::JobSubmit(request) = command {
+            let owner = self
+                .supervisor
+                .lock
+                .as_ref()
+                .ok_or(AdminDispatchError::Unauthorized)?;
+            let receipt = self
+                .supervisor
+                .store
+                .admit_operator_job_submission(
+                    owner,
+                    &durable_context,
+                    &request.kind,
+                    &request.payload,
+                    now_unix_ms(),
+                )
+                .map_err(|error| AdminDispatchError::from(&error))?;
+            return match receipt {
+                OperatorCommandOutcome::Accepted(receipt)
+                | OperatorCommandOutcome::Replayed(receipt) => {
+                    serde_json::from_value(receipt.response)
+                        .map_err(|_| AdminDispatchError::PersistenceUnavailable)
+                }
+                OperatorCommandOutcome::ReadOnly => Err(AdminDispatchError::Internal),
+            };
         }
         let result = AdminResult::Accepted(AcceptedView {
             command: command.name(),

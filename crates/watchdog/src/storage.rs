@@ -668,7 +668,11 @@ impl Store {
         insert_metadata(&tx, "restart_generation", "1")?;
         insert_metadata(&tx, "config_digest", &config_digest)?;
         insert_metadata(&tx, "config_compat_digest", &config_compat_digest)?;
-        insert_metadata(&tx, "operator_ledger_schema_version", "1")?;
+        insert_metadata(
+            &tx,
+            "operator_ledger_schema_version",
+            &OPERATOR_LEDGER_SCHEMA_VERSION.to_string(),
+        )?;
         insert_metadata(&tx, "initialized_at_ms", &now.to_string())?;
         insert_metadata(&tx, "updated_at_ms", &now.to_string())?;
         insert_audit_tx(
@@ -2146,7 +2150,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             command TEXT NOT NULL CHECK(command IN (
                 'status','jobs','attempt','release_inspect','start','pause',
                 'resume','drain','stop','quarantine','retry','reconcile',
-                'backup','restore','release_activate'
+                'backup','restore','release_activate','job_submit'
             )),
             command_fingerprint TEXT NOT NULL,
             desired_mode TEXT CHECK(desired_mode IS NULL OR desired_mode IN ('stopped','paused','running','draining')),
