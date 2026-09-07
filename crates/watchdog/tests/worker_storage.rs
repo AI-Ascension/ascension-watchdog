@@ -4,7 +4,8 @@ use ascension_watchdog::config::{DesiredMode, WatchdogConfig};
 use ascension_watchdog::storage::{
     MAX_WORKER_WIRE_INTEGER, Store, WORKER_HANDOFF_OPERATION, WORKER_HANDOFF_PAYLOAD_DIGEST,
     WORKER_HANDOFF_SCHEMA_DIGEST, WorkerBinding, WorkerClaimWitness, WorkerControlMode,
-    WorkerControlWitness, WorkerHandoffState, WorkerTerminalReceipt, WorkerTerminalStatus,
+    WorkerControlWitness, WorkerHandoff, WorkerHandoffState, WorkerHandoffTuple,
+    WorkerTerminalReceipt, WorkerTerminalStatus,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -54,6 +55,65 @@ fn claim_witness(binding: &WorkerBinding, control: &WorkerControlWitness) -> Wor
         worker_boot_id: control.worker_boot_id.clone(),
         mode_sequence: control.mode_sequence,
     }
+}
+
+fn with_reopened_replaced_pending_handoff(
+    test: impl FnOnce(
+        &mut Store,
+        &WorkerBinding,
+        &WorkerControlWitness,
+        &WorkerControlWitness,
+        &WorkerHandoff,
+        &WorkerHandoffTuple,
+    ),
+) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (mut store, config) = fixture(&temp);
+    let binding = binding(&config);
+    let first_control = control(&binding);
+    store
+        .configure_worker_binding_at(&binding, 1)
+        .expect("binding");
+    store
+        .set_worker_control_at(&first_control, 2)
+        .expect("control");
+    let first_witness = claim_witness(&binding, &first_control);
+    store
+        .submit_job_at(WORKER_HANDOFF_OPERATION, &json!({}), 3)
+        .expect("job");
+    let claim = store
+        .claim_next_worker_handoff(&first_witness, 3)
+        .expect("claim")
+        .expect("handoff");
+    let tuple = claim.tuple();
+    store
+        .mark_worker_handoff_may_have_been_dispatched_at(&tuple, 4)
+        .expect("dispatch marker");
+    drop(store);
+
+    let owner =
+        ascension_watchdog::storage::SingletonLock::acquire(&config.database).expect("owner lock");
+    let mut reopened = Store::open_for_owner(&config.database, &config, &owner).expect("reopen");
+    let mut replacement = first_control.clone();
+    "66666666-6666-4666-8666-666666666666".clone_into(&mut replacement.watchdog_boot_id);
+    "77777777-7777-4777-8777-777777777777".clone_into(&mut replacement.worker_boot_id);
+    replacement.mode = WorkerControlMode::Stopped;
+    replacement.mode_sequence = 8;
+    reopened
+        .set_worker_control_at(&replacement, 5)
+        .expect("replacement control");
+    reopened
+        .set_desired_mode_at(DesiredMode::Stopped, 6)
+        .expect("durable stop");
+
+    test(
+        &mut reopened,
+        &binding,
+        &first_control,
+        &replacement,
+        &claim,
+        &tuple,
+    );
 }
 
 #[test]
@@ -543,6 +603,170 @@ fn stale_worker_boot_cannot_admit_or_complete_an_old_handoff() {
             .expect("retained")
             .state,
         WorkerHandoffState::MayHaveBeenDispatched
+    );
+}
+
+#[test]
+fn terminal_duplicate_completion_is_historical_after_worker_replacement() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (mut store, config) = fixture(&temp);
+    let binding = binding(&config);
+    let first_control = control(&binding);
+    store
+        .configure_worker_binding_at(&binding, 1)
+        .expect("binding");
+    store
+        .set_worker_control_at(&first_control, 2)
+        .expect("control");
+    let witness = claim_witness(&binding, &first_control);
+    store
+        .submit_job_at(WORKER_HANDOFF_OPERATION, &json!({}), 3)
+        .expect("job");
+    let claim = store
+        .claim_next_worker_handoff(&witness, 3)
+        .expect("claim")
+        .expect("handoff");
+    let tuple = claim.tuple();
+    store
+        .mark_worker_handoff_may_have_been_dispatched_at(&tuple, 4)
+        .expect("dispatch");
+    let receipt = WorkerTerminalReceipt {
+        status: WorkerTerminalStatus::Completed,
+        checkpoint_sequence: 1,
+        terminal_ref: "replacement-terminal".to_owned(),
+        result_digest: "d".repeat(64),
+    };
+    store
+        .complete_worker_handoff_at(&tuple, &receipt, 5)
+        .expect("completion");
+    drop(store);
+
+    let mut reopened = Store::open(&config.database, &config).expect("reopen");
+    let mut replacement = first_control.clone();
+    replacement.watchdog_boot_id = "44444444-4444-4444-8444-444444444444".to_owned();
+    replacement.worker_boot_id = "55555555-5555-4555-8555-555555555555".to_owned();
+    replacement.mode_sequence = 8;
+    reopened
+        .set_worker_control_at(&replacement, 6)
+        .expect("replacement control");
+    let repeated = reopened
+        .complete_worker_handoff_at(&tuple, &receipt, 7)
+        .expect("historical duplicate completion");
+    assert!(repeated.already_completed);
+    assert!(
+        reopened
+            .acknowledge_worker_handoff_at(&tuple, &repeated.terminal_digest, 8)
+            .is_err()
+    );
+    let acknowledgment = reopened
+        .acknowledge_worker_handoff_with_recovery_at(
+            &tuple,
+            &repeated.terminal_digest,
+            &replacement,
+            9,
+        )
+        .expect("historical acknowledgment");
+    assert!(!acknowledgment.already_acknowledged);
+    assert!(
+        reopened
+            .acknowledge_worker_handoff_at(&tuple, &repeated.terminal_digest, 10)
+            .expect("historical duplicate acknowledgment")
+            .already_acknowledged
+    );
+}
+
+#[test]
+fn current_recovery_completes_old_handoff_after_reopen_without_redispatch_or_resume() {
+    with_reopened_replaced_pending_handoff(
+        |reopened, binding, first_control, replacement, claim, tuple| {
+            let receipt = WorkerTerminalReceipt {
+                status: WorkerTerminalStatus::Completed,
+                checkpoint_sequence: 2,
+                terminal_ref: "recovered-terminal".to_owned(),
+                result_digest: "e".repeat(64),
+            };
+            assert!(
+                reopened
+                    .complete_worker_handoff_at(tuple, &receipt, 7)
+                    .is_err()
+            );
+            let completion = reopened
+                .complete_worker_handoff_with_recovery_at(tuple, &receipt, replacement, 8)
+                .expect("current recovery completion");
+            assert!(!completion.already_completed);
+            assert_eq!(completion.handoff.state, WorkerHandoffState::Completed);
+            assert_eq!(
+                completion.handoff.watchdog_boot_id,
+                first_control.watchdog_boot_id
+            );
+            assert_eq!(
+                completion.handoff.worker_boot_id,
+                first_control.worker_boot_id
+            );
+            assert_eq!(reopened.desired_mode().expect("mode"), DesiredMode::Stopped);
+
+            let replacement_witness = claim_witness(binding, replacement);
+            assert!(
+                reopened
+                    .claim_next_worker_handoff(&replacement_witness, 9)
+                    .is_err()
+            );
+            let repeated = reopened
+                .complete_worker_handoff_with_recovery_at(tuple, &receipt, replacement, 10)
+                .expect("repeated current recovery completion");
+            assert!(repeated.already_completed);
+
+            let mut wrong_tuple = tuple.clone();
+            wrong_tuple.attempt_number += 1;
+            assert!(
+                reopened
+                    .complete_worker_handoff_with_recovery_at(
+                        &wrong_tuple,
+                        &receipt,
+                        replacement,
+                        11,
+                    )
+                    .is_err()
+            );
+            let mut wrong_receipt = receipt.clone();
+            wrong_receipt.result_digest = "f".repeat(64);
+            assert!(
+                reopened
+                    .complete_worker_handoff_with_recovery_at(
+                        tuple,
+                        &wrong_receipt,
+                        replacement,
+                        11,
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                reopened
+                    .worker_handoff(&claim.handoff_id)
+                    .expect("retained handoff")
+                    .expect("handoff")
+                    .state,
+                WorkerHandoffState::Completed
+            );
+
+            let acknowledgment = reopened
+                .acknowledge_worker_handoff_with_recovery_at(
+                    tuple,
+                    &completion.terminal_digest,
+                    replacement,
+                    12,
+                )
+                .expect("current recovery acknowledgment");
+            assert!(!acknowledgment.already_acknowledged);
+            assert_eq!(
+                reopened
+                    .worker_handoff(&claim.handoff_id)
+                    .expect("acknowledged handoff")
+                    .expect("handoff")
+                    .state,
+                WorkerHandoffState::Acknowledged
+            );
+        },
     );
 }
 

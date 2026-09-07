@@ -1,11 +1,14 @@
 //! Terminal receipt hashing, compact results, and UUID helpers.
 
+use super::storage_worker_claims_state::{binding_from_tx, control_from_tx};
+use super::storage_worker_claims_validation::{validate_control, validate_control_against_binding};
 use super::storage_worker_queries_handoff::RawHandoff;
 use super::storage_worker_types::{
-    WorkerHandoffTuple, WorkerTerminalReceipt, WorkerTerminalStatus,
+    WorkerControlWitness, WorkerHandoffTuple, WorkerTerminalReceipt, WorkerTerminalStatus,
 };
 use crate::config::hex_digest;
 use crate::error::{Result, WatchdogError};
+use rusqlite::Transaction;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::{Uuid, Variant};
@@ -31,6 +34,39 @@ pub(super) fn ensure_tuple_matches(raw: &RawHandoff, tuple: &WorkerHandoffTuple)
             "worker handoff tuple does not match durable history".to_owned(),
         ))
     }
+}
+
+/// Validate a current, transport-authenticated control witness for historical
+/// completion.  The witness must be the exact durable control row after a
+/// watchdog or worker replacement; its boot identities are deliberately not
+/// compared with the original handoff boot identities.  The original tuple
+/// remains immutable and is checked separately by `ensure_tuple_matches`.
+pub(super) fn validate_current_worker_recovery_tx(
+    tx: &Transaction<'_>,
+    handoff: &RawHandoff,
+    recovery: &WorkerControlWitness,
+) -> Result<()> {
+    validate_control(recovery)?;
+    let binding = binding_from_tx(tx)?
+        .ok_or_else(|| WatchdogError::Conflict("worker binding is not configured".to_owned()))?;
+    validate_control_against_binding(recovery, &binding)?;
+    if binding.deployment_id != handoff.deployment_id
+        || binding.worker_owner_id != handoff.worker_owner_id
+        || binding.worker_profile_digest != handoff.worker_profile_digest
+    {
+        return Err(WatchdogError::Conflict(
+            "worker binding no longer matches the original worker handoff".to_owned(),
+        ));
+    }
+    let current = control_from_tx(tx)?.ok_or_else(|| {
+        WatchdogError::Conflict("worker control has not been acknowledged".to_owned())
+    })?;
+    if current != *recovery {
+        return Err(WatchdogError::Conflict(
+            "worker recovery credential is not the current acknowledged control".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_handoff_transition_time(
