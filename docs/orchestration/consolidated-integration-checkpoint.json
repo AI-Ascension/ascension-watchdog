@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-07",
+  "classification": "confirmed-local-evidence-not-a-release",
+  "supersedes_checkpoint": "transport-review-checkpoint.json",
+  "watchdog": {
+    "tested_commit": "8ae0c9bc28811b2b697e062e8d8bf8d0bfb5e1c0",
+    "integrated_platform_commit": "4b0a87a",
+    "root_test_command": "cargo test --locked --offline --workspace --all-targets --all-features",
+    "root_test_exit": 0,
+    "fixture_tests_passed": 49,
+    "native_linux_tests_ignored": 2,
+    "windows_native_execution": "unverified",
+    "scope": "watchdog, backup, launch authority, lease reference contract, full synthetic fault fixture",
+    "source_matches_tested_platform_commit": true
+  },
+  "companions": [
+    {
+      "repository": "sts2-game-mod",
+      "integration_commit": "4d391ab",
+      "root_results": [
+        "source-linked RecoveryTransportProbe build: zero warnings and errors",
+        "RuntimeV3ValidationProbe execution passed",
+        "strict repository policy: 343 files, zero warnings and errors"
+      ],
+      "scope": "source-only native and managed transport fixture",
+      "pending": "G18 bounded campaign and exact response-identity repairs"
+    },
+    {
+      "repository": "sts2-harness",
+      "integration_commit": "63a53a2",
+      "root_results": [
+        "execution-store suite after bounded Rust payload copying: 10 passed",
+        "runtime suite after duplex test drain synchronization: 81 passed"
+      ],
+      "scope": "provider result persistence, completed resume and synthetic tests",
+      "pending": "H17 child-supervisor review and H18 duplex test review"
+    },
+    {
+      "repository": "sts2-gateway",
+      "candidate_commit": "195f2522338208b32f1b1830b8b1694cb0614a4e",
+      "integrated": false,
+      "pending": "G19 actual recovery-dispatch catalog invalidation review"
+    }
+  ],
+  "remaining_production_work": [
+    "P17 restricted Linux broker with distinct child identities",
+    "host-lease control consumer implementation beyond the reference contract",
+    "reproducible cross-repository release integration and full acceptance audit"
+  ],
+  "release_ready": false,
+  "live_host_recovery_verified": false,
+  "cold_boot_recovery_verified": false,
+  "soak_verified": false,
+  "remote_delivery_completed": false,
+  "service_install_or_release_activation_this_checkpoint": false
+}
