@@ -13,13 +13,13 @@
     "agents": [
       {"path":"/root/mcp_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"A9"},
       {"path":"/root/job_admission","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"W10"},
-      {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V25"},
-      {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G5"},
+      {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V26","status":"reviewing W10 commit 399d59e; V25 complete"},
+      {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G7","status":"raw catalog capture; serialized serde_json raw_value manifest exception granted; G5 complete at 406802c"},
       {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P7"},
       {"path":"/root/fixture_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V24"},
-      {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"A8"},
+      {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"A10","status":"cross-session stale-operation isolation and bounded retention; A8 review found blockers"},
       {"path":"/root/linux_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P8"},
-      {"path":"/root/windows_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G6"}
+      {"path":"/root/windows_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P10","status":"isolated Windows exact-Job cleanup and typed uncertainty; G6 source stable"}
     ]
   },
   "platform_nested_reservation": {
