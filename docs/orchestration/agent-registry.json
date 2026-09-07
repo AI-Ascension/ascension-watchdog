@@ -6,6 +6,11 @@
   "observed_maximum_depth": 1,
   "required_depth": 3,
   "nested_status": "unmet: native spawning not exposed to descendants",
+  "platform_nested_reservation": {
+    "reserved_slots": 0,
+    "released_slots": 2,
+    "reason": "Platform handoff reports nested capability unavailable; no depth-2 or depth-3 execution evidence exists"
+  },
   "agents": [
     {"path":"/root/architecture","thread_id":"01a078b8-4e3d-75d2-aceb-ac70801cf138","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
     {"path":"/root/verification","thread_id":"01a078bb-b469-7ed1-845e-d4cc92b57c5f","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},

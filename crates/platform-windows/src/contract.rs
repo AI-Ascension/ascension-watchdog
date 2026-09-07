@@ -190,7 +190,7 @@ pub struct ProcessIdentity {
 /// Direct process launch request.  The native implementation never interprets
 /// this as a shell command and never accepts an executable outside the role
 /// allowlist in [`WindowsPlatformConfig`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct WindowsLaunchSpec {
     pub component: ComponentKind,
     pub executable: PathBuf,
@@ -201,6 +201,23 @@ pub struct WindowsLaunchSpec {
     pub launch_nonce: String,
     pub graceful_timeout_ms: u32,
     pub force_timeout_ms: u32,
+}
+
+impl std::fmt::Debug for WindowsLaunchSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WindowsLaunchSpec")
+            .field("component", &self.component)
+            .field("executable", &self.executable)
+            .field("argument_count", &self.arguments.len())
+            .field("environment_count", &self.environment.len())
+            .field("working_directory", &self.working_directory)
+            .field("session", &self.session)
+            .field("launch_nonce", &self.launch_nonce)
+            .field("graceful_timeout_ms", &self.graceful_timeout_ms)
+            .field("force_timeout_ms", &self.force_timeout_ms)
+            .finish()
+    }
 }
 
 impl WindowsLaunchSpec {

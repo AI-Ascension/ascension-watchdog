@@ -162,12 +162,13 @@ mod native_owner_death {
 
     fn write_identity(path: &Path, identity: &ProcessIdentity) {
         let contents = format!(
-            "{}\n{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n{}\n",
             identity.pid,
             identity.creation_time_100ns,
             identity.session_id,
             identity.launch_nonce,
             identity.executable.to_string_lossy(),
+            identity.executable_sha256,
         );
         fs::write(path, contents).expect("owner-death helper must publish identity");
     }
@@ -203,6 +204,7 @@ mod native_owner_death {
             creation_time_100ns,
             launch_nonce,
             executable,
+            executable_sha256: lines.next().expect("missing executable digest").to_owned(),
             session_id,
         }
     }
