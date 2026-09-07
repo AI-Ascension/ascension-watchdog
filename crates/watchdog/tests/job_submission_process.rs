@@ -460,6 +460,9 @@ fn read_bounded_output(mut reader: impl Read, deadline: Instant) -> std::io::Res
     let mut retained = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
+        if Instant::now() >= deadline {
+            return Ok(retained);
+        }
         match reader.read(&mut buffer) {
             Ok(0) => return Ok(retained),
             Ok(read) => {
