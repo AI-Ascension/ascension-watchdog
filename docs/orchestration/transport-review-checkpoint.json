@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-local-evidence-not-a-release",
+  "date": "2026-09-07",
+  "root_inventory_commit": "39ee1f551cbe86d41e89e49ea7836432d7375749",
+  "validated_candidates": [
+    {
+      "repository": "sts2-game-mod",
+      "commit": "5b5987e",
+      "integration_commit": "f02f5c5",
+      "source_commit": "cafe892fcf6e438e4274dd52bf411769bdcd6b64",
+      "root_results": ["19 native tests passed in each of two targets", "standalone authenticated native HTTP entrypoint probe exited 0"],
+      "scope": "native synthetic transport only",
+      "remaining": "Managed source-linked transport build fails with CS1503; no combined callback or live-host proof"
+    },
+    {
+      "repository": "ascension-watchdog",
+      "commit": "3c831eff8ddc877e37898acbd47d9433103962c2",
+      "root_results": ["all fixture targets passed: 8 unit, 13 recovery, 17 runtime, 2 schema"],
+      "scope": "synthetic fixture candidate, not integrated into root branch",
+      "remaining": "F30 independent final accumulated-source review"
+    }
+  ],
+  "pending_reviews_and_repairs": [
+    {"task": "G13", "commit": "dc85853be30696e17e171fd537406a7ee1803e6c", "status": "independent gateway catalog review running"},
+    {"task": "W13", "base": "b88e808363a78de161c6691cd0990441d4a0ebd3", "status": "backup exact-command snapshot binding and WAL-aware capacity repair running"},
+    {"task": "A15", "base": "2574008f628a3e7dde0d968d48dcebe68172ae22", "status": "lease reference-model revocation, renewal lineage, timestamp and parsing repair running"},
+    {"task": "H8", "commit": "f000cc1630b62fcdc7379b958794ac412b37e3ea", "status": "provider persistence handoff unreviewed; root must serialize shared runtime files with H10"}
+  ],
+  "release_ready": false,
+  "live_host_recovery_verified": false,
+  "service_install_or_release_activation_this_checkpoint": false,
+  "remote_writes_this_checkpoint": false
+}
