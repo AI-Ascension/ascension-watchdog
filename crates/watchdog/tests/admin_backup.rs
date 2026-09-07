@@ -209,6 +209,37 @@ fn authenticated_cli_backup_replays_after_owner_restart_without_recreating_file(
         "release-a",
     );
     assert_eq!(std::fs::read(&path).expect("replayed snapshot"), original);
+
+    let client = fixture.client(Capability::Admin);
+    let request = thread::spawn(move || {
+        client.execute(
+            "different-request-same-backup",
+            AdminCommand::Backup(BackupRequest {
+                backup_id: "release-a".to_owned(),
+            }),
+        )
+    });
+    wait_for_queue(&queue, &request);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    assert_eq!(
+        request
+            .join()
+            .expect("replayed conflicting request")
+            .expect("replayed conflict response")
+            .status,
+        ReplyStatus::Conflict
+    );
+    let ledger = Connection::open(&config.database).expect("ledger read");
+    let (command, response_json): (String, String) = ledger
+        .query_row(
+            "SELECT command, response_json FROM operator_commands WHERE idempotency_key='different-request-same-backup'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("conflicting receipt");
+    assert_eq!(command, "backup");
+    assert!(response_json.contains("\"durable\":false"));
+    assert_eq!(std::fs::read(&path).expect("unchanged snapshot"), original);
     server.shutdown().expect("server shutdown");
 }
 

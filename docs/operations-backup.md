@@ -36,9 +36,11 @@ operator ledger (`durable=false`). Only after that transaction commits does it
 create the namespace and call `Store::backup_to`. The resulting file is checked
 for SQLite integrity and exact `schema_version`, deployment identity,
 configuration digest, compatibility digest, and approved release digest before
-the ledger receipt is completed (`durable=true`). These metadata values are
-inside the snapshot and bind it to the exact owner deployment/configuration
-state that was read before the copy.
+the ledger receipt is completed (`durable=true`). It must also contain the exact
+admitted command receipt (sequence, request ID, idempotency key, principal,
+capability, command, fingerprint, and backup ID). These metadata and ledger
+values are inside the snapshot and bind it to the exact owner
+deployment/configuration and command state that was read before the copy.
 
 The destination is never truncated or replaced. Reusing the same idempotency
 key after a timeout, owner restart, completion-write failure, or other
@@ -49,11 +51,13 @@ receipt unresolved; the command does not silently retry into another file.
 Reusing a backup identifier under a new command also fails rather than
 overwriting the retained snapshot.
 
-Backup admission is bounded to a 512 MiB database and requires at least twice
-the source database size plus 64 MiB of free space on the owner-local volume.
-These are point-in-time headroom checks, not a reservation; a later disk or
-filesystem failure remains an uncertain command and must be replayed with the
-same key after the condition is corrected.
+Backup admission is bounded to a 512 MiB SQLite logical database and requires
+at least twice its checked `page_count * page_size` size plus 64 MiB of free
+space on the owner-local volume. The logical size includes committed WAL state;
+the check does not rely on the main database file's metadata length. These are
+point-in-time headroom checks, not a reservation; a later disk or filesystem
+failure remains an uncertain command and must be replayed with the same key
+after the condition is corrected.
 
 ## Restore boundary
 

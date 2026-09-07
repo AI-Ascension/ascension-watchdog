@@ -69,7 +69,7 @@ impl crate::storage::Store {
 
         if already_durable {
             validate_backup_namespace(&namespace)?;
-            verify_backup(&destination, &binding)?;
+            verify_backup(&destination, &binding, &receipt, backup_id)?;
             return Ok(true);
         }
 
@@ -84,11 +84,11 @@ impl crate::storage::Store {
             // A prior attempt may have completed the filesystem effect but
             // lost the ledger completion.  Verify it and finalize the same
             // request; never truncate or replace an existing destination.
-            verify_backup(&destination, &binding)?;
+            verify_backup(&destination, &binding, &receipt, backup_id)?;
         } else {
             check_backup_capacity(self, &namespace)?;
             self.backup_to(&destination)?;
-            verify_backup(&destination, &binding)?;
+            verify_backup(&destination, &binding, &receipt, backup_id)?;
         }
 
         let completed_response = durable_backup_response(&receipt.response, backup_id)?;
@@ -250,7 +250,20 @@ fn validate_owner_directory(path: &Path, name: &str) -> Result<()> {
 fn check_backup_capacity(store: &crate::storage::Store, namespace: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(store.path())?;
     super::super::reject_link_or_reparse(&metadata, "database")?;
-    let size = metadata.len();
+    let page_count: i64 = store
+        .conn
+        .query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    let page_size: i64 = store
+        .conn
+        .query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let page_count = u64::try_from(page_count).map_err(|_| {
+        WatchdogError::Conflict("SQLite reported a negative logical page count".to_owned())
+    })?;
+    let page_size = u64::try_from(page_size)
+        .map_err(|_| WatchdogError::Conflict("SQLite reported a negative page size".to_owned()))?;
+    let size = page_count.checked_mul(page_size).ok_or_else(|| {
+        WatchdogError::Conflict("SQLite logical database size overflowed".to_owned())
+    })?;
     if size > MAX_BACKUP_BYTES {
         return Err(WatchdogError::Conflict(
             "database exceeds the bounded backup size".to_owned(),
@@ -274,7 +287,12 @@ fn check_backup_capacity(store: &crate::storage::Store, namespace: &Path) -> Res
     Ok(())
 }
 
-fn verify_backup(destination: &Path, expected: &BackupBinding) -> Result<()> {
+fn verify_backup(
+    destination: &Path,
+    expected: &BackupBinding,
+    receipt: &OperatorCommandReceipt,
+    backup_id: &str,
+) -> Result<()> {
     let metadata = fs::symlink_metadata(destination)?;
     super::super::reject_link_or_reparse(&metadata, "backup")?;
     if !metadata.is_file() {
@@ -311,6 +329,54 @@ fn verify_backup(destination: &Path, expected: &BackupBinding) -> Result<()> {
             "backup binding differs from the current deployment".to_owned(),
         ));
     }
+    verify_backup_receipt(&conn, receipt, backup_id)?;
+    Ok(())
+}
+
+fn verify_backup_receipt(
+    conn: &Connection,
+    expected: &OperatorCommandReceipt,
+    backup_id: &str,
+) -> Result<()> {
+    let sequence = i64::try_from(expected.sequence).map_err(|_| {
+        WatchdogError::Conflict("operator sequence exceeds SQLite range".to_owned())
+    })?;
+    let (request_id, idempotency_key, principal, capability, command, fingerprint, response_text):
+        (String, String, String, String, String, String, String) = conn
+        .query_row(
+            "SELECT request_id, idempotency_key, principal, capability, command, command_fingerprint, response_json FROM operator_commands WHERE sequence=?",
+            params![sequence],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| {
+            WatchdogError::Conflict(
+                "backup snapshot does not contain the admitted command receipt".to_owned(),
+            )
+        })?;
+    if request_id != expected.request_id
+        || idempotency_key != expected.idempotency_key
+        || principal != expected.principal
+        || capability != expected.capability.as_str()
+        || command != expected.command.as_str()
+        || fingerprint != expected.command_fingerprint
+    {
+        return Err(WatchdogError::Conflict(
+            "backup snapshot command receipt differs from the admitted request".to_owned(),
+        ));
+    }
+    let response: Value = serde_json::from_str(&response_text)?;
+    backup_response_durable(&response, backup_id)?;
     Ok(())
 }
 
