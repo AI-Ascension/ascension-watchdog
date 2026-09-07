@@ -42,3 +42,38 @@ A6 repairs the fixture in isolation. Its current nine passing tests therefore
 prove only their narrow subprocess cases, not contract conformance, faithful
 companion integration, or the required fault matrix. No fake-host result is
 live-game, native-service, reboot or soak evidence.
+
+## V18/V19 release blockers, 2026-09-07
+
+Independent source review of the current integration and uncommitted companion
+handoffs identified the following unresolved requirements. Passing component
+tests do not close these findings; exact repaired release-set tests are required.
+
+- Linux helper authorization still needs trusted delegated-root and bootstrap
+  identity binding. Matching a supplied leaf and actual membership is insufficient
+  to authorize an arbitrary sibling subtree or caller-selected configuration.
+- Native post-spawn proof failures must not clean the durable intent while the
+  process remains owned/alive. Windows prepared Job cleanup, incarnation binding,
+  and leader-exit descendant proof also remain under repair (P8/P9).
+- The proposed synthetic group cleanup `37f603c` is **not integrated**: it signals
+  numeric group IDs after leader reaping and repeats signals during Drop, leaving
+  a group-ID reuse risk. P7 must preserve exact ownership through cleanup.
+- Gateway bootstrap currently creates local authority without forwarding the
+  bootstrap required by managed host initialization. Host-fence admission then
+  cannot complete in the actual MCP/gateway/host path.
+- Gateway's runtime-v3 adapter substitutes the profile digest for the action
+  catalog digest; the host uses a different ad-hoc catalog serialization. Both
+  must consume the same exact approved catalog bytes for the verified boundary.
+- Gateway validates witness gameplay generation against authority fence
+  generation, conflating independent counters. Historical witnesses need exact
+  original operation/fence context, not incidental equality of these counters.
+- Asynchronous host settlement is not queried by gateway reconciliation, so the
+  gateway can remain uncertain indefinitely even when the host retained a witness.
+- Managed lease validation omits supplied deployment, instance, and authority
+  generation checks. Managed bootstrap also lacks a safe authority replacement
+  path. Wall-clock lease expiry, release-byte pinning, timer relationship checks,
+  and game-thread persistence remain review concerns.
+
+V20 is reviewing the gateway handoff before source repair resumes. The mod
+handoff remains uncommitted. No live host, native service, reboot or soak pass
+is implied by this source evidence.
