@@ -34,6 +34,7 @@ pub mod service;
 pub mod storage;
 #[cfg(windows)]
 pub mod windows_service;
+pub mod worker_protocol;
 
 pub use config::{ComponentConfig, DesiredMode, WatchdogConfig};
 pub use error::{Result, WatchdogError};

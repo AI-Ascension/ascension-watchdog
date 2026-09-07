@@ -1,0 +1,1 @@
+{"contract":"ascension-watchdog-worker-handoff-v1","schema_digest":"ad2aa53eb00a4438ebfdd5f07ea78e6e7d152f3839dd5fa53d06a71807d8af90","direction":"request","command":"probe","scope":"control","request_id":"11111111-1111-4111-8111-111111111111","timeout_ms":1,"watchdog_boot_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}

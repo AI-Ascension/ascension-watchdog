@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/ascension-watchdog-worker-handoff-v1/manifest.json",
+  "contract": "ascension-watchdog-worker-handoff-v1",
+  "version": 1,
+  "schema_file": "schema.json",
+  "schema_digest": "ad2aa53eb00a4438ebfdd5f07ea78e6e7d152f3839dd5fa53d06a71807d8af90",
+  "digest_algorithm": "SHA-256",
+  "canonicalization": "WHJ-1: exact UTF-8 compact JSON bytes for the empty runtime_v3_episode parameter object",
+  "limits": {
+    "max_frame_bytes": 65536,
+    "max_terminal_bytes": 16384,
+    "max_json_depth": 16,
+    "max_deadline_ms": 5000,
+    "max_wire_integer": 9007199254740991,
+    "max_identity_bytes": 128,
+    "max_reference_bytes": 1024
+  },
+  "operation": {
+    "name": "runtime_v3_episode",
+    "parameters": {},
+    "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "compatibility": {
+    "mixed_digest_policy": "reject",
+    "unknown_fields": "reject",
+    "implicit_downgrade": "reject"
+  },
+  "publication": {
+    "owner": "architecture-contracts",
+    "consumer_owners": ["watchdog", "harness"],
+    "transport": "owner-local authenticated endpoint; protocol artifact only"
+  }
+}
