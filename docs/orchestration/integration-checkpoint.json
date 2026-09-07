@@ -2,41 +2,46 @@
   "schema_version": 1,
   "classification": "confirmed-source-state-not-a-release",
   "purpose": "Resumable source integration checkpoint; no binary activation authority",
-  "root_commit": "73572485e249b6abf68151d6de16477914224d12",
+  "root_commit": "4e555937b4bdbb6efc753dafd42d1658b8f5f815",
   "source_heads": {
     "sts2-gateway": "ad842db5cb1fdfed5e8163c4cf4bd139d2c21eed",
-    "sts2-harness": "5987219395cc52bc5bc27f73048e4843eb78dc72",
-    "sts2-mcp-server": "eb89ab251665f263c2fe3e6b735eeae3d3e40c83",
+    "sts2-harness": "c7f91d5190c50c818ec7915d760928a2f165d5d0",
+    "sts2-mcp-server": "3baaa95c18f685f67ba37d4a28cc58bdd7834741",
     "sts2-game-mod": "9f44b8d57eb6a9bfb773aacd9e136be973d996ff",
     "sts2-protocol": "2a30eb96240f579eea9c776b3291d31a3bd9ac38",
     "ai-agent-observability": "b3a9fa64f51aa249f387190ce76df8c80a02af4b"
   },
   "pending_worktrees_not_represented_by_heads": [
-    "watchdog-store-policy", "platform", "admin-native", "sts2-mcp-server",
-    "sts2-game-mod", "fixture-repair", "mod-regressions", "windows-regressions"
+    "watchdog-admin-ledger", "platform", "admin-native", "sts2-gateway",
+    "sts2-game-mod", "fixture-repair", "mod-regressions", "harness-runtime"
   ],
   "active_ownership": {
     "root": "Runtime, CLI, service-loop and cross-repository integration",
-    "watchdog": "W3 store/policy safety regressions and durable launch intents",
+    "watchdog": "W5 durable authenticated administrative command ledger",
     "platform": "P4 Linux trusted launch barrier and native Windows fixes",
     "admin_control": "W4 authenticated Windows admin transport and dispatch context",
     "gateway_host": "G4 actual gateway executable recovery integration",
-    "harness_mcp": "H3 actual harness executable resume integration",
+    "harness_mcp": "H4 harness policy and lint repairs after H3 integration",
     "host_admission": "G3 real host control routes and admission safety repairs",
-    "mcp_recovery": "H2 MCP recovery-only consumer integration",
+    "mcp_recovery": "H2 MCP recovery-only consumer committed; awaiting integrated verification",
     "architecture": "A6 adversarial synthetic fixture repairs",
-    "verification": "V8 independent managed-code safety regressions",
-    "core_review": "V9 independent Windows safety regression and review record",
-    "observability": "P5 independent gateway store/bridge review"
+    "verification": "V8 stopped; uncommitted managed-code regressions preserved",
+    "core_review": "V10 independent harness executable recovery review",
+    "observability": "V11 independent MCP recovery consumer review"
   },
   "verified_this_checkpoint": [
     "Four service-loop tests including actual daemon Unix datagram notifications",
-    "Root locked workspace strict Clippy and formatting",
+    "Root launch-bound and diagnostic-redaction suite: four tests and targeted Clippy passed",
+    "Harness c7f91d5 full locked workspace all-target all-feature tests passed",
+    "Harness c7f91d5 strict policy failed seven source/test size checks; repairs assigned",
+    "Integrated Windows portable safety regressions reproduced four failures",
     "Observability local static fixture/bootstrap regressions",
     "Observability draft PR 10 exact-head CI passed including queue overflow and process-replacement replay"
   ],
   "known_unmet_gates": [
-    "Eight core adversarial regressions require integrated store/policy repairs",
+    "Core descendant cleanup regression remains failing after seven store/policy regression repairs",
+    "Gateway independent regression packet e742317 reproduces nine failures on its review baseline; not yet integrated",
+    "MCP handoff requires root gate reruns and cross-consumer transport validation",
     "Twelve Windows review findings require fixes and native verification",
     "Managed admission/journal review findings require integrated repairs",
     "Native process containment not yet wired into Supervisor production path",
