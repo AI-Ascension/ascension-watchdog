@@ -2,7 +2,8 @@
 //!
 //! Only an exact, preconfigured executable is launched.  Cleanup uses the
 //! owned `Child` handle plus a creation fingerprint and canonical executable
-//! path; a PID or executable name by itself is never sufficient.
+//! path; Unix synthetic children additionally get an exact process group for
+//! descendant cleanup. A PID or executable name by itself is never sufficient.
 
 use crate::config::ComponentConfig;
 use crate::error::{Result, WatchdogError};
@@ -10,12 +11,17 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::fs::File;
 use std::io::{BufReader, Read};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process_group};
 
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -54,6 +60,8 @@ struct BoundedOutput {
 pub struct OwnedChild {
     child: Child,
     identity: ProcessIdentity,
+    #[cfg(unix)]
+    process_group: Pid,
     output: Arc<Mutex<BoundedOutput>>,
     readers: Vec<JoinHandle<()>>,
 }
@@ -113,6 +121,8 @@ impl OwnedChild {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.process_group(0);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
@@ -123,6 +133,12 @@ impl OwnedChild {
             ))
         })?;
         let pid = child.id();
+        #[cfg(unix)]
+        // `process_group(0)` asks the kernel to create a fresh group whose
+        // identifier is this exact child.  The group identifier is retained
+        // as the containment authority: while descendants remain, POSIX
+        // cannot reuse that group identifier for an unrelated group.
+        let process_group = Pid::from_child(&child);
         let identity = ProcessIdentity {
             pid,
             launch_nonce: Uuid::new_v4().to_string(),
@@ -145,7 +161,11 @@ impl OwnedChild {
         };
         if still_running && let Err(error) = ensure_identity(&identity) {
             // The direct Child handle is still the exact object returned by
-            // spawn, so cleanup does not fall back to a PID/name lookup.
+            // spawn, and the process group is the exact containment created
+            // for that handle.  Cleanup does not fall back to a PID/name
+            // lookup.
+            #[cfg(unix)]
+            let _ = kill_process_group(process_group, Signal::KILL);
             let _ = child.kill();
             let _ = child.wait();
             return Err(error);
@@ -161,6 +181,8 @@ impl OwnedChild {
         Ok(Self {
             child,
             identity,
+            #[cfg(unix)]
+            process_group,
             output,
             readers,
         })
@@ -200,17 +222,20 @@ impl OwnedChild {
         Ok(status)
     }
 
-    /// Stop only the exact owned child, with a bounded cleanup wait.  The
-    /// standard-library handle sends the platform's forceful termination
-    /// signal; future native adapters can add a graceful request before this
-    /// final step while retaining the same identity check.
+    /// Stop the exact owned containment, with a bounded cleanup wait. Unix
+    /// synthetic children are killed through the process group created at
+    /// spawn; the direct `Child` handle remains the identity and reap
+    /// authority. Other platforms retain direct-child cleanup semantics until
+    /// their native Job/cgroup adapter is selected.
     pub fn terminate(&mut self, timeout: Duration) -> Result<ExitStatus> {
         if let Some(status) = self.child.try_wait()? {
+            #[cfg(unix)]
+            self.kill_process_group()?;
             self.join_readers_bounded(Duration::from_millis(250));
             return Ok(status);
         }
         ensure_identity(&self.identity)?;
-        self.child.kill()?;
+        self.kill_process_group()?;
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(status) = self.child.try_wait()? {
@@ -225,6 +250,23 @@ impl OwnedChild {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(unix)]
+    fn kill_process_group(&mut self) -> Result<()> {
+        // This is one kernel process-group operation against the group created
+        // for the owned Child. It is not a process-name or PID enumeration;
+        // ESRCH is safe because the exact group has already disappeared.
+        match kill_process_group(self.process_group, Signal::KILL) {
+            Ok(()) => Ok(()),
+            Err(error) if error == rustix::io::Errno::SRCH => Ok(()),
+            Err(error) => Err(WatchdogError::Io(std::io::Error::from(error))),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn kill_process_group(&mut self) -> Result<()> {
+        self.child.kill().map_err(WatchdogError::from)
     }
 
     /// Snapshot bounded output without using it as a health signal.
@@ -264,9 +306,11 @@ impl Drop for OwnedChild {
         // handle. Keep ownership until the child is reaped: on Unix an exited
         // unreaped child retains its PID; Windows retains the process handle.
         // Dropping during a post-spawn persistence failure must not detach it.
-        // This fallback cleans the direct child only; native cgroup/Job
-        // containment remains responsible for arbitrary descendants.
+        // Unix synthetic children use their exact process-group authority;
+        // native cgroup/Job containment remains responsible for production
+        // descendants.
         let deadline = Instant::now() + Duration::from_secs(5);
+        let _ = self.kill_process_group();
         match self.child.try_wait() {
             Ok(Some(_)) => {}
             Ok(None) => {

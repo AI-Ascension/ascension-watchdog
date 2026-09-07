@@ -18,7 +18,7 @@ use ascension_watchdog::storage::Store;
 use rusqlite::Connection;
 use std::path::PathBuf;
 #[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -294,6 +294,97 @@ fn terminating_owned_child_cleans_background_descendants() {
         !process_exists(grandchild),
         "background descendant {grandchild} survived owned-child termination"
     );
+}
+
+/// A direct parent can exit while a descendant retains the inherited output
+/// pipes.  The exact process-group authority must still clean that descendant
+/// when terminate is called after the parent has exited, without waiting
+/// indefinitely for the reader threads.
+#[test]
+#[cfg(unix)]
+fn terminate_after_parent_exit_cleans_group_and_bounded_pipes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("parent-exit-grandchild.pid");
+    let command = format!("sleep 30 & echo $! > {}; exit 0", pid_file.display());
+    let component = shell_component("synthetic-parent-exit", &command);
+    let mut child = OwnedChild::spawn(&component, 1_000).expect("spawn");
+    let mut cleanup = ExactProcessCleanup { pids: Vec::new() };
+    let grandchild = wait_for_pid_file(&pid_file);
+    cleanup.pids.push(grandchild);
+    let parent_exit_deadline = Instant::now() + Duration::from_secs(2);
+    while child.is_running().expect("inspect parent") {
+        assert!(
+            Instant::now() < parent_exit_deadline,
+            "direct parent did not exit before the bounded test deadline"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let started = Instant::now();
+    let termination = child.terminate(Duration::from_millis(100));
+    assert!(
+        termination.is_ok(),
+        "post-parent-exit exact cleanup failed: {termination:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "post-parent-exit cleanup waited unboundedly on inherited output pipes"
+    );
+    assert!(
+        !process_exists(grandchild),
+        "grandchild {grandchild} survived exact group cleanup"
+    );
+}
+
+/// Drop is also an ownership boundary.  If the direct parent has already
+/// exited, dropping `OwnedChild` must still terminate the exact group rather
+/// than only attempting a stale direct PID cleanup.
+#[test]
+#[cfg(unix)]
+fn drop_after_parent_exit_cleans_exact_group() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("drop-grandchild.pid");
+    let command = format!("sleep 30 & echo $! > {}; exit 0", pid_file.display());
+    let component = shell_component("synthetic-drop-parent-exit", &command);
+    let grandchild;
+    let mut cleanup = ExactProcessCleanup { pids: Vec::new() };
+    {
+        let mut child = OwnedChild::spawn(&component, 1_000).expect("spawn");
+        grandchild = wait_for_pid_file(&pid_file);
+        cleanup.pids.push(grandchild);
+        let parent_exit_deadline = Instant::now() + Duration::from_secs(2);
+        while child.is_running().expect("inspect parent") {
+            assert!(
+                Instant::now() < parent_exit_deadline,
+                "direct parent did not exit before the bounded test deadline"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+    while process_exists(grandchild) && Instant::now() < cleanup_deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !process_exists(grandchild),
+        "Drop left exact descendant {grandchild} alive after parent exit"
+    );
+}
+
+#[cfg(unix)]
+fn wait_for_pid_file(path: &std::path::Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "descendant PID file was not written before the bounded test deadline"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Restore must not reactivate a stale Running intent or silently combine a
