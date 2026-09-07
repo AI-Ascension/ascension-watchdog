@@ -5,6 +5,7 @@ use crate::error::{Result, WatchdogError};
 use crate::runtime::Supervisor;
 use crate::storage::{Store, now_unix_ms};
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -433,12 +434,55 @@ fn authenticated_job_submit_command(
 }
 
 fn read_protected_job_payload(path: &Path) -> Result<String> {
+    validate_job_payload_path(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        let file = open_linux_job_payload(path)?;
+        let mut bytes = Vec::new();
+        file.take((crate::admin::MAX_JOB_PAYLOAD_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > crate::admin::MAX_JOB_PAYLOAD_BYTES {
+            Err(WatchdogError::InvalidInput(
+                "job payload file exceeds the payload bound".to_owned(),
+            ))
+        } else {
+            String::from_utf8(bytes).map_err(|_| {
+                WatchdogError::InvalidInput("job payload file is not UTF-8".to_owned())
+            })
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        Err(WatchdogError::Unsupported(
+            "--payload-file requires the Linux protected file-handle reader on Unix".to_owned(),
+        ))
+    }
+    #[cfg(windows)]
+    {
+        Err(WatchdogError::Unsupported(
+            "--payload-file is unavailable on Windows until protected-handle ACL reading is enabled"
+                .to_owned(),
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(WatchdogError::Unsupported(
+            "--payload-file is unsupported on this platform".to_owned(),
+        ))
+    }
+}
+
+fn validate_job_payload_path(path: &Path) -> Result<()> {
     if !path.is_absolute()
         || path.as_os_str().is_empty()
+        || path.as_os_str().to_string_lossy().len() > 4 * 1024
         || path.as_os_str().to_string_lossy().contains('\0')
-        || path
-            .components()
-            .any(|component| component == Component::ParentDir)
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(WatchdogError::InvalidInput(
             "job payload file must be an absolute path without traversal".to_owned(),
@@ -448,39 +492,89 @@ fn read_protected_job_payload(path: &Path) -> Result<String> {
         .to_string_lossy()
         .replace('\\', "/")
         .to_ascii_lowercase();
-    if normalized.starts_with("/mnt/") || normalized.starts_with("//wsl") {
+    if normalized == "/mnt"
+        || normalized.starts_with("/mnt/")
+        || normalized.starts_with("//wsl")
+        || normalized == "/proc"
+        || normalized.starts_with("/proc/")
+        || normalized == "/sys"
+        || normalized.starts_with("/sys/")
+        || normalized == "/dev"
+        || normalized.starts_with("/dev/")
+    {
         return Err(WatchdogError::InvalidInput(
             "job payload file must remain on an owner-local filesystem".to_owned(),
         ));
     }
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if path.file_name().is_none_or(std::ffi::OsStr::is_empty) {
+        return Err(WatchdogError::InvalidInput(
+            "job payload file must name a regular file".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_job_payload(path: &Path) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Open every path component relative to a directory handle. O_NOFOLLOW
+    // applies to each component and the final read is performed only through
+    // the returned file handle, closing both ancestor and leaf replacement
+    // windows. These Linux values are stable fcntl constants; no libc/unsafe
+    // boundary is needed here.
+    const O_DIRECTORY: i32 = 0o200_000;
+    const O_NOFOLLOW: i32 = 0o400_000;
+    let mut directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+        .open("/")?;
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_os_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
+        let mut anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+        anchored.push(component);
+        if index + 1 == components.len() {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(O_NOFOLLOW)
+                .open(anchored)?;
+            validate_linux_job_payload_handle(&file)?;
+            return Ok(file);
+        }
+        directory = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+            .open(anchored)?;
+    }
+    Err(WatchdogError::InvalidInput(
+        "job payload file must name a regular file".to_owned(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_job_payload_handle(file: &std::fs::File) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(WatchdogError::InvalidInput(
             "job payload file must be a regular non-symlink file".to_owned(),
         ));
     }
-    #[cfg(unix)]
+    if metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.permissions().mode() & 0o077 != 0
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.permissions().mode() & 0o077 != 0
-        {
-            return Err(WatchdogError::Unauthorized(
-                "job payload file must be owner-only".to_owned(),
-            ));
-        }
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take((crate::admin::MAX_JOB_PAYLOAD_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > crate::admin::MAX_JOB_PAYLOAD_BYTES {
-        return Err(WatchdogError::InvalidInput(
-            "job payload file exceeds the payload bound".to_owned(),
+        return Err(WatchdogError::Unauthorized(
+            "job payload file must be owner-only".to_owned(),
         ));
     }
-    String::from_utf8(bytes)
-        .map_err(|_| WatchdogError::InvalidInput("job payload file is not UTF-8".to_owned()))
+    Ok(())
 }
 
 fn list_jobs_command(args: &mut Vec<String>, config: &WatchdogConfig) -> Result<Option<String>> {
