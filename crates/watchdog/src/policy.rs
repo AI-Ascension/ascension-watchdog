@@ -92,6 +92,63 @@ pub struct SupervisorPolicy {
     restart_budget_window_ms: u64,
 }
 
+/// A bounded, deterministic restart budget driven only by a monotonic elapsed
+/// observation. Wall-clock timestamps are intentionally not accepted here:
+/// moving a calendar forward must never make prior failures disappear.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RestartBudget {
+    max_events: u32,
+    window_ms: u64,
+    last_elapsed_ms: u64,
+    events: Vec<u64>,
+}
+
+impl RestartBudget {
+    /// Construct a bounded budget. Zero values are represented as an already
+    /// exhausted budget so an unvalidated caller cannot accidentally admit a
+    /// restart.
+    #[must_use]
+    pub fn new(max_events: u32, window_ms: u64) -> Self {
+        Self {
+            max_events,
+            window_ms,
+            last_elapsed_ms: 0,
+            events: Vec::new(),
+        }
+    }
+
+    /// Observe monotonic elapsed time and age only events that are truly
+    /// outside the configured window. Backward observations are clamped.
+    pub fn observe(&mut self, elapsed_ms: u64) -> u32 {
+        self.last_elapsed_ms = self.last_elapsed_ms.max(elapsed_ms);
+        let cutoff = self.last_elapsed_ms.saturating_sub(self.window_ms);
+        self.events.retain(|event| *event >= cutoff);
+        u32::try_from(self.events.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Record one restart at a monotonic elapsed observation. Once exhausted,
+    /// no additional event is admitted and the bounded count remains stable.
+    pub fn record(&mut self, elapsed_ms: u64) -> u32 {
+        let count = self.observe(elapsed_ms);
+        if count < self.max_events {
+            self.events.push(self.last_elapsed_ms);
+        }
+        u32::try_from(self.events.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Return whether another restart remains within the budget.
+    #[must_use]
+    pub fn admits_restart(&self) -> bool {
+        self.max_events > 0 && self.events.len() < self.max_events as usize
+    }
+
+    /// Current bounded event count after the latest observation.
+    #[must_use]
+    pub fn count(&self) -> u32 {
+        u32::try_from(self.events.len()).unwrap_or(u32::MAX)
+    }
+}
+
 impl SupervisorPolicy {
     /// Build policy from validated configuration.
     #[must_use]
@@ -314,5 +371,20 @@ impl SupervisorPolicy {
     #[must_use]
     pub fn in_restart_window(&self, now_ms: u64, started_ms: u64) -> bool {
         now_ms.saturating_sub(started_ms) <= self.restart_budget_window_ms
+    }
+
+    /// Check a restart event against monotonic elapsed observations. This is
+    /// the safe counterpart to [`Self::in_restart_window`], whose wall-clock
+    /// signature remains for compatibility with older adapters.
+    #[must_use]
+    pub fn in_monotonic_restart_window(&self, elapsed_ms: u64, event_elapsed_ms: u64) -> bool {
+        elapsed_ms.saturating_sub(event_elapsed_ms) <= self.restart_budget_window_ms
+    }
+
+    /// Construct a pure in-memory budget with the configured limits. Durable
+    /// callers should persist the same event transitions through `Store`.
+    #[must_use]
+    pub fn restart_budget(&self) -> RestartBudget {
+        RestartBudget::new(self.restart_budget_count, self.restart_budget_window_ms)
     }
 }
