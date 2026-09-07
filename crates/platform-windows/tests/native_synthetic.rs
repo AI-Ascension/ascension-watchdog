@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use ascension_platform_windows::{
-    ComponentKind, JobOwnedProcess, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,
-    WindowsProcessLauncher,
+    ComponentKind, JobOwnedProcess, PlatformError, ProcessIdentity, SessionSelector, StopOutcome,
+    WindowsLaunchSpec, WindowsPlatformConfig, WindowsProcessLauncher,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -10,6 +10,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+use windows_sys::Win32::System::Threading::{
+    GetProcessId, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, TerminateProcess,
+};
 
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -101,6 +106,55 @@ fn unique_nonce(label: &str) -> String {
     format!("{label}-{}-{nanos}", std::process::id())
 }
 
+fn terminate_exact_process(identity: &ProcessIdentity) -> Result<(), Box<dyn Error>> {
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            identity.pid,
+        )
+    };
+    if process.is_null() {
+        let error = unsafe { GetLastError() };
+        return Err(format!("OpenProcess for exact leader failed with {error}").into());
+    }
+    let result = (|| {
+        if unsafe { GetProcessId(process) } != identity.pid {
+            return Err("leader PID changed while preparing the exact test termination".into());
+        }
+        let mut creation = windows_sys::Win32::Foundation::FILETIME::default();
+        let mut exit = windows_sys::Win32::Foundation::FILETIME::default();
+        let mut kernel = windows_sys::Win32::Foundation::FILETIME::default();
+        let mut user = windows_sys::Win32::Foundation::FILETIME::default();
+        let ok = unsafe {
+            GetProcessTimes(
+                process,
+                &raw mut creation,
+                &raw mut exit,
+                &raw mut kernel,
+                &raw mut user,
+            )
+        };
+        if ok == 0 {
+            return Err("GetProcessTimes for exact test termination failed".into());
+        }
+        let creation_time =
+            (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+        if creation_time != identity.creation_time_100ns {
+            return Err("leader creation token changed before exact test termination".into());
+        }
+        if unsafe { TerminateProcess(process, 41) } == 0 {
+            let error = unsafe { GetLastError() };
+            return Err(
+                format!("TerminateProcess for exact test leader failed with {error}").into(),
+            );
+        }
+        Ok::<(), Box<dyn Error>>(())
+    })();
+    unsafe { CloseHandle(process) };
+    result
+}
+
 #[test]
 fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box<dyn Error>> {
     let directory = TestDirectory::create()?;
@@ -170,6 +224,79 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
         ascension_platform_windows::StopOutcome::Exited
     );
     assert!(!restarted.is_running()?);
+    Ok(())
+}
+
+#[test]
+fn native_leader_exit_still_forces_job_descendant_cleanup() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let launcher = WindowsProcessLauncher::new(config(&executable, &unique_nonce("pipe")))?;
+    let child_marker = directory.path().join("leader-exit-descendant.pid");
+    let owner = launcher.launch(&launch_spec(
+        &executable,
+        directory.path(),
+        0,
+        &unique_nonce("leader-exit"),
+        vec![
+            "--spawn-descendant".to_owned(),
+            child_marker.to_string_lossy().into_owned(),
+        ],
+    ))?;
+    assert!(wait_until(|| {
+        Ok(fs::read_to_string(&child_marker)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .is_some_and(|pid| pid != 0))
+    })?);
+    let child_pid = fs::read_to_string(&child_marker)?.trim().parse::<u32>()?;
+    assert!(owner.is_member_running(child_pid)?);
+
+    // Kill only the exact leader after checking its creation token.  The
+    // descendant remains in the Job Object, which is the recovery state that
+    // must not be mistaken for an already-empty process tree.
+    terminate_exact_process(owner.identity())?;
+    assert!(wait_until(|| Ok(!owner.is_running()?))?);
+    let graceful = owner.graceful_stop();
+    assert!(matches!(graceful, Err(PlatformError::Unsupported(_))));
+    assert_eq!(owner.force_stop()?, StopOutcome::Exited);
+    assert!(wait_until(|| Ok(!owner.is_member_running(child_pid)?))?);
+    Ok(())
+}
+
+#[test]
+fn native_prepared_job_recovery_uses_exact_authority() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let launcher = WindowsProcessLauncher::new(config(&executable, &unique_nonce("pipe")))?;
+    let nonce = unique_nonce("prepared");
+    let owner = launcher.launch(&launch_spec(
+        &executable,
+        directory.path(),
+        0,
+        &nonce,
+        vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
+    ))?;
+    let planned = format!("windows-job:{nonce}");
+    assert_eq!(
+        launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(5))?,
+        StopOutcome::Exited
+    );
+    assert!(!owner.is_running()?);
+    drop(owner);
+
+    // Once the exact named object has no remaining handles, a missing-object
+    // result is conclusive and idempotent.  A malformed namespace is rejected
+    // before any named-object lookup.
+    assert_eq!(
+        launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(5))?,
+        StopOutcome::AlreadyExited
+    );
+    assert!(
+        launcher
+            .force_cleanup_planned_containment("windows-job:../unrelated", Duration::from_secs(5))
+            .is_err()
+    );
     Ok(())
 }
 
