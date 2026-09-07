@@ -156,6 +156,116 @@ fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
     );
 }
 
+#[test]
+#[allow(clippy::too_many_lines)]
+fn real_service_quarantine_is_admin_only_atomic_and_replayable_after_restart() {
+    use ascension_watchdog::service::ServiceLoop;
+    use ascension_watchdog::storage::{JobStatus, Store};
+    use ascension_watchdog::{DesiredMode, Supervisor, WatchdogConfig};
+    let fixture = Fixture::new();
+    let config = WatchdogConfig {
+        database: fixture.temp.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Running,
+        admin: Some(ascension_watchdog::config::AdminConfig {
+            endpoint: fixture.socket.clone(),
+            read_token_path: fixture.read_token.clone(),
+            admin_token_path: fixture.admin_token.clone(),
+            allowed_peer_sid: None,
+        }),
+        ..WatchdogConfig::default()
+    };
+    let mut supervisor = Supervisor::initialize(config.clone()).unwrap();
+    let job = supervisor
+        .submit_job("episode", &serde_json::json!({"private": "stay-local"}))
+        .unwrap();
+    supervisor.reconcile_once(10).unwrap();
+    assert_eq!(
+        supervisor.status().unwrap().desired_mode,
+        DesiredMode::Running
+    );
+    let claim = supervisor
+        .claim_job("worker-a", ascension_watchdog::storage::now_unix_ms())
+        .unwrap()
+        .unwrap();
+    let attempt_id = claim.attempt_id.clone();
+    let mut service = ServiceLoop::new(supervisor, Duration::from_millis(10)).unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), service.health());
+    let read_client = fixture.client(Capability::Read, &fixture.read_token);
+    let forbidden = read_client
+        .execute(
+            "read-cannot-quarantine",
+            AdminCommand::Quarantine(ascension_watchdog::admin::QuarantineRequest {
+                attempt_id: attempt_id.clone(),
+                reason: "read token must not mutate".to_owned(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(forbidden.status, ReplyStatus::Forbidden);
+    assert_eq!(queue.depth(), 0);
+
+    let command = AdminCommand::Quarantine(ascension_watchdog::admin::QuarantineRequest {
+        attempt_id: attempt_id.clone(),
+        reason: "operator observed an uncertain boundary".to_owned(),
+    });
+    let admin_client = fixture.client(Capability::Admin, &fixture.admin_token);
+    let request = thread::spawn(move || {
+        admin_client
+            .execute("quarantine-once", command)
+            .expect("quarantine response")
+    });
+    wait_for_depth(&queue, 1);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    let accepted = request.join().unwrap();
+    assert_eq!(accepted.status, ReplyStatus::Accepted);
+    drop(server);
+    drop(service);
+    let inspected = Store::open_read_only(&config.database, &config).unwrap();
+    assert_eq!(
+        inspected.get_job(&job.id).unwrap().unwrap().status,
+        JobStatus::Quarantined
+    );
+    assert_eq!(
+        inspected
+            .attempt_summary(&attempt_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "unknown"
+    );
+    assert_eq!(inspected.operator_command_count().unwrap(), 1);
+    drop(inspected);
+
+    let mut restarted = ServiceLoop::new(
+        Supervisor::open(config.clone()).unwrap(),
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), restarted.health());
+    let replay_client = fixture.client(Capability::Admin, &fixture.admin_token);
+    let replay_command = AdminCommand::Quarantine(ascension_watchdog::admin::QuarantineRequest {
+        attempt_id,
+        reason: "operator observed an uncertain boundary".to_owned(),
+    });
+    let request = thread::spawn(move || {
+        replay_client
+            .execute("quarantine-once", replay_command)
+            .expect("replay response")
+    });
+    wait_for_depth(&queue, 1);
+    restarted.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    assert_eq!(request.join().unwrap().status, ReplyStatus::Accepted);
+    drop(server);
+    drop(restarted);
+    let inspected = Store::open_read_only(&config.database, &config).unwrap();
+    assert_eq!(inspected.operator_command_count().unwrap(), 1);
+    assert_eq!(
+        inspected.get_job(&job.id).unwrap().unwrap().status,
+        JobStatus::Quarantined
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().expect("tempdir");

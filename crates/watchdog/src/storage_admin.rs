@@ -63,7 +63,7 @@ pub enum OperatorCapability {
 }
 
 impl OperatorCapability {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
             Self::Admin => "admin",
@@ -106,7 +106,7 @@ pub enum OperatorCommand {
 }
 
 impl OperatorCommand {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Status => "status",
             Self::Jobs => "jobs",
@@ -800,13 +800,16 @@ const OPERATOR_TABLE_SQL: &str = "
 
 const OPERATOR_SELECT: &str = "SELECT sequence, request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms FROM operator_commands WHERE idempotency_key=?";
 
-fn find_operator_by_key(tx: &Transaction<'_>, key: &str) -> Result<Option<OperatorCommandReceipt>> {
+pub(crate) fn find_operator_by_key(
+    tx: &Transaction<'_>,
+    key: &str,
+) -> Result<Option<OperatorCommandReceipt>> {
     tx.query_row(OPERATOR_SELECT, params![key], operator_receipt_from_row)
         .optional()
         .map_err(Into::into)
 }
 
-fn find_operator_by_request(
+pub(crate) fn find_operator_by_request(
     tx: &Transaction<'_>,
     request_id: &str,
 ) -> Result<Option<OperatorCommandReceipt>> {
@@ -819,7 +822,10 @@ fn find_operator_by_request(
     .map_err(Into::into)
 }
 
-fn enforce_ledger_capacity(tx: &Transaction<'_>, command: OperatorCommand) -> Result<()> {
+pub(crate) fn enforce_ledger_capacity(
+    tx: &Transaction<'_>,
+    command: OperatorCommand,
+) -> Result<()> {
     let count: i64 = tx.query_row("SELECT COUNT(*) FROM operator_commands", [], |row| {
         row.get(0)
     })?;
@@ -838,7 +844,7 @@ fn enforce_ledger_capacity(tx: &Transaction<'_>, command: OperatorCommand) -> Re
     Ok(())
 }
 
-fn validate_response(response: &Value) -> Result<()> {
+pub(crate) fn validate_response(response: &Value) -> Result<()> {
     if response.is_null() {
         return Err(WatchdogError::InvalidInput(
             "operator response must not be null".to_string(),
@@ -938,7 +944,7 @@ fn operator_receipt_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Operat
 }
 
 impl OperatorCommandReceipt {
-    fn with_replayed(mut self, replayed: bool) -> Self {
+    pub(crate) fn with_replayed(mut self, replayed: bool) -> Self {
         self.replayed = replayed;
         self
     }

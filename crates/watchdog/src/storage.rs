@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 #[path = "storage_admin.rs"]
 mod storage_admin;
+#[path = "storage_quarantine_admin.rs"]
+mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
 mod storage_queries;
 pub use storage_admin::{

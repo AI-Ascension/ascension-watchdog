@@ -31,10 +31,12 @@ targets fail closed for `--payload-file`; use inline `--payload` there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
-Status and these lifecycle operations are wired into the real service loop.
-Other administrative dispatcher operations remain unsupported pending integration;
-their transport types alone are not operational evidence. Windows native service
-execution and uninstall recovery remain unverified.
+Status, lifecycle, job submission/inspection, and quarantine are wired into the
+real service loop.
+Retry, reconciliation, restore, and release-activation dispatcher operations
+remain unsupported pending integration; their transport types alone are not
+operational evidence. Windows native service execution and uninstall recovery
+remain unverified.
 
 This sideband is a local operator control plane. It is an authenticated,
 bounded request queue into the watchdog reconciliation loop; it is not a game
@@ -114,6 +116,14 @@ activation requires the exact expected SHA-256 digest.
 transport and the configured owner-local store limit, and request `Debug`
 output redacts the payload. Only the admin credential may submit; the read
 credential is rejected before queue admission.
+
+`quarantine` takes `{ "attempt_id": "...", "reason": "..." }`. The owner
+thread refuses a completed attempt or completed job, records a running
+attempt's outcome as unknown, moves its job to the durable quarantined state,
+and commits that transition with the operator receipt and audit rows. A
+replayed idempotency key returns the retained response without reapplying the
+transition. This is a watchdog disposition only; it does not cancel, settle,
+or retry a gateway, host, provider, or gameplay operation.
 
 Duplicate JSON member names are rejected recursively before typed decoding.
 Unknown fields, unknown command kinds, invalid UUIDs, unsafe identifiers,
