@@ -51,6 +51,46 @@ use windows_sys::Win32::System::Threading::{
     QueryFullProcessImageNameW,
 };
 
+// `FILE_PIPE_LOCAL_INFORMATION` is declared by ntifs.h rather than the user
+// mode Windows SDK. The documented structure is ten ULONGs (40 bytes),
+// FilePipeLocalInformation is information class 24, and the query is used
+// only to prove that this server handle's outbound quota has returned after a
+// successful write. A query failure is never treated as a successful drain.
+#[repr(C)]
+struct IoStatusBlock {
+    status: i32,
+    information: usize,
+}
+
+#[repr(C)]
+struct FilePipeLocalInformation {
+    named_pipe_type: u32,
+    named_pipe_configuration: u32,
+    maximum_instances: u32,
+    current_instances: u32,
+    inbound_quota: u32,
+    read_data_available: u32,
+    outbound_quota: u32,
+    write_quota_available: u32,
+    named_pipe_state: u32,
+    named_pipe_end: u32,
+}
+
+const FILE_PIPE_LOCAL_INFORMATION_CLASS: u32 = 24;
+const FILE_PIPE_CONNECTED_STATE: u32 = 3;
+const FILE_PIPE_SERVER_END: u32 = 1;
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtQueryInformationFile(
+        file_handle: HANDLE,
+        io_status_block: *mut IoStatusBlock,
+        file_information: *mut c_void,
+        length: u32,
+        file_information_class: u32,
+    ) -> i32;
+}
+
 /// Admin transport's complete JSON body bound.  The four-byte big-endian
 /// length prefix is outside this value.
 pub const MAX_ADMIN_PIPE_FRAME: usize = 256 * 1024;
@@ -83,6 +123,8 @@ pub struct AdminPipeServer {
     server_process_id: u32,
     connected: bool,
     peer: Option<AdminPipePeer>,
+    peer_process: Option<OwnedHandle>,
+    peer_creation_time: Option<u64>,
 }
 
 impl std::fmt::Debug for AdminPipeServer {
@@ -150,6 +192,8 @@ impl AdminPipeServer {
             server_process_id: unsafe { GetCurrentProcessId() },
             connected: false,
             peer: None,
+            peer_process: None,
+            peer_creation_time: None,
         })
     }
 
@@ -167,7 +211,7 @@ impl AdminPipeServer {
             let connected = unsafe { ConnectNamedPipe(self.handle.raw(), null_mut()) };
             if connected != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED {
                 self.connected = true;
-                let peer = match self.capture_peer() {
+                let (peer, peer_process, peer_creation_time) = match self.capture_peer() {
                     Ok(peer) => peer,
                     Err(error) => {
                         let _ = self.disconnect();
@@ -181,6 +225,8 @@ impl AdminPipeServer {
                     ));
                 }
                 self.peer = Some(peer.clone());
+                self.peer_process = Some(peer_process);
+                self.peer_creation_time = Some(peer_creation_time);
                 return Ok(Some(peer));
             }
             let code = unsafe { GetLastError() };
@@ -234,8 +280,10 @@ impl AdminPipeServer {
     }
 
     /// Write one complete big-endian length-prefixed frame with bounded
-    /// partial-write retries.  The receiver reads the prefix then body
-    /// exactly; no arbitrary stream is exposed above this boundary.
+    /// partial-write retries. The server waits for outbound quota to be
+    /// restored before returning success, proving the peer consumed the
+    /// response. A timeout, query failure, or identity failure after bytes
+    /// were written is delivery uncertainty and must not be blindly retried.
     pub fn write_frame(&mut self, payload: &[u8], timeout: Duration) -> Result<(), PlatformError> {
         validate_timeout(timeout)?;
         self.require_connected()?;
@@ -247,8 +295,10 @@ impl AdminPipeServer {
         let deadline = deadline(timeout);
         let length = u32::try_from(payload.len())
             .map_err(|_| PlatformError::Invalid("admin frame length overflow".to_owned()))?;
+        self.verify_peer_identity()?;
         write_all_poll(self.handle.raw(), &length.to_be_bytes(), deadline)?;
         write_all_poll(self.handle.raw(), payload, deadline)?;
+        self.wait_for_outbound_drain(deadline)?;
         Ok(())
     }
 
@@ -284,10 +334,12 @@ impl AdminPipeServer {
         }
         self.connected = false;
         self.peer = None;
+        self.peer_process = None;
+        self.peer_creation_time = None;
         Ok(())
     }
 
-    fn capture_peer(&self) -> Result<AdminPipePeer, PlatformError> {
+    fn capture_peer(&self) -> Result<(AdminPipePeer, OwnedHandle, u64), PlatformError> {
         let mut process_id = 0_u32;
         if unsafe { GetNamedPipeClientProcessId(self.handle.raw(), &raw mut process_id) } == 0
             || process_id == 0
@@ -308,12 +360,17 @@ impl AdminPipeServer {
         let process = OwnedHandle::new(process, "OpenProcess(admin pipe peer)")?;
         let user_sid = process_user_sid(process.raw())?;
         let executable = query_image_path(process.raw())?;
-        Ok(AdminPipePeer {
-            process_id,
-            session_id,
-            user_sid,
-            executable,
-        })
+        let creation_time = process_creation_time(process.raw())?;
+        Ok((
+            AdminPipePeer {
+                process_id,
+                session_id,
+                user_sid,
+                executable,
+            },
+            process,
+            creation_time,
+        ))
     }
 
     fn reset_listener(&mut self) -> Result<(), PlatformError> {
@@ -330,6 +387,8 @@ impl AdminPipeServer {
         }
         self.connected = false;
         self.peer = None;
+        self.peer_process = None;
+        self.peer_creation_time = None;
         Ok(())
     }
 
@@ -340,6 +399,76 @@ impl AdminPipeServer {
             Err(PlatformError::Invalid(
                 "admin pipe has no connected peer".to_owned(),
             ))
+        }
+    }
+
+    fn verify_peer_identity(&self) -> Result<(), PlatformError> {
+        let peer = self.peer.as_ref().ok_or_else(|| {
+            PlatformError::IdentityMismatch("admin pipe has no captured peer".to_owned())
+        })?;
+        let peer_process = self.peer_process.as_ref().ok_or_else(|| {
+            PlatformError::IdentityMismatch("admin pipe has no held peer process".to_owned())
+        })?;
+        let creation_time = self.peer_creation_time.ok_or_else(|| {
+            PlatformError::IdentityMismatch("admin pipe has no peer creation identity".to_owned())
+        })?;
+        let mut process_id = 0_u32;
+        if unsafe { GetNamedPipeClientProcessId(self.handle.raw(), &raw mut process_id) } == 0 {
+            return Err(PlatformError::IdentityMismatch(
+                "admin pipe peer is no longer connected".to_owned(),
+            ));
+        }
+        if process_id == 0 || process_id != peer.process_id {
+            return Err(PlatformError::IdentityMismatch(
+                "admin pipe peer process changed while connected".to_owned(),
+            ));
+        }
+        if unsafe { GetProcessId(peer_process.raw()) } != peer.process_id
+            || process_creation_time(peer_process.raw())? != creation_time
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "admin pipe peer creation identity changed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn wait_for_outbound_drain(&self, deadline: Instant) -> Result<(), PlatformError> {
+        loop {
+            if Instant::now() >= deadline {
+                return Err(PlatformError::Timeout(
+                    "admin pipe outbound drain deadline elapsed; response delivery is uncertain"
+                        .to_owned(),
+                ));
+            }
+            self.verify_peer_identity()?;
+            let information = query_pipe_local_information(self.handle.raw())?;
+            if Instant::now() >= deadline {
+                return Err(PlatformError::Timeout(
+                    "admin pipe outbound drain deadline elapsed; response delivery is uncertain"
+                        .to_owned(),
+                ));
+            }
+            if information.named_pipe_state != FILE_PIPE_CONNECTED_STATE
+                || information.named_pipe_end != FILE_PIPE_SERVER_END
+            {
+                return Err(PlatformError::IdentityMismatch(
+                    "admin pipe left the connected server state before outbound drain".to_owned(),
+                ));
+            }
+            if information.outbound_quota != 0
+                && information.write_quota_available == information.outbound_quota
+            {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(PlatformError::Timeout(
+                    "admin pipe outbound drain deadline elapsed; response delivery is uncertain"
+                        .to_owned(),
+                ));
+            }
+            thread::sleep(POLL_INTERVAL.min(remaining));
         }
     }
 }
@@ -445,6 +574,12 @@ impl AdminPipeClient {
     #[must_use]
     pub const fn server_process_id(&self) -> u32 {
         self.server_process_id
+    }
+
+    /// Process creation timestamp captured from the held server process handle.
+    #[must_use]
+    pub const fn server_creation_time(&self) -> u64 {
+        self.server_creation_time
     }
 
     /// Exact image path observed while the server process handle was held.
@@ -918,6 +1053,51 @@ fn set_message_nonblocking(handle: HANDLE) -> Result<(), PlatformError> {
     Ok(())
 }
 
+fn query_pipe_local_information(handle: HANDLE) -> Result<FilePipeLocalInformation, PlatformError> {
+    let expected_size = size_of::<FilePipeLocalInformation>();
+    if expected_size != 40 {
+        return Err(PlatformError::Unsupported(
+            "Windows named-pipe local information layout is not 40 bytes".to_owned(),
+        ));
+    }
+    let length = u32::try_from(expected_size)
+        .map_err(|_| PlatformError::Invalid("pipe information size overflow".to_owned()))?;
+    let mut status = IoStatusBlock {
+        status: 0,
+        information: 0,
+    };
+    let mut information = FilePipeLocalInformation {
+        named_pipe_type: 0,
+        named_pipe_configuration: 0,
+        maximum_instances: 0,
+        current_instances: 0,
+        inbound_quota: 0,
+        read_data_available: 0,
+        outbound_quota: 0,
+        write_quota_available: 0,
+        named_pipe_state: 0,
+        named_pipe_end: 0,
+    };
+    let result = unsafe {
+        NtQueryInformationFile(
+            handle,
+            &raw mut status,
+            (&raw mut information).cast(),
+            length,
+            FILE_PIPE_LOCAL_INFORMATION_CLASS,
+        )
+    };
+    if result != 0 || status.status != 0 || status.information != expected_size {
+        return Err(PlatformError::Unavailable(format!(
+            "NtQueryInformationFile did not prove pipe state (status=0x{:08X}, io_status=0x{:08X}, bytes={})",
+            result.cast_unsigned(),
+            status.status.cast_unsigned(),
+            status.information,
+        )));
+    }
+    Ok(information)
+}
+
 fn read_exact_poll(
     handle: HANDLE,
     buffer: &mut [u8],
@@ -997,9 +1177,11 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
         }
         if ok != 0 {
             if written == 0 {
-                return Err(PlatformError::Unavailable(
-                    "admin pipe returned no write progress".to_owned(),
-                ));
+                ensure_io_deadline(handle, deadline, "admin pipe write deadline elapsed")?;
+                thread::sleep(
+                    POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                );
+                continue;
             }
             offset = offset
                 .saturating_add(usize::try_from(written).map_err(|_| {

@@ -11,8 +11,9 @@ use ascension_platform_windows::{
     read_protected_payload_file,
 };
 use std::path::Path;
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn pipe_name(label: &str) -> String {
     let nonce = SystemTime::now()
@@ -59,6 +60,7 @@ fn native_pipe_round_trip_checks_peer_sid_and_server_identity() -> Result<(), Pl
 
     let mut client = AdminPipeClient::connect(name, Some(&server_image), Duration::from_secs(5))?;
     assert!(client.server_process_id() != 0);
+    assert!(client.server_creation_time() != 0);
     assert!(!client.server_executable().as_os_str().is_empty());
     let payload = br#"{"contract":"watchdog-admin-v1","kind":"status"}"#.to_vec();
     client.write_frame(&payload, Duration::from_secs(2))?;
@@ -67,6 +69,105 @@ fn native_pipe_round_trip_checks_peer_sid_and_server_identity() -> Result<(), Pl
     assert_eq!(server_pid, client.server_process_id());
     assert_eq!(echoed, payload);
     assert_eq!(peer.process_id, std::process::id());
+    Ok(())
+}
+
+#[test]
+fn native_pipe_rapid_round_trips_wait_for_each_response_drain() -> Result<(), PlatformError> {
+    let name = pipe_name("rapid-roundtrip");
+    let server_image = std::env::current_exe()
+        .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?;
+    let server = AdminPipeServer::create(name.clone(), None)?;
+    let server_thread = thread::spawn(move || {
+        let mut server = server;
+        server
+            .accept(Duration::from_secs(5))?
+            .ok_or_else(|| PlatformError::Timeout("test server accept timed out".to_owned()))?;
+        for sequence in 0..32_u32 {
+            let payload = format!(r#"{{"kind":"status","sequence":{sequence}}}"#).into_bytes();
+            let request = server.read_frame(Duration::from_secs(2))?;
+            if request != payload {
+                return Err(PlatformError::Invalid(
+                    "rapid round-trip request changed in transit".to_owned(),
+                ));
+            }
+            server.write_frame(&payload, Duration::from_secs(2))?;
+        }
+        server.disconnect()
+    });
+
+    let mut client = AdminPipeClient::connect(name, Some(&server_image), Duration::from_secs(5))?;
+    for sequence in 0..32_u32 {
+        let payload = format!(r#"{{"kind":"status","sequence":{sequence}}}"#).into_bytes();
+        client.write_frame(&payload, Duration::from_secs(2))?;
+        assert_eq!(client.read_frame(Duration::from_secs(2))?, payload);
+    }
+    join_result(server_thread)
+}
+
+#[test]
+fn native_pipe_nonreading_client_times_out_without_claiming_delivery() -> Result<(), PlatformError>
+{
+    let name = pipe_name("nonreading");
+    let server = AdminPipeServer::create(name.clone(), None)?;
+    let server_thread = thread::spawn(move || {
+        let mut server = server;
+        server
+            .accept(Duration::from_secs(5))?
+            .ok_or_else(|| PlatformError::Timeout("test server accept timed out".to_owned()))?;
+        let payload = vec![b'x'; MAX_ADMIN_PIPE_FRAME];
+        let result = server.write_frame(&payload, Duration::from_millis(120));
+        server.disconnect()?;
+        match result {
+            Err(PlatformError::Timeout(_)) => Ok(()),
+            Err(error) => Err(error),
+            Ok(()) => Err(PlatformError::Invalid(
+                "nonreading peer incorrectly reported a delivered response".to_owned(),
+            )),
+        }
+    });
+    let server_image = std::env::current_exe()
+        .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?;
+    let client = AdminPipeClient::connect(name, Some(&server_image), Duration::from_secs(5))?;
+    let started = Instant::now();
+    let result = join_result(server_thread);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    result?;
+    drop(client);
+    Ok(())
+}
+
+#[test]
+fn native_pipe_peer_loss_returns_uncertain_error_without_false_success() -> Result<(), PlatformError>
+{
+    let name = pipe_name("peer-loss");
+    let (accepted_sender, accepted_receiver) = mpsc::channel();
+    let server = AdminPipeServer::create(name.clone(), None)?;
+    let server_thread = thread::spawn(move || {
+        let mut server = server;
+        server
+            .accept(Duration::from_secs(5))?
+            .ok_or_else(|| PlatformError::Timeout("test server accept timed out".to_owned()))?;
+        accepted_sender
+            .send(())
+            .map_err(|_| PlatformError::Unavailable("test peer-loss signal failed".to_owned()))?;
+        let delivered = server
+            .write_frame(
+                b"response that must not be acknowledged",
+                Duration::from_secs(2),
+            )
+            .is_ok();
+        server.disconnect()?;
+        Ok(delivered)
+    });
+    let server_image = std::env::current_exe()
+        .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?;
+    let client = AdminPipeClient::connect(name, Some(&server_image), Duration::from_secs(5))?;
+    accepted_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|error| PlatformError::Timeout(format!("server accept signal: {error}")))?;
+    drop(client);
+    assert!(!join_result(server_thread)?);
     Ok(())
 }
 
