@@ -461,6 +461,13 @@ impl OwnedChild {
         let deadline = Instant::now() + timeout;
         #[cfg(unix)]
         {
+            if !self.process_group.is_armed() {
+                // Child retains its cached exit status after reap. Recheck
+                // containment read-only; never issue waitid or signal a
+                // recycled numeric process/group identifier.
+                self.process_group.wait_gone_after_reap(deadline)?;
+                return self.child.wait().map_err(WatchdogError::from);
+            }
             if observe_child_exit(&mut self.child)?.is_none() {
                 ensure_identity(&self.identity)?;
                 self.kill_process_group()?;
@@ -999,8 +1006,8 @@ mod tests {
 
         let repeated = child.terminate(Duration::from_millis(100));
         assert!(
-            repeated.is_err(),
-            "a reaped child cannot be terminated again"
+            repeated.is_ok(),
+            "already cleaned child must return its retained exit status"
         );
         drop(child);
         assert_eq!(
