@@ -518,6 +518,97 @@ fn receipt_capacity_backpressures_the_sixty_fifth_operation()
 }
 
 #[test]
+fn queued_ticket_deadline_is_immutable_across_lease_renewals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start(FaultPoint::None)?;
+    let client = server.client;
+    let (_boot, _fence, lease) = bootstrap_with_policy(&client, 12, 4)?;
+    let (full, reference) = submit_and_queue(&client, &lease, "immutable-ticket-expiry")?;
+
+    let mut renewed = lease.clone();
+    for sequence in 1..=3 {
+        let response = client.request(&Frame::request(
+            "lease_renew_request",
+            "lease_renew",
+            json!({"lease":renewed,"renew_sequence":sequence}),
+        ))?;
+        assert_eq!(response.payload["result"]["status"], "LEASE_RENEWED");
+        renewed = response.payload["lease"].clone();
+    }
+    assert_eq!(renewed["expires_at"], "2026-09-06T00:00:24Z");
+
+    let tick = client.request(&Frame::request(
+        "host_tick",
+        "recovery_reconcile",
+        json!({"operation_id":full["operation_id"]}),
+    ))?;
+    assert_eq!(tick.payload["result"]["status"], "LEASE_EXPIRED");
+    let stats = client.request(&Frame::request("stats", "recovery_read", json!({})))?;
+    assert_eq!(stats.payload["effect_count"], 0);
+    assert_eq!(stats.payload["queue_count"], 0);
+    let lookup = client.request(&Frame::request(
+        "operation_lookup_request",
+        "recovery_read",
+        json!({"operation":reference,"lookup_scope":"historical_read"}),
+    ))?;
+    assert_eq!(lookup.payload["operation"]["state"], "UNKNOWN");
+    assert_eq!(
+        lookup.payload["operation"]["ticket"]["expires_at"],
+        "2026-09-06T00:00:12Z"
+    );
+    assert_eq!(
+        lookup.payload["operation"]["uncertainty_reason"],
+        "authority_rotated"
+    );
+    RunningServer {
+        child: server.child,
+        client,
+        database: server.database,
+    }
+    .stop()?;
+    Ok(())
+}
+
+#[test]
+fn revoked_queued_ticket_is_unknown_before_queue_removal() -> Result<(), Box<dyn std::error::Error>>
+{
+    let server = RunningServer::start(FaultPoint::None)?;
+    let client = server.client;
+    let (_boot, _fence, lease) = bootstrap(&client)?;
+    let (full, reference) = submit_and_queue(&client, &lease, "revoked-ticket")?;
+    let revoked = client.request(&Frame::request(
+        "lease_revoke_request",
+        "lease_revoke",
+        json!({"lease":lease,"reason":"operator"}),
+    ))?;
+    assert_eq!(revoked.payload["result"]["status"], "LEASE_REVOKED");
+
+    let tick = client.request(&Frame::request(
+        "host_tick",
+        "recovery_reconcile",
+        json!({"operation_id":full["operation_id"]}),
+    ))?;
+    assert_eq!(tick.payload["result"]["status"], "LEASE_EXPIRED");
+    let stats = client.request(&Frame::request("stats", "recovery_read", json!({})))?;
+    assert_eq!(stats.payload["effect_count"], 0);
+    assert_eq!(stats.payload["queue_count"], 0);
+    let lookup = client.request(&Frame::request(
+        "operation_lookup_request",
+        "recovery_read",
+        json!({"operation":reference,"lookup_scope":"historical_read"}),
+    ))?;
+    assert_eq!(lookup.payload["operation"]["state"], "UNKNOWN");
+    assert_ne!(lookup.payload["operation"]["state"], "REJECTED");
+    RunningServer {
+        child: server.child,
+        client,
+        database: server.database,
+    }
+    .stop()?;
+    Ok(())
+}
+
+#[test]
 fn lease_policy_and_epoch_history_survive_restart() -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start(FaultPoint::None)?;
     let client = server.client;

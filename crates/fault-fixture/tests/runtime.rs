@@ -527,6 +527,77 @@ fn http_runtime_rejects_queued_old_lease_after_authority_rotation()
 }
 
 #[test]
+fn http_runtime_persists_unknown_when_queued_lease_is_revoked()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let client = Client::new(server.address);
+    let lease = bootstrap(&client)?;
+    let session_id = "runtime-revoked-session";
+    let operation_id = "runtime-revoked-operation";
+    let mut action_request = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-revoked"),
+            Some(operation_id),
+        ),
+        &lease,
+    );
+    action_request["instance_id"] = lease["instance_id"].clone();
+    action_request["session_id"] = json!(session_id);
+    action_request["action"] = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let (status, accepted) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/action",
+        &action_request,
+    )?;
+    assert_eq!(status, 200);
+    assert_eq!(accepted["status"], "accepted");
+
+    let revoked = client.request(&Frame::request(
+        "lease_revoke_request",
+        "lease_revoke",
+        json!({"lease":lease,"reason":"operator"}),
+    ))?;
+    assert_eq!(revoked.payload["result"]["status"], "LEASE_REVOKED");
+
+    let mut wait_request = with_lease(
+        envelope("wait_request", 0, None, Some(operation_id)),
+        &lease,
+    );
+    wait_request["instance_id"] = lease["instance_id"].clone();
+    wait_request["session_id"] = json!(session_id);
+    wait_request["wait_for_millis"] = json!(1);
+    let (status, unknown) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/wait",
+        &wait_request,
+    )?;
+    assert_eq!(status, 409);
+    assert_eq!(unknown["status"], "unknown");
+    assert_eq!(unknown["error_code"], "stale_lease");
+    assert_eq!(unknown["wait_outcome"], "recovery_required");
+    let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
+    assert_schema(&jsonschema::validator_for(&schema)?, &unknown);
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let durable: (String, i64) = connection.query_row(
+        "SELECT o.status,(SELECT COUNT(*) FROM runtime_queue WHERE operation_id=o.operation_id) FROM runtime_operations o WHERE o.operation_id=?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(durable, ("UNKNOWN".to_owned(), 0));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
 fn fresh_authority_recovers_historical_session_without_rewriting_old_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start()?;
