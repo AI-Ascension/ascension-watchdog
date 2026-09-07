@@ -5,7 +5,8 @@ use crate::error::{Result, WatchdogError};
 use crate::runtime::Supervisor;
 use crate::storage::{Store, now_unix_ms};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 const DEFAULT_CONFIG: &str = "config/watchdog.json";
 
@@ -313,9 +314,13 @@ fn job_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Stri
     if subcommand == "list" {
         return list_jobs_command(args, &config);
     }
+    if subcommand == "submit" && config.admin.is_some() {
+        return authenticated_job_submit_command(args, &config);
+    }
     if config.admin.is_some() || !config.allow_synthetic_children {
         return Err(WatchdogError::Unauthorized(
-            "direct job mutations are restricted to unauthenticated synthetic fixtures; authenticated service job submission is not yet available".to_owned(),
+            "direct job mutations are restricted to unauthenticated synthetic fixtures; use authenticated job submit"
+                .to_owned(),
         ));
     }
     let mut store = Store::open(&config.database, &config)?;
@@ -370,6 +375,112 @@ fn job_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Stri
             "unknown job command {other}"
         ))),
     }
+}
+
+fn authenticated_job_submit_command(
+    args: &mut Vec<String>,
+    config: &WatchdogConfig,
+) -> Result<Option<String>> {
+    use crate::admin::{
+        AdminClient, AdminClientConfig, AdminCommand, Capability, JobSubmitRequest, ReplyStatus,
+    };
+
+    args.remove(0);
+    let key = take_option(args, "--idempotency-key").ok_or_else(|| {
+        WatchdogError::InvalidInput(
+            "job submit requires --idempotency-key; reuse it after an uncertain response"
+                .to_owned(),
+        )
+    })?;
+    let kind = take_option(args, "--kind")
+        .ok_or_else(|| WatchdogError::InvalidInput("job submit requires --kind".to_owned()))?;
+    let payload_arg = take_option(args, "--payload");
+    let payload_file = take_option(args, "--payload-file");
+    if payload_arg.is_some() && payload_file.is_some() {
+        return Err(WatchdogError::InvalidInput(
+            "job submit accepts only one of --payload or --payload-file".to_owned(),
+        ));
+    }
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected job submit argument".to_owned(),
+        ));
+    }
+    let payload_text = if let Some(path) = payload_file {
+        read_protected_job_payload(Path::new(&path))?
+    } else {
+        payload_arg.unwrap_or_else(|| "{}".to_owned())
+    };
+    let payload: Value = serde_json::from_str(&payload_text)?;
+    let request = JobSubmitRequest::new(kind, payload).map_err(WatchdogError::InvalidInput)?;
+    let admin = config
+        .admin
+        .as_ref()
+        .ok_or_else(|| WatchdogError::Unauthorized("admin configuration missing".to_owned()))?;
+    let client = AdminClient::new(AdminClientConfig::new(
+        admin.endpoint.clone(),
+        admin.admin_token_path.clone(),
+        Capability::Admin,
+    )?)?;
+    let response = client.execute(&key, AdminCommand::JobSubmit(request))?;
+    if !matches!(response.status, ReplyStatus::Ok | ReplyStatus::Accepted) {
+        return Err(WatchdogError::Conflict(format!(
+            "job submission returned {:?}; idempotency key {key}",
+            response.status
+        )));
+    }
+    Ok(Some(serde_json::to_string(&response)?))
+}
+
+fn read_protected_job_payload(path: &Path) -> Result<String> {
+    if !path.is_absolute()
+        || path.as_os_str().is_empty()
+        || path.as_os_str().to_string_lossy().contains('\0')
+        || path
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        return Err(WatchdogError::InvalidInput(
+            "job payload file must be an absolute path without traversal".to_owned(),
+        ));
+    }
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if normalized.starts_with("/mnt/") || normalized.starts_with("//wsl") {
+        return Err(WatchdogError::InvalidInput(
+            "job payload file must remain on an owner-local filesystem".to_owned(),
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WatchdogError::InvalidInput(
+            "job payload file must be a regular non-symlink file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(WatchdogError::Unauthorized(
+                "job payload file must be owner-only".to_owned(),
+            ));
+        }
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take((crate::admin::MAX_JOB_PAYLOAD_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > crate::admin::MAX_JOB_PAYLOAD_BYTES {
+        return Err(WatchdogError::InvalidInput(
+            "job payload file exceeds the payload bound".to_owned(),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| WatchdogError::InvalidInput("job payload file is not UTF-8".to_owned()))
 }
 
 fn list_jobs_command(args: &mut Vec<String>, config: &WatchdogConfig) -> Result<Option<String>> {
@@ -475,5 +586,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit|list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

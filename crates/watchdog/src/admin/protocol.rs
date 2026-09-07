@@ -27,6 +27,10 @@ const MAX_TOKEN_BYTES: usize = 4 * 1024;
 const MAX_RELEASE_BYTES: usize = 128;
 const MAX_RESULT_ITEMS: usize = 256;
 const MAX_JOB_KIND_BYTES: usize = 128;
+/// Maximum serialized JSON payload accepted by authenticated job submission.
+/// The complete command is also checked against `MAX_PAYLOAD_BYTES`, so the
+/// envelope and framing overhead remain bounded.
+pub const MAX_JOB_PAYLOAD_BYTES: usize = MAX_PAYLOAD_BYTES;
 
 /// The two credentials are intentionally separate.  `Admin` is required for
 /// every desired-state or recovery transition; a read credential can never
@@ -79,6 +83,7 @@ pub enum CommandName {
     Drain,
     Stop,
     Jobs,
+    JobSubmit,
     Attempt,
     Quarantine,
     Retry,
@@ -105,7 +110,8 @@ impl CommandName {
             | Self::Reconcile
             | Self::Backup
             | Self::Restore
-            | Self::ReleaseActivate => Capability::Admin,
+            | Self::ReleaseActivate
+            | Self::JobSubmit => Capability::Admin,
         }
     }
 }
@@ -126,6 +132,7 @@ pub enum AdminCommand {
     Drain(EmptyParams),
     Stop(EmptyParams),
     Jobs(JobsRequest),
+    JobSubmit(JobSubmitRequest),
     Attempt(AttemptRequest),
     Quarantine(QuarantineRequest),
     Retry(RetryRequest),
@@ -148,6 +155,7 @@ impl AdminCommand {
             Self::Drain(_) => CommandName::Drain,
             Self::Stop(_) => CommandName::Stop,
             Self::Jobs(_) => CommandName::Jobs,
+            Self::JobSubmit(_) => CommandName::JobSubmit,
             Self::Attempt(_) => CommandName::Attempt,
             Self::Quarantine(_) => CommandName::Quarantine,
             Self::Retry(_) => CommandName::Retry,
@@ -169,6 +177,7 @@ impl AdminCommand {
             | Self::Drain(_)
             | Self::Stop(_) => Ok(()),
             Self::Jobs(value) => value.validate(),
+            Self::JobSubmit(value) => value.validate(),
             Self::Attempt(value) => value.validate(),
             Self::Quarantine(value) => value.validate(),
             Self::Retry(value) => value.validate(),
@@ -198,6 +207,7 @@ impl Serialize for AdminCommand {
             | Self::Drain(params)
             | Self::Stop(params) => envelope.serialize_field("params", params)?,
             Self::Jobs(params) => envelope.serialize_field("params", params)?,
+            Self::JobSubmit(params) => envelope.serialize_field("params", params)?,
             Self::Attempt(params) => envelope.serialize_field("params", params)?,
             Self::Quarantine(params) => envelope.serialize_field("params", params)?,
             Self::Retry(params) => envelope.serialize_field("params", params)?,
@@ -232,6 +242,7 @@ impl<'de> Deserialize<'de> for AdminCommand {
             CommandName::Drain => decode_params(envelope.params).map(Self::Drain),
             CommandName::Stop => decode_params(envelope.params).map(Self::Stop),
             CommandName::Jobs => decode_params(envelope.params).map(Self::Jobs),
+            CommandName::JobSubmit => decode_params(envelope.params).map(Self::JobSubmit),
             CommandName::Attempt => decode_params(envelope.params).map(Self::Attempt),
             CommandName::Quarantine => decode_params(envelope.params).map(Self::Quarantine),
             CommandName::Retry => decode_params(envelope.params).map(Self::Retry),
@@ -289,6 +300,50 @@ impl JobsRequest {
 
 fn default_job_limit() -> u16 {
     64
+}
+
+/// Authenticated submission of one watchdog-owned job. The payload is a
+/// bounded JSON value rather than a generic command or an execution request;
+/// the watchdog only queues it and never interprets it as a gameplay action.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobSubmitRequest {
+    pub kind: String,
+    pub payload: serde_json::Value,
+}
+
+impl std::fmt::Debug for JobSubmitRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JobSubmitRequest")
+            .field("kind", &self.kind)
+            .field("payload", &"<redacted>")
+            .finish()
+    }
+}
+
+impl JobSubmitRequest {
+    /// Construct and validate a bounded submission request.
+    pub fn new(
+        kind: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> std::result::Result<Self, String> {
+        let request = Self {
+            kind: kind.into(),
+            payload,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    fn validate(&self) -> std::result::Result<(), String> {
+        validate_identifier(&self.kind, "job kind", MAX_JOB_KIND_BYTES)?;
+        let payload = serde_json::to_vec(&self.payload).map_err(|error| error.to_string())?;
+        if payload.len() > MAX_JOB_PAYLOAD_BYTES {
+            return Err(format!("job payload exceeds {MAX_JOB_PAYLOAD_BYTES} bytes"));
+        }
+        Ok(())
+    }
 }
 
 /// Read-only attempt inspection request.
@@ -592,19 +647,7 @@ impl AdminRequest {
     /// transport identity, or local deadline.  Reusing an idempotency key with
     /// a different command is a conflict, never a second dispatch.
     pub fn fingerprint(&self) -> String {
-        #[derive(Serialize)]
-        struct Fingerprint<'a> {
-            contract: ContractVersion,
-            capability: Capability,
-            command: &'a AdminCommand,
-        }
-        let bytes = serde_json::to_vec(&Fingerprint {
-            contract: self.contract,
-            capability: self.capability,
-            command: &self.command,
-        })
-        .unwrap_or_default();
-        sha256_hex(&bytes)
+        command_fingerprint(self.capability, &self.command)
     }
 
     /// Build the token-free context used by the main-loop dispatcher after
@@ -884,6 +927,25 @@ impl JobsView {
     }
 }
 
+/// Successful authenticated job-submission response. The job identifier is
+/// the only submission-specific value exposed; payload and private job state
+/// remain in the owner-local store.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobSubmittedView {
+    pub job_id: String,
+}
+
+/// Alias matching the command name for callers that use command-oriented
+/// naming in their response handling.
+pub type JobSubmitView = JobSubmittedView;
+
+impl JobSubmittedView {
+    fn validate(&self) -> std::result::Result<(), String> {
+        validate_identifier(&self.job_id, "job id", MAX_ID_BYTES)
+    }
+}
+
 /// Attempt status intentionally omits arbitrary outcome text.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -978,6 +1040,7 @@ impl ReleaseInspection {
 pub enum AdminResult {
     Status(StatusView),
     Jobs(JobsView),
+    JobSubmitted(JobSubmittedView),
     Attempt(AttemptView),
     Accepted(AcceptedView),
     Backup(BackupView),
@@ -991,6 +1054,7 @@ impl AdminResult {
         match self {
             Self::Status(value) => value.validate(),
             Self::Jobs(value) => value.validate(),
+            Self::JobSubmitted(value) => value.validate(),
             Self::Attempt(value) => value.validate(),
             Self::Accepted(_) => Ok(()),
             Self::Backup(value) => value.validate(),
@@ -1023,7 +1087,10 @@ impl AdminResponse {
             contract: ContractVersion::V1,
             request_id: context.request_id.to_string(),
             idempotency_key: context.idempotency_key.clone(),
-            status: if matches!(result, AdminResult::Accepted(_)) {
+            status: if matches!(
+                result,
+                AdminResult::Accepted(_) | AdminResult::JobSubmitted(_)
+            ) {
                 ReplyStatus::Accepted
             } else {
                 ReplyStatus::Ok
@@ -1371,6 +1438,25 @@ fn validate_digest(value: &str) -> std::result::Result<(), String> {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Compute the canonical transport fingerprint for a closed command. The
+/// reconciliation loop uses the same helper to bind a decoded job payload to
+/// the authenticated context before it reaches durable storage.
+pub(crate) fn command_fingerprint(capability: Capability, command: &AdminCommand) -> String {
+    #[derive(Serialize)]
+    struct Fingerprint<'a> {
+        contract: ContractVersion,
+        capability: Capability,
+        command: &'a AdminCommand,
+    }
+    let bytes = serde_json::to_vec(&Fingerprint {
+        contract: ContractVersion::V1,
+        capability,
+        command,
+    })
+    .unwrap_or_default();
+    sha256_hex(&bytes)
 }
 
 /// Keep command payloads below the complete frame bound so framing overhead
