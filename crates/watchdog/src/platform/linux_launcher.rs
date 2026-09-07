@@ -579,17 +579,34 @@ where
     let (frame_rx, go_rx) = spawn_protocol_reader();
     let started = Instant::now();
     let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
-    let authorization = authorizer(&request)?;
-    authorize_request(&request, &authorization)?;
+    let authorization = authorize_after_release(&request, &go_rx, started, authorizer)?;
     verify_current_cgroup(&authorization.cgroup_path)?;
-    let go = recv_bounded(&go_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    spawn_authorized_target(&authorization.specification).map(|()| 0)
+}
+
+fn authorize_after_release<F>(
+    request: &LinuxHelperRequest,
+    go_rx: &Receiver<Result<String, AdapterError>>,
+    started: Instant,
+    authorizer: F,
+) -> Result<LinuxHelperAuthorization, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    // The request frame can arrive before the parent has assigned this helper
+    // to the cgroup. GO is sent only after that assignment and its verification.
+    // Checking membership before GO races the parent's legitimate handoff.
+    // Query durable authorization after the barrier too: stop may have been
+    // committed while this helper was waiting, invalidating earlier approval.
+    let go = recv_bounded(go_rx, remaining_timeout(started, MAX_TIMEOUT))??;
     if go != request.specification.launch_nonce {
         return Err(AdapterError::IdentityMismatch(
             "Linux helper GO nonce does not match the authorized launch".to_owned(),
         ));
     }
-    verify_current_cgroup(&authorization.cgroup_path)?;
-    spawn_authorized_target(&authorization.specification).map(|()| 0)
+    let authorization = authorizer(request)?;
+    authorize_request(request, &authorization)?;
+    Ok(authorization)
 }
 
 /// Run the hidden helper if the current process was invoked in helper mode.
@@ -1294,5 +1311,53 @@ mod tests {
         let result = TrustedLinuxLauncher::new("/bin/true")
             .and_then(|launcher| launcher.with_timeout(Duration::from_secs(16)));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn release_barrier_precedes_durable_authorization() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let request = LinuxHelperRequest {
+            specification: specification(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let stopped = Arc::new(AtomicBool::new(false));
+        let producer_stop = Arc::clone(&stopped);
+        let (sender, receiver) = mpsc::channel();
+        let nonce = request.specification.launch_nonce.clone();
+        let producer = thread::spawn(move || {
+            // Models durable stop becoming visible before the parent's GO.
+            producer_stop.store(true, Ordering::Release);
+            sender.send(Ok(nonce)).unwrap();
+        });
+        let result = authorize_after_release(&request, &receiver, Instant::now(), |_| {
+            assert!(stopped.load(Ordering::Acquire));
+            Err(AdapterError::Unavailable(
+                "durable stop denies launch".to_owned(),
+            ))
+        });
+        producer.join().unwrap();
+        assert!(
+            matches!(result, Err(AdapterError::Unavailable(message)) if message == "durable stop denies launch")
+        );
+    }
+
+    #[test]
+    fn wrong_release_nonce_never_queries_authority() {
+        let request = LinuxHelperRequest {
+            specification: specification(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok("stale-nonce".to_owned())).unwrap();
+        let mut queried = false;
+        let result = authorize_after_release(&request, &receiver, Instant::now(), |_| {
+            queried = true;
+            Err(AdapterError::Unavailable(
+                "must not reach authority".to_owned(),
+            ))
+        });
+        assert!(matches!(result, Err(AdapterError::IdentityMismatch(_))));
+        assert!(!queried);
     }
 }
