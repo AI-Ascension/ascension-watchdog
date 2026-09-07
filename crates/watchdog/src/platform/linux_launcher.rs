@@ -13,12 +13,14 @@
 //! there is no second target process or post-spawn PID move to authorize.
 
 use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -365,14 +367,6 @@ impl TrustedLinuxLauncher {
         let canonical = fs::canonicalize(&helper_executable).map_err(|error| {
             AdapterError::Unavailable(format!("Linux helper executable is unavailable: {error}"))
         })?;
-        let metadata = fs::metadata(&canonical).map_err(|error| {
-            AdapterError::Unavailable(format!("Linux helper metadata is unavailable: {error}"))
-        })?;
-        if !metadata.is_file() {
-            return Err(AdapterError::Invalid(
-                "Linux helper executable is not a regular file".to_owned(),
-            ));
-        }
         let helper_executable_sha256 = hash_file(&canonical)?;
         Ok(Self {
             helper_executable: canonical,
@@ -452,6 +446,12 @@ impl TrustedLinuxLauncher {
     #[must_use]
     pub fn helper_executable(&self) -> &Path {
         &self.helper_executable
+    }
+
+    /// Return the digest bound to the sealed helper snapshot.
+    #[must_use]
+    pub(crate) fn helper_executable_sha256(&self) -> &str {
+        &self.helper_executable_sha256
     }
 
     /// Spawn only the trusted helper and send its bounded request frame.
@@ -1094,10 +1094,11 @@ fn unescape_mountinfo(value: &str) -> String {
         .replace("\\134", "\\")
 }
 
-/// Open an approved executable once, hash the opened bytes, and return the
-/// `/proc/self/fd` path for descriptor-bound exec.  The path is used only to
-/// invoke the already-open file; a later rename or symlink replacement cannot
-/// redirect the exec to a different inode.
+/// Open an approved executable once, copy the verified bytes into a sealed
+/// executable memfd, and return its `/proc/self/fd` path.  The source handle
+/// is opened nonblocking and all metadata checks are made on that handle, so
+/// a FIFO or device cannot make verification hang.  The sealed snapshot makes
+/// an in-place source mutation after verification irrelevant to the exec.
 fn open_verified_executable(
     path: &Path,
     expected_digest: &str,
@@ -1105,7 +1106,8 @@ fn open_verified_executable(
     let canonical = fs::canonicalize(path).map_err(|error| {
         AdapterError::Invalid(format!("Linux executable cannot be resolved: {error}"))
     })?;
-    let metadata = fs::metadata(&canonical).map_err(|error| {
+    let mut source = open_nonblocking_read(&canonical)?;
+    let metadata = source.metadata().map_err(|error| {
         AdapterError::Unavailable(format!("Linux executable metadata failed: {error}"))
     })?;
     if !metadata.is_file() {
@@ -1118,37 +1120,59 @@ fn open_verified_executable(
             "Linux executable exceeds the hash size bound".to_owned(),
         ));
     }
-    let file = File::open(&canonical).map_err(|error| {
-        AdapterError::Unavailable(format!("Linux executable cannot be opened: {error}"))
-    })?;
-    let digest = hash_reader(&file)?;
+    let snapshot_fd = create_executable_snapshot()?;
+    let mut snapshot = File::from(snapshot_fd);
+    let digest = hash_and_copy(&mut source, &mut snapshot)?;
     if digest != expected_digest {
         return Err(AdapterError::IdentityMismatch(
             "Linux executable bytes changed before descriptor-bound exec".to_owned(),
         ));
     }
-    let fd = file.as_raw_fd();
+    fcntl_add_seals(
+        &snapshot,
+        SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux executable snapshot cannot be sealed: {error}"
+        ))
+    })?;
+    let fd = snapshot.as_raw_fd();
     if fd < 0 {
         return Err(AdapterError::Io(
             "Linux executable descriptor has an invalid number".to_owned(),
         ));
     }
     let fd_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    let opened_path = fs::canonicalize(&fd_path).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux executable descriptor cannot be resolved: {error}"
-        ))
-    })?;
-    if opened_path != canonical {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux executable descriptor resolved to an unexpected file".to_owned(),
-        ));
+    Ok((snapshot, fd_path))
+}
+
+fn create_executable_snapshot() -> Result<rustix::fd::OwnedFd, AdapterError> {
+    let base_flags = MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING;
+    match memfd_create(
+        "ascension-verified-executable",
+        base_flags | MemfdFlags::EXEC,
+    ) {
+        Ok(fd) => Ok(fd),
+        Err(error) if error == rustix::io::Errno::INVAL => {
+            // MFD_EXEC was added in Linux 6.3.  Older kernels either permit
+            // executable memfds by default or reject them through a host
+            // memfd_noexec policy; retain the latter error below.
+            memfd_create("ascension-verified-executable", base_flags).map_err(|fallback| {
+                AdapterError::Unavailable(format!(
+                    "Linux executable snapshot cannot be created: {fallback}"
+                ))
+            })
+        }
+        Err(error) => Err(AdapterError::Unavailable(format!(
+            "Linux executable snapshot cannot be created: {error}"
+        ))),
     }
-    Ok((file, fd_path))
 }
 
 fn hash_file(path: &Path) -> Result<String, AdapterError> {
-    let metadata = fs::metadata(path).map_err(|error| {
+    let file = open_nonblocking_read(path)?;
+    let metadata = file.metadata().map_err(|error| {
         AdapterError::Unavailable(format!("cannot inspect Linux executable bytes: {error}"))
     })?;
     if !metadata.is_file() {
@@ -1161,21 +1185,61 @@ fn hash_file(path: &Path) -> Result<String, AdapterError> {
             "Linux executable exceeds the hash size bound".to_owned(),
         ));
     }
-    let reader = fs::File::open(path).map_err(|error| {
-        AdapterError::Unavailable(format!("cannot open Linux executable bytes: {error}"))
-    })?;
-    hash_reader(&reader)
+    hash_reader(file)
 }
 
-fn hash_reader(mut reader: impl Read) -> Result<String, AdapterError> {
+fn open_nonblocking_read(path: &Path) -> Result<File, AdapterError> {
+    let flags = rustix::fs::OFlags::NONBLOCK
+        .bits()
+        .try_into()
+        .map_err(|_| AdapterError::Invalid("Linux nonblocking flag is out of range".to_owned()))?;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("cannot open Linux executable bytes: {error}"))
+        })
+}
+
+fn hash_reader(reader: impl Read) -> Result<String, AdapterError> {
+    hash_stream(reader, None)
+}
+
+fn hash_and_copy(reader: impl Read, writer: &mut impl Write) -> Result<String, AdapterError> {
+    hash_stream(reader, Some(writer))
+}
+
+fn hash_stream(
+    mut reader: impl Read,
+    mut writer: Option<&mut dyn Write>,
+) -> Result<String, AdapterError> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total_read = 0_u64;
     loop {
         let read = reader
             .read(&mut buffer)
             .map_err(|error| AdapterError::Io(format!("cannot hash Linux executable: {error}")))?;
         if read == 0 {
             break;
+        }
+        total_read = total_read
+            .checked_add(u64::try_from(read).map_err(|_| {
+                AdapterError::Invalid("Linux executable read size exceeds bounds".to_owned())
+            })?)
+            .ok_or_else(|| {
+                AdapterError::Invalid("Linux executable exceeds the hash size bound".to_owned())
+            })?;
+        if total_read > MAX_HASH_BYTES {
+            return Err(AdapterError::Invalid(
+                "Linux executable exceeds the hash size bound".to_owned(),
+            ));
+        }
+        if let Some(writer) = writer.as_deref_mut() {
+            writer.write_all(&buffer[..read]).map_err(|error| {
+                AdapterError::Io(format!("cannot create Linux executable snapshot: {error}"))
+            })?;
         }
         hasher.update(&buffer[..read]);
     }
@@ -1444,6 +1508,33 @@ mod tests {
         );
         drop(file);
         Ok(())
+    }
+
+    #[test]
+    fn sealed_snapshot_is_not_changed_by_in_place_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let digest = hash_file(&path)?;
+        let (file, fd_path) = open_verified_executable(&path, &digest)?;
+
+        let replacement = fs::read("/bin/false")?;
+        fs::write(&path, replacement)?;
+        let status = Command::new(&fd_path).status()?;
+
+        assert!(
+            status.success(),
+            "sealed snapshot followed in-place mutation"
+        );
+        drop(file);
+        Ok(())
+    }
+
+    #[test]
+    fn special_file_is_rejected_before_reading() {
+        let result = open_verified_executable(Path::new("/dev/null"), &"0".repeat(64));
+        assert!(matches!(result, Err(AdapterError::Invalid(_))));
     }
 
     #[test]
