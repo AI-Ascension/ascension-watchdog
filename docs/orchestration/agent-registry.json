@@ -5,27 +5,27 @@
   "maximum_reserved_descendants": 12,
   "observed_maximum_depth": 1,
   "required_depth": 3,
-  "nested_status": "unmet: native spawning not exposed to descendants",
+  "nested_status": "unmet: prior descendants lacked spawning; current platform reviewer capability recheck requested, no new nested execution evidence yet",
   "resumed_wave": {
     "previous_handles": "absent from native list_agents before replacement assignments",
-    "active_reserved_descendants": 9,
+    "active_reserved_descendants": 11,
     "classification": "requested and accepted; execution model metadata not yet reverified",
     "agents": [
       {"path":"/root/mcp_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"H6R"},
       {"path":"/root/job_admission","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"W9"},
-      {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V13"},
+      {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V15"},
       {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G4R"},
       {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P5R"},
-      {"path":"/root/fixture_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V14"},
+      {"path":"/root/fixture_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V16"},
       {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G3R"},
       {"path":"/root/linux_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P6L"},
       {"path":"/root/windows_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P6W"}
     ]
   },
   "platform_nested_reservation": {
-    "reserved_slots": 0,
+    "reserved_slots": 2,
     "released_slots": 2,
-    "reason": "Platform handoff reports nested capability unavailable; no depth-2 or depth-3 execution evidence exists"
+    "reason": "Re-reserved for depth-2 coordinator and depth-3 protected Windows payload reader reviewer under platform_review; conditional on available native spawning, no actual child paths observed yet"
   },
   "agents": [
     {"path":"/root/architecture","thread_id":"01a078b8-4e3d-75d2-aceb-ac70801cf138","depth":1,"model":"gpt-5.6-luna","reasoning_effort":"max","observed_turn_context":true},
