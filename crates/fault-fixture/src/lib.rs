@@ -36,6 +36,9 @@ pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_ACTION_BYTES: usize = 65_536;
 /// Retained receipt bound used by the fixture's backpressure oracle.
 pub const MAX_RECEIPTS: usize = 64;
+/// Runtime operation journal bound. Backpressure retains every row so
+/// unresolved work and operation-id deduplication are never evicted.
+pub const MAX_RUNTIME_OPERATIONS: usize = 64;
 /// A synthetic host effect is never represented as exactly-once proof.
 pub const EFFECT_WITNESS_SOURCE: &str = "host_game_thread";
 /// Exact bytes of the approved sideband schema consumed by this fixture.
@@ -2633,11 +2636,13 @@ impl DurableHost {
         let mut state = state.ok_or(FixtureError::HostNotReady)?;
         if !authority_current && kind == "dispatch_action_request" {
             let operation_id = field_string(request, "operation_id")?;
-            let existing = self.runtime_operation(&operation_id)?;
-            if existing.as_ref().is_some_and(|operation| {
-                matches!(operation.status.as_str(), "ADMITTED" | "EXECUTING")
-            }) {
-                self.mark_runtime_operation_unknown(&operation_id)?;
+            if self.mark_runtime_operation_unknown_for_context(
+                &operation_id,
+                &instance_id,
+                &session_id,
+                &lease_id,
+                lease_epoch,
+            )? {
                 return Ok(runtime_error_response(
                     request,
                     &kind,
@@ -2671,9 +2676,22 @@ impl DurableHost {
                     )))
         {
             if kind == "wait_request" {
-                self.mark_runtime_operation_unknown(&field_string(request, "operation_id")?)?;
+                let operation_id = field_string(request, "operation_id")?;
+                self.mark_runtime_operation_unknown_for_context(
+                    &operation_id,
+                    &instance_id,
+                    &session_id,
+                    &lease_id,
+                    lease_epoch,
+                )?;
             } else if let Some(operation_id) = request["recovery"]["operation_id"].as_str() {
-                self.mark_runtime_operation_unknown(operation_id)?;
+                self.mark_runtime_operation_unknown_for_context(
+                    operation_id,
+                    &instance_id,
+                    &session_id,
+                    &lease_id,
+                    lease_epoch,
+                )?;
             }
             return Ok(runtime_error_response(
                 request,
@@ -2823,6 +2841,14 @@ impl DurableHost {
             .is_some()
         {
             return runtime_rejected_response(request, state, &operation_id, "active_operation");
+        }
+
+        // Runtime history is bounded by admission backpressure rather than
+        // archival or eviction. This keeps unresolved operations and every
+        // historical operation-id tombstone available for recovery/dedup;
+        // archival would require a broader contract than this fixture owns.
+        if self.runtime_operation_count()? >= MAX_RUNTIME_OPERATIONS {
+            return runtime_rejected_response(request, state, &operation_id, "runtime_capacity");
         }
 
         let operation = RuntimeOperation {
@@ -3163,6 +3189,17 @@ impl DurableHost {
         Ok(None)
     }
 
+    fn runtime_operation_count(&self) -> Result<usize, FixtureError> {
+        let count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM runtime_operations", [], |row| {
+                row.get(0)
+            })
+            .map_err(FixtureError::Sql)?;
+        usize::try_from(count)
+            .map_err(|_| FixtureError::Invalid("runtime operation count overflow".to_owned()))
+    }
+
     fn insert_runtime_operation(&self, operation: &RuntimeOperation) -> Result<(), FixtureError> {
         let transaction = self
             .connection
@@ -3464,19 +3501,62 @@ impl DurableHost {
     }
 
     fn mark_runtime_operation_unknown(&self, operation_id: &str) -> Result<(), FixtureError> {
-        self.connection
-            .execute(
-                "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?2 WHERE operation_id=?1 AND status IN ('ADMITTED','EXECUTING')",
-                params![operation_id, FIXTURE_TIMESTAMP],
-            )
-            .map_err(FixtureError::Sql)?;
-        self.connection
-            .execute(
-                "DELETE FROM runtime_queue WHERE operation_id=?1",
+        let identity: Option<(String, String, String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT instance_id,session_id,lease_id,lease_epoch FROM runtime_operations WHERE operation_id=?1",
                 params![operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(FixtureError::Sql)?;
+        if let Some((instance_id, session_id, lease_id, lease_epoch)) = identity {
+            let _ = self.mark_runtime_operation_unknown_for_context(
+                operation_id,
+                &instance_id,
+                &session_id,
+                &lease_id,
+                lease_epoch,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn mark_runtime_operation_unknown_for_context(
+        &self,
+        operation_id: &str,
+        instance_id: &str,
+        session_id: &str,
+        lease_id: &str,
+        lease_epoch: i64,
+    ) -> Result<bool, FixtureError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(FixtureError::Sql)?;
+        let changed = transaction
+            .execute(
+                "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?5 WHERE operation_id=?1 AND instance_id=?2 AND session_id=?3 AND lease_id=?4 AND lease_epoch=?6 AND status IN ('ADMITTED','EXECUTING')",
+                params![
+                    operation_id,
+                    instance_id,
+                    session_id,
+                    lease_id,
+                    FIXTURE_TIMESTAMP,
+                    lease_epoch,
+                ],
             )
             .map_err(FixtureError::Sql)?;
-        Ok(())
+        if changed == 1 {
+            transaction
+                .execute(
+                    "DELETE FROM runtime_queue WHERE operation_id=?1",
+                    params![operation_id],
+                )
+                .map_err(FixtureError::Sql)?;
+        }
+        transaction.commit().map_err(FixtureError::Sql)?;
+        Ok(changed == 1)
     }
 
     fn mark_runtime_operation_rejected(&self, operation_id: &str) -> Result<(), FixtureError> {
