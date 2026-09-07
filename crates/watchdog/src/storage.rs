@@ -1816,6 +1816,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_running_launch_intent(&tx)?;
         let existing: Option<String> = tx
             .query_row(
                 "SELECT id FROM launch_intents WHERE component_id=? AND state <> 'cleaned' LIMIT 1",
@@ -1912,6 +1913,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_running_launch_intent(&tx)?;
         let state_and_proof: Option<(String, Option<String>)> = tx
             .query_row(
                 "SELECT state, ownership_proof_json FROM launch_intents WHERE id=?",
@@ -2125,6 +2127,17 @@ fn has_any_user_tables(conn: &Connection) -> Result<bool> {
         |row| row.get(0),
     )?;
     Ok(count > 0)
+}
+
+fn require_running_launch_intent(tx: &Transaction<'_>) -> Result<()> {
+    let desired = metadata_from_conn(tx, "desired_mode")?
+        .ok_or_else(|| WatchdogError::Conflict("desired mode metadata is missing".to_owned()))?;
+    if parse_mode(&desired)? != DesiredMode::Running {
+        return Err(WatchdogError::Conflict(
+            "durable desired mode does not authorize launch admission or activation".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn create_schema(conn: &mut Connection) -> Result<()> {
