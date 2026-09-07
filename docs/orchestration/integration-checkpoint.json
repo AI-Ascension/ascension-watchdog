@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-source-state-not-a-release",
+  "purpose": "Resumable source integration checkpoint; no binary activation authority",
+  "root_commit": "73572485e249b6abf68151d6de16477914224d12",
+  "source_heads": {
+    "sts2-gateway": "ad842db5cb1fdfed5e8163c4cf4bd139d2c21eed",
+    "sts2-harness": "5987219395cc52bc5bc27f73048e4843eb78dc72",
+    "sts2-mcp-server": "eb89ab251665f263c2fe3e6b735eeae3d3e40c83",
+    "sts2-game-mod": "9f44b8d57eb6a9bfb773aacd9e136be973d996ff",
+    "sts2-protocol": "2a30eb96240f579eea9c776b3291d31a3bd9ac38",
+    "ai-agent-observability": "eb5b027a89483979acc93bcbc630cb40c9f33b87"
+  },
+  "pending_worktrees_not_represented_by_heads": [
+    "watchdog-store-policy", "platform", "admin-native", "sts2-mcp-server",
+    "sts2-game-mod", "fixture-repair", "mod-regressions", "windows-regressions"
+  ],
+  "active_ownership": {
+    "root": "Runtime, CLI, service-loop and cross-repository integration",
+    "watchdog": "W3 store/policy safety regressions and durable launch intents",
+    "platform": "P4 Linux trusted launch barrier and native Windows fixes",
+    "admin_control": "W4 authenticated Windows admin transport and dispatch context",
+    "gateway_host": "G4 actual gateway executable recovery integration",
+    "harness_mcp": "H3 actual harness executable resume integration",
+    "host_admission": "G3 real host control routes and admission safety repairs",
+    "mcp_recovery": "H2 MCP recovery-only consumer integration",
+    "architecture": "A6 adversarial synthetic fixture repairs",
+    "verification": "V8 independent managed-code safety regressions",
+    "core_review": "V9 independent Windows safety regression and review record",
+    "observability": "P5 independent gateway store/bridge review"
+  },
+  "verified_this_checkpoint": [
+    "Four service-loop tests including actual daemon Unix datagram notifications",
+    "Root locked workspace strict Clippy and formatting",
+    "Observability local static fixture/bootstrap regressions",
+    "Observability draft PR 10 published; exact-head CI required"
+  ],
+  "known_unmet_gates": [
+    "Eight core adversarial regressions require integrated store/policy repairs",
+    "Twelve Windows review findings require fixes and native verification",
+    "Managed admission/journal review findings require integrated repairs",
+    "Native process containment not yet wired into Supervisor production path",
+    "Authenticated admin transport not yet wired into real daemon/CLI",
+    "Actual gateway/harness/MCP/mod recovery flow not yet integration-verified",
+    "No native service install, live host recovery, reboot, release activation or soak",
+    "Three descendant layers unavailable; observed ancestry remains depth one"
+  ],
+  "deployment_status": "not-installed-not-activated",
+  "completion": "unverified"
+}
