@@ -143,7 +143,14 @@ fn launch_intent_requires_proof_and_serializes_recovery_state() {
     let config = config(&temp, "launch-intent");
     let mut store = Store::initialize(&config.database, &config).expect("initialize");
     let prepared = store
-        .prepare_launch_intent("gateway", "launch-1", Some("containment-1"), 10)
+        .prepare_launch_intent(
+            "gateway",
+            "launch-1",
+            "watchdog-generation-1",
+            &"a".repeat(64),
+            Some("containment-1"),
+            10,
+        )
         .expect("prepare");
     assert_eq!(prepared.state, LaunchIntentState::Prepared);
     assert!(store.activate_launch_intent(&prepared.id, 11).is_err());

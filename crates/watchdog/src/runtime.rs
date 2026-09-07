@@ -9,17 +9,19 @@ use self::runtime_process::{
     RuntimeChild, RuntimeLaunchError, RuntimeObservation, RuntimeProcessManager,
     RuntimeStopOutcome, platform_component_kind, runtime_incarnation,
 };
-use crate::config::{ComponentConfig, DesiredMode, WatchdogConfig};
+use crate::config::{ComponentConfig, DesiredMode, WatchdogConfig, hex_digest};
 use crate::error::{Result, WatchdogError};
 use crate::policy::{
     ComponentObservation, ComponentState, ReconcileAction, ReconcileDecision, SupervisorPolicy,
 };
 use crate::process::{ProcessIdentity, ensure_identity};
-use crate::storage::{ComponentRecord, LaunchIntentState, SingletonLock, Store, now_unix_ms};
-use serde::Serialize;
+use crate::storage::{
+    ComponentRecord, LaunchIntent, LaunchIntentState, SingletonLock, Store, now_unix_ms,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -33,6 +35,48 @@ pub struct ReconcileReport {
     pub stopped: Vec<String>,
     pub quarantined: Vec<String>,
     pub errors: Vec<String>,
+}
+
+/// The proof returned by the platform runtime is intentionally decoded at
+/// this boundary.  Generic storage retains the bounded JSON for durability,
+/// but it must not decide which incarnation or launch context a proof belongs
+/// to.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeOwnershipProof {
+    version: u32,
+    backend: String,
+    intent_id: String,
+    deployment_id: String,
+    instance_id: String,
+    component: String,
+    incarnation: String,
+    launch_nonce: String,
+    containment_id: String,
+    pid: u32,
+    creation_token: String,
+    executable: PathBuf,
+    executable_sha256: String,
+    session_id: Option<u32>,
+    started_at_ms: u64,
+}
+
+#[derive(Serialize)]
+struct LaunchSpecBinding<'a> {
+    deployment_id: &'a str,
+    instance_id: &'a str,
+    component: &'static str,
+    incarnation: &'a str,
+    launch_nonce: &'a str,
+    executable: &'a str,
+    executable_sha256: &'a str,
+    arguments: &'a [String],
+    working_directory: Option<&'a str>,
+    environment: &'a [(String, String)],
+    session: String,
+    graceful_timeout_ms: u64,
+    force_timeout_ms: u64,
+    planned_containment_id: &'a str,
 }
 
 /// A running watchdog controller.  Status/config commands do not construct
@@ -243,6 +287,28 @@ impl Supervisor {
                 )?;
                 continue;
             };
+            if intent.expected_incarnation.is_none() || intent.expected_launch_spec_digest.is_none()
+            {
+                // Schema-v1 rows cannot be rebound from their proof (or from
+                // the current restart generation).  Keep the durable intent
+                // and quarantine the component until an explicit operator
+                // migration/review resolves the original launch context.
+                self.quarantine_component(
+                    &component,
+                    Some(intent.launch_nonce.clone()),
+                    None,
+                    None,
+                    None,
+                    "legacy launch intent has no persisted launch binding".to_owned(),
+                    now_ms,
+                )?;
+                self.store.audit(
+                    "launch_intent_quarantined",
+                    &format!("{}:legacy_unbound", intent.id),
+                    now_ms,
+                )?;
+                continue;
+            }
             if intent.state == LaunchIntentState::Prepared {
                 let Some(planned_containment) = intent.planned_containment_id.as_deref() else {
                     self.quarantine_component(
@@ -311,6 +377,49 @@ impl Supervisor {
                         )?;
                     }
                 }
+                continue;
+            }
+            let expected_incarnation = intent.expected_incarnation.as_deref().ok_or_else(|| {
+                WatchdogError::Conflict("bound launch intent lost its incarnation".to_owned())
+            })?;
+            let specification = launch_spec_for(
+                &self.config,
+                &component,
+                intent.launch_nonce.clone(),
+                expected_incarnation.to_owned(),
+            )?;
+            let planned_containment =
+                intent.planned_containment_id.as_deref().ok_or_else(|| {
+                    WatchdogError::Conflict(
+                        "launch intent has no planned containment for proof recovery".to_owned(),
+                    )
+                })?;
+            let proof_value = intent.ownership_proof_json.as_ref().ok_or_else(|| {
+                WatchdogError::Conflict(format!(
+                    "launch intent {} has no ownership proof for recovery",
+                    intent.id
+                ))
+            })?;
+            if let Err(error) = validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                planned_containment,
+                proof_value,
+            ) {
+                self.quarantine_component(
+                    &component,
+                    Some(intent.launch_nonce.clone()),
+                    None,
+                    None,
+                    None,
+                    format!("persisted launch proof failed original binding: {error}"),
+                    now_ms,
+                )?;
+                self.store.audit(
+                    "launch_intent_quarantined",
+                    &format!("{}:binding_mismatch", intent.id),
+                    now_ms,
+                )?;
                 continue;
             }
             let recovered = match self.process_manager.recover_intent(&self.config, &intent) {
@@ -451,6 +560,38 @@ impl Supervisor {
                         }
                     } else {
                         if intent.state == LaunchIntentState::ProofRecorded {
+                            let proof = match RuntimeProcessManager::ownership_proof(&child) {
+                                Ok(proof) => proof,
+                                Err(error) => {
+                                    self.retain_quarantined_child(
+                                        &component,
+                                        &intent.id,
+                                        child,
+                                        format!(
+                                            "recovered launch proof could not be materialized: {error}"
+                                        ),
+                                        now_ms,
+                                    )?;
+                                    continue;
+                                }
+                            };
+                            if let Err(error) = validate_persisted_launch_binding(
+                                &intent,
+                                &specification,
+                                planned_containment,
+                                &proof,
+                            ) {
+                                self.retain_quarantined_child(
+                                    &component,
+                                    &intent.id,
+                                    child,
+                                    format!(
+                                        "recovered launch proof changed before activation: {error}"
+                                    ),
+                                    now_ms,
+                                )?;
+                                continue;
+                            }
                             if let Err(error) =
                                 self.store.activate_launch_intent(&intent.id, now_ms)
                             {
@@ -593,6 +734,19 @@ impl Supervisor {
     fn reconcile_persisted_identities(&mut self, now_ms: u64) -> Result<()> {
         for component in self.config.components.clone() {
             if self.children.contains_key(&component.id) {
+                continue;
+            }
+            // An unsettled launch intent owns the admission decision for this
+            // component.  Do not let the legacy identity pass (or a proof
+            // mismatch) be rewritten as a stale stopped row in the fallback
+            // identity reconciler; that would erase the quarantine boundary
+            // and allow a replacement launch attempt.
+            if self
+                .store
+                .unsettled_launch_intents()?
+                .iter()
+                .any(|intent| intent.component_id == component.id)
+            {
                 continue;
             }
             let Some(record) = self.store.component(&component.id)? else {
@@ -1051,9 +1205,12 @@ impl Supervisor {
         let planned_containment = self
             .process_manager
             .planned_containment(&self.config, &specification)?;
+        let launch_spec_digest = launch_spec_binding_digest(&specification, &planned_containment)?;
         let intent = self.store.prepare_launch_intent(
             &component.id,
             &launch_nonce,
+            &specification.incarnation,
+            &launch_spec_digest,
             Some(&planned_containment),
             now_ms,
         )?;
@@ -1160,6 +1317,12 @@ impl Supervisor {
                     .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
             }
         };
+        if let Err(error) =
+            validate_persisted_launch_binding(&intent, &specification, &planned_containment, &proof)
+        {
+            return self
+                .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
+        }
         if let Err(error) = self.store.record_launch_proof(&intent.id, &proof, now_ms) {
             return self
                 .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
@@ -1577,6 +1740,148 @@ fn component_record(
     }
 }
 
+fn launch_component_kind_name(component: crate::platform::ComponentKind) -> &'static str {
+    match component {
+        crate::platform::ComponentKind::Gateway => "gateway",
+        crate::platform::ComponentKind::Harness => "harness",
+        crate::platform::ComponentKind::HostBroker => "host_broker",
+        crate::platform::ComponentKind::Synthetic => "synthetic",
+    }
+}
+
+fn launch_session_name(session: crate::platform::SessionSelector) -> String {
+    match session {
+        crate::platform::SessionSelector::ActiveUser => "active_user".to_owned(),
+        crate::platform::SessionSelector::Explicit(value) => format!("explicit:{value}"),
+    }
+}
+
+/// Digest the exact request admitted before spawning.  The full request is
+/// hashed rather than retained so environment values and other launch inputs
+/// do not become durable watchdog state, while a changed configuration cannot
+/// silently rebind a recovered proof.
+fn launch_spec_binding_digest(
+    specification: &crate::platform::LaunchSpec,
+    planned_containment_id: &str,
+) -> Result<String> {
+    specification
+        .validate()
+        .map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
+    let working_directory = specification
+        .working_directory
+        .as_deref()
+        .map(|path| path.to_string_lossy().into_owned());
+    let executable = specification.executable.to_string_lossy().into_owned();
+    let binding = LaunchSpecBinding {
+        deployment_id: &specification.deployment_id,
+        instance_id: &specification.instance_id,
+        component: launch_component_kind_name(specification.component),
+        incarnation: &specification.incarnation,
+        launch_nonce: &specification.launch_nonce,
+        executable: &executable,
+        executable_sha256: &specification.executable_sha256,
+        arguments: &specification.arguments,
+        working_directory: working_directory.as_deref(),
+        environment: &specification.environment,
+        session: launch_session_name(specification.session),
+        graceful_timeout_ms: specification
+            .graceful_timeout
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                WatchdogError::InvalidInput("graceful timeout exceeds digest bound".to_owned())
+            })?,
+        force_timeout_ms: specification
+            .force_timeout
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                WatchdogError::InvalidInput("force timeout exceeds digest bound".to_owned())
+            })?,
+        planned_containment_id,
+    };
+    Ok(hex_digest(&serde_json::to_vec(&binding)?))
+}
+
+fn validate_persisted_launch_binding(
+    intent: &LaunchIntent,
+    specification: &crate::platform::LaunchSpec,
+    planned_containment_id: &str,
+    proof_value: &Value,
+) -> Result<()> {
+    let Some(expected_incarnation) = intent.expected_incarnation.as_deref() else {
+        return Err(WatchdogError::Conflict(format!(
+            "launch intent {} has no original incarnation binding",
+            intent.id
+        )));
+    };
+    let Some(expected_digest) = intent.expected_launch_spec_digest.as_deref() else {
+        return Err(WatchdogError::Conflict(format!(
+            "launch intent {} has no original launch specification binding",
+            intent.id
+        )));
+    };
+    if specification.incarnation != expected_incarnation {
+        return Err(WatchdogError::IdentityMismatch(
+            "launch specification incarnation differs from persisted intent".to_owned(),
+        ));
+    }
+    let actual_digest = launch_spec_binding_digest(specification, planned_containment_id)?;
+    if actual_digest != expected_digest {
+        return Err(WatchdogError::IdentityMismatch(
+            "launch specification differs from the persisted launch intent".to_owned(),
+        ));
+    }
+    let proof: RuntimeOwnershipProof =
+        serde_json::from_value(proof_value.clone()).map_err(|_| {
+            WatchdogError::IdentityMismatch(
+                "launch ownership proof has an invalid shape".to_owned(),
+            )
+        })?;
+    let session_matches = match specification.session {
+        // ActiveUser is a selector, not a proof value.  The platform resolves
+        // it during launch, so recovery must require a concrete non-service
+        // session rather than comparing against `None`.
+        crate::platform::SessionSelector::ActiveUser => {
+            proof.session_id.is_some_and(|session| session != 0)
+        }
+        crate::platform::SessionSelector::Explicit(expected) => proof.session_id == Some(expected),
+    };
+    let executable_matches = proof.executable == specification.executable
+        || std::fs::canonicalize(&proof.executable)
+            .ok()
+            .zip(std::fs::canonicalize(&specification.executable).ok())
+            .is_some_and(|(actual, expected)| actual == expected);
+    // The platform timestamp is part of the closed proof shape, but it is
+    // not an authority binding: the persisted launch nonce/incarnation and
+    // platform creation token provide that identity.
+    let _ = proof.started_at_ms;
+    if proof.version != 1
+        || proof.intent_id != intent.id
+        || proof.deployment_id != intent.deployment_id
+        || proof.deployment_id != specification.deployment_id
+        || proof.instance_id != specification.instance_id
+        || proof.component != intent.component_id
+        || proof.component != specification.instance_id
+        || proof.incarnation != expected_incarnation
+        || proof.launch_nonce != intent.launch_nonce
+        || proof.launch_nonce != specification.launch_nonce
+        || proof.containment_id != planned_containment_id
+        || !executable_matches
+        || (proof.backend != "synthetic"
+            && proof.executable_sha256 != specification.executable_sha256)
+        || (proof.backend != "synthetic" && !session_matches)
+        || !matches!(proof.backend.as_str(), "synthetic" | "linux" | "windows")
+        || proof.pid == 0
+        || proof.creation_token.is_empty()
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "launch ownership proof differs from the original launch intent".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn launch_spec_for(
     config: &WatchdogConfig,
     component: &ComponentConfig,
@@ -1637,5 +1942,111 @@ impl RuntimeAdapter for DirectRuntimeAdapter {
             )));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::{ComponentKind, LaunchSpec, SessionSelector};
+    use serde_json::json;
+
+    fn session_spec(session: SessionSelector) -> LaunchSpec {
+        LaunchSpec {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "host-broker".to_owned(),
+            component: ComponentKind::HostBroker,
+            incarnation: "incarnation-1".to_owned(),
+            launch_nonce: "nonce-1".to_owned(),
+            executable: std::env::current_exe().expect("test executable"),
+            executable_sha256: "a".repeat(64),
+            arguments: Vec::new(),
+            working_directory: None,
+            environment: Vec::new(),
+            session,
+            graceful_timeout: Duration::from_secs(5),
+            force_timeout: Duration::from_secs(10),
+        }
+    }
+
+    fn bound_intent(specification: &LaunchSpec, containment: &str) -> LaunchIntent {
+        LaunchIntent {
+            id: "intent-1".to_owned(),
+            deployment_id: specification.deployment_id.clone(),
+            component_id: specification.instance_id.clone(),
+            launch_nonce: specification.launch_nonce.clone(),
+            expected_incarnation: Some(specification.incarnation.clone()),
+            expected_launch_spec_digest: Some(
+                launch_spec_binding_digest(specification, containment)
+                    .expect("launch binding digest"),
+            ),
+            planned_containment_id: Some(containment.to_owned()),
+            state: LaunchIntentState::ProofRecorded,
+            ownership_proof_json: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        }
+    }
+
+    fn windows_proof(
+        intent: &LaunchIntent,
+        specification: &LaunchSpec,
+        containment: &str,
+        session_id: Option<u32>,
+    ) -> Value {
+        json!({
+            "version": 1,
+            "backend": "windows",
+            "intent_id": &intent.id,
+            "deployment_id": &intent.deployment_id,
+            "instance_id": &specification.instance_id,
+            "component": &intent.component_id,
+            "incarnation": &specification.incarnation,
+            "launch_nonce": &specification.launch_nonce,
+            "containment_id": containment,
+            "pid": 42,
+            "creation_token": "creation-1",
+            "executable": &specification.executable,
+            "executable_sha256": &specification.executable_sha256,
+            "session_id": session_id,
+            "started_at_ms": 1,
+        })
+    }
+
+    #[test]
+    fn active_user_windows_proof_requires_resolved_nonzero_session() {
+        let specification = session_spec(SessionSelector::ActiveUser);
+        let containment = "windows-job:nonce-1";
+        let intent = bound_intent(&specification, containment);
+        let valid = windows_proof(&intent, &specification, containment, Some(7));
+        assert!(
+            validate_persisted_launch_binding(&intent, &specification, containment, &valid,)
+                .is_ok()
+        );
+
+        for unresolved in [None, Some(0)] {
+            let proof = windows_proof(&intent, &specification, containment, unresolved);
+            assert!(matches!(
+                validate_persisted_launch_binding(&intent, &specification, containment, &proof,),
+                Err(WatchdogError::IdentityMismatch(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn explicit_session_proof_mismatch_is_rejected() {
+        let specification = session_spec(SessionSelector::Explicit(7));
+        let containment = "windows-job:nonce-1";
+        let intent = bound_intent(&specification, containment);
+        let matching = windows_proof(&intent, &specification, containment, Some(7));
+        assert!(
+            validate_persisted_launch_binding(&intent, &specification, containment, &matching,)
+                .is_ok()
+        );
+        let mismatched = windows_proof(&intent, &specification, containment, Some(8));
+        assert!(matches!(
+            validate_persisted_launch_binding(&intent, &specification, containment, &mismatched,),
+            Err(WatchdogError::IdentityMismatch(_))
+        ));
     }
 }

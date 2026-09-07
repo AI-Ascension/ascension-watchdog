@@ -4,7 +4,7 @@
 //! missing path is never opened by read-only commands, and an existing but
 //! malformed path is reported as corruption instead of being recreated.
 
-use crate::config::{DesiredMode, WatchdogConfig, hex_digest};
+use crate::config::{DesiredMode, WatchdogConfig, hex_digest, validate_digest};
 use crate::error::{Result, WatchdogError};
 use crate::policy::ComponentState;
 use crate::process::ProcessIdentity;
@@ -33,7 +33,8 @@ pub use storage_admin::{
 };
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+const PREVIOUS_SCHEMA_VERSION: i64 = 1;
 const MAX_AUDIT_DETAIL_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 /// Hard upper bound for retained audit rows.  Audit is intentionally
@@ -533,14 +534,23 @@ pub struct ComponentRecord {
 }
 
 /// Durable pre-spawn ownership admission. The platform adapter supplies the
-/// opaque closed proof after it has created the exact process/container; the
-/// watchdog never invents containment or host identity fields.
+/// closed proof after it has created the exact process/container; runtime
+/// validates that proof against the immutable binding before storage records
+/// it. A missing binding marks a migrated legacy row and is never inferred.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LaunchIntent {
     pub id: String,
     pub deployment_id: String,
     pub component_id: String,
     pub launch_nonce: String,
+    /// The incarnation selected before the platform launch.  This is
+    /// optional only for rows migrated from schema v1; those rows are legacy
+    /// and must be quarantined rather than rebinding a proof to a new value.
+    pub expected_incarnation: Option<String>,
+    /// Digest of the complete bounded launch specification selected before
+    /// the platform launch.  Secrets are never persisted; the digest binds
+    /// recovery to the original request without retaining its environment.
+    pub expected_launch_spec_digest: Option<String>,
     pub planned_containment_id: Option<String>,
     pub state: LaunchIntentState,
     pub ownership_proof_json: Option<Value>,
@@ -692,14 +702,13 @@ impl Store {
         })
     }
 
-    /// Open an existing initialized store without creating a missing file or
-    /// applying a migration implicitly.  This compatibility path is writable
-    /// for existing callers; owner-controlled mutation should use
-    /// [`Self::open_for_owner`].
+    /// Open an existing initialized store without creating or migrating it.
+    /// Schema upgrades are owner-authorized state transitions and must go
+    /// through [`Self::open_for_owner`].
     pub fn open(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
         let path = canonical_owner_path(path.as_ref(), "database")?;
-        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE, false)
     }
 
     /// Open existing state through a true SQLite read-only, non-creating
@@ -708,7 +717,7 @@ impl Store {
     pub fn open_read_only(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
         config.validate()?;
         let path = canonical_owner_path(path.as_ref(), "database")?;
-        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY, false)
     }
 
     /// Open existing state for a controller that already holds the matching
@@ -722,16 +731,26 @@ impl Store {
         config.validate()?;
         let path = canonical_owner_path(path.as_ref(), "database")?;
         ensure_owner_lock(&path, owner)?;
-        let store = Self::open_impl(path.clone(), config, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        let store = Self::open_impl(
+            path.clone(),
+            config,
+            OpenFlags::SQLITE_OPEN_READ_WRITE,
+            true,
+        )?;
         storage_admin::migrate_operator_ledger_for_owner(&path, owner)?;
         Ok(store)
     }
 
-    fn open_impl(path: PathBuf, config: &WatchdogConfig, flags: OpenFlags) -> Result<Self> {
+    fn open_impl(
+        path: PathBuf,
+        config: &WatchdogConfig,
+        flags: OpenFlags,
+        allow_core_migration: bool,
+    ) -> Result<Self> {
         if !path.is_file() {
             return Err(WatchdogError::MissingState(path));
         }
-        let conn = open_connection_with_flags(&path, flags)?;
+        let mut conn = open_connection_with_flags(&path, flags)?;
         let version: Option<String> = conn
             .query_row(
                 "SELECT value FROM metadata WHERE key = 'schema_version'",
@@ -739,12 +758,24 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
-        match version
+        let schema_version = version
             .as_deref()
             .map(|value| parse_metadata_i64("schema_version", value))
-            .transpose()?
-        {
-            Some(SCHEMA_VERSION) => {}
+            .transpose()?;
+        let needs_core_migration = match schema_version {
+            Some(SCHEMA_VERSION) => {
+                validate_launch_intent_schema(&conn)?;
+                false
+            }
+            Some(PREVIOUS_SCHEMA_VERSION) if allow_core_migration => {
+                validate_legacy_launch_intent_schema(&conn)?;
+                true
+            }
+            Some(PREVIOUS_SCHEMA_VERSION) => {
+                return Err(WatchdogError::Unsupported(
+                    "store schema 1 requires an owner-authorized explicit migration".to_string(),
+                ));
+            }
             Some(other) => {
                 return Err(WatchdogError::Unsupported(format!(
                     "store schema {other} requires an explicit migration"
@@ -756,7 +787,7 @@ impl Store {
                     path.display()
                 )));
             }
-        }
+        };
         let pragmas = connection_pragmas(&conn)?;
         if !pragmas.is_wal_full() {
             return Err(WatchdogError::Conflict(format!(
@@ -819,6 +850,9 @@ impl Store {
                 "configuration compatibility identity differs from initialized owner-local state; explicit restore is required"
                     .to_string(),
             ));
+        }
+        if needs_core_migration {
+            migrate_launch_intent_schema(&mut conn)?;
         }
         Ok(Self {
             conn,
@@ -1810,20 +1844,23 @@ impl Store {
         Ok(())
     }
 
-    /// Record the durable pre-spawn admission for one component.  The
-    /// platform adapter must call this before creating a process, then record
-    /// its opaque containment/ownership proof before the intent can become
-    /// active.  A component may have at most one non-cleaned intent, which
-    /// prevents a retry from creating an untracked duplicate child.
+    /// Record the durable pre-spawn admission for one component. The caller
+    /// supplies the original incarnation and a digest of the complete launch
+    /// specification before creating a process. A component may have at most
+    /// one non-cleaned intent, which prevents an untracked duplicate child.
     pub fn prepare_launch_intent(
         &mut self,
         component_id: &str,
         launch_nonce: &str,
+        expected_incarnation: &str,
+        expected_launch_spec_digest: &str,
         planned_containment_id: Option<&str>,
         now_ms: u64,
     ) -> Result<LaunchIntent> {
         validate_name(component_id, "component id", 128)?;
         validate_name(launch_nonce, "launch nonce", 128)?;
+        validate_name(expected_incarnation, "expected launch incarnation", 256)?;
+        validate_digest(expected_launch_spec_digest).map_err(WatchdogError::InvalidInput)?;
         if let Some(containment_id) = planned_containment_id {
             validate_name(containment_id, "planned containment id", 256)?;
         }
@@ -1851,12 +1888,14 @@ impl Store {
             )));
         }
         tx.execute(
-            "INSERT INTO launch_intents (id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)",
+            "INSERT INTO launch_intents (id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)",
             params![
                 id,
                 deployment_id,
                 component_id,
                 launch_nonce,
+                expected_incarnation,
+                expected_launch_spec_digest,
                 planned_containment_id,
                 now,
                 now
@@ -1874,9 +1913,9 @@ impl Store {
         })
     }
 
-    /// Attach the closed platform ownership proof to a prepared intent.  The
-    /// proof is opaque to watchdog policy, but it is retained in bounded JSON
-    /// so recovery can hand it back to the designated process authority.
+    /// Retain the bounded platform ownership proof for a bound intent. Runtime
+    /// validates its typed context before calling this storage primitive; this
+    /// method still rejects migrated rows with no original binding.
     pub fn record_launch_proof(
         &mut self,
         intent_id: &str,
@@ -1898,21 +1937,30 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let state: Option<String> = tx
+        let state_and_binding: Option<(String, Option<String>, Option<String>)> = tx
             .query_row(
-                "SELECT state FROM launch_intents WHERE id=?",
+                "SELECT state, expected_incarnation, expected_launch_spec_digest FROM launch_intents WHERE id=?",
                 params![intent_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if state.as_deref() != Some("prepared") {
+        let Some((state, expected_incarnation, expected_digest)) = state_and_binding else {
             tx.rollback()?;
-            return Err(match state {
-                Some(state) => WatchdogError::Conflict(format!(
-                    "launch intent {intent_id} is {state}, not prepared"
-                )),
-                None => WatchdogError::NotFound(format!("launch intent {intent_id}")),
-            });
+            return Err(WatchdogError::NotFound(format!(
+                "launch intent {intent_id}"
+            )));
+        };
+        if expected_incarnation.is_none() || expected_digest.is_none() {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "launch intent {intent_id} has no persisted launch binding"
+            )));
+        }
+        if state != "prepared" {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "launch intent {intent_id} is {state}, not prepared"
+            )));
         }
         tx.execute(
             "UPDATE launch_intents SET state='proof_recorded', ownership_proof_json=?, updated_at_ms=? WHERE id=? AND state='prepared'",
@@ -1934,19 +1982,30 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_running_launch_intent(&tx)?;
-        let state_and_proof: Option<(String, Option<String>)> = tx
+        let state_and_proof: Option<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = tx
             .query_row(
-                "SELECT state, ownership_proof_json FROM launch_intents WHERE id=?",
+                "SELECT state, ownership_proof_json, expected_incarnation, expected_launch_spec_digest FROM launch_intents WHERE id=?",
                 params![intent_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        let Some((state, proof)) = state_and_proof else {
+        let Some((state, proof, expected_incarnation, expected_digest)) = state_and_proof else {
             tx.rollback()?;
             return Err(WatchdogError::NotFound(format!(
                 "launch intent {intent_id}"
             )));
         };
+        if expected_incarnation.is_none() || expected_digest.is_none() {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(format!(
+                "launch intent {intent_id} has no persisted launch binding"
+            )));
+        }
         if state != "proof_recorded" || proof.is_none() {
             tx.rollback()?;
             return Err(WatchdogError::Conflict(format!(
@@ -2013,7 +2072,7 @@ impl Store {
         validate_name(intent_id, "launch intent id", 128)?;
         self.conn
             .query_row(
-                "SELECT id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE id=?",
+                "SELECT id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE id=?",
                 params![intent_id],
                 launch_intent_from_row,
             )
@@ -2026,7 +2085,7 @@ impl Store {
     /// new launch is admitted.
     pub fn unsettled_launch_intents(&self) -> Result<Vec<LaunchIntent>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, deployment_id, component_id, launch_nonce, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE state <> 'cleaned' ORDER BY created_at_ms, id",
+            "SELECT id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE state <> 'cleaned' ORDER BY created_at_ms, id",
         )?;
         let rows = statement.query_map([], launch_intent_from_row)?;
         rows.collect::<rusqlite::Result<Vec<LaunchIntent>>>()
@@ -2266,6 +2325,8 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             deployment_id TEXT NOT NULL,
             component_id TEXT NOT NULL,
             launch_nonce TEXT NOT NULL,
+            expected_incarnation TEXT NOT NULL,
+            expected_launch_spec_digest TEXT NOT NULL,
             planned_containment_id TEXT,
             state TEXT NOT NULL CHECK(state IN ('prepared','proof_recorded','active','cleaned')),
             ownership_proof_json TEXT,
@@ -2318,6 +2379,111 @@ fn insert_metadata(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+fn validate_legacy_launch_intent_schema(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "launch_intents")? {
+        return Err(WatchdogError::Conflict(
+            "launch_intents table is missing from the initialized store".to_owned(),
+        ));
+    }
+    let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for required in [
+        "id",
+        "deployment_id",
+        "component_id",
+        "launch_nonce",
+        "planned_containment_id",
+        "state",
+        "ownership_proof_json",
+        "created_at_ms",
+        "updated_at_ms",
+    ] {
+        if !columns.iter().any(|column| column == required) {
+            return Err(WatchdogError::Conflict(format!(
+                "launch_intents table is missing {required}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_launch_intent_schema(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "launch_intents")? {
+        return Err(WatchdogError::Conflict(
+            "launch_intents table is missing from the initialized store".to_owned(),
+        ));
+    }
+    let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for required in ["expected_incarnation", "expected_launch_spec_digest"] {
+        if !columns.iter().any(|column| column == required) {
+            return Err(WatchdogError::Conflict(format!(
+                "launch_intents table is missing {required}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Add the immutable launch binding columns without manufacturing values for
+/// old rows.  A null binding is deliberate legacy evidence; runtime recovery
+/// quarantines such an intent instead of deriving an expected value from its
+/// proof or from the current restart generation.
+fn migrate_launch_intent_schema(conn: &mut Connection) -> Result<()> {
+    if !table_exists(conn, "metadata")? || !table_exists(conn, "launch_intents")? {
+        return Err(WatchdogError::Conflict(
+            "schema 1 store lacks the launch-intent migration boundary".to_owned(),
+        ));
+    }
+    let columns = {
+        let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let has_incarnation = columns
+        .iter()
+        .any(|column| column == "expected_incarnation");
+    let has_digest = columns
+        .iter()
+        .any(|column| column == "expected_launch_spec_digest");
+    if has_incarnation != has_digest {
+        return Err(WatchdogError::Conflict(
+            "launch-intent binding columns are only partially present".to_owned(),
+        ));
+    }
+    if has_incarnation {
+        validate_launch_intent_schema(conn)?;
+        return Err(WatchdogError::Conflict(
+            "schema 1 marker has already applied its launch-intent migration".to_owned(),
+        ));
+    }
+
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "ALTER TABLE launch_intents ADD COLUMN expected_incarnation TEXT",
+        [],
+    )?;
+    tx.execute(
+        "ALTER TABLE launch_intents ADD COLUMN expected_launch_spec_digest TEXT",
+        [],
+    )?;
+    update_metadata_tx(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
+    let now = now_unix_ms();
+    insert_audit_tx(
+        &tx,
+        "store_schema_migrated",
+        "schema=1->2;legacy_launch_intents_unbound",
+        now,
+    )?;
+    tx.commit()?;
+    validate_launch_intent_schema(conn)
 }
 
 fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -2421,8 +2587,21 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
 }
 
 fn launch_intent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchIntent> {
-    let state: String = row.get(5)?;
-    let proof_text: Option<String> = row.get(6)?;
+    let state: String = row.get(7)?;
+    let expected_incarnation: Option<String> = row.get(4)?;
+    let expected_launch_spec_digest: Option<String> = row.get(5)?;
+    if expected_incarnation.is_some() != expected_launch_spec_digest.is_some() {
+        return Err(to_sqlite_error(
+            "launch intent has a partially persisted launch binding",
+        ));
+    }
+    if let Some(incarnation) = &expected_incarnation {
+        validate_name_sqlite(incarnation, "expected launch incarnation", 256)?;
+    }
+    if let Some(digest) = &expected_launch_spec_digest {
+        validate_digest(digest).map_err(to_sqlite_error)?;
+    }
+    let proof_text: Option<String> = row.get(8)?;
     if proof_text
         .as_ref()
         .is_some_and(|value| value.len() > MAX_LAUNCH_PROOF_BYTES)
@@ -2456,12 +2635,23 @@ fn launch_intent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchInt
         deployment_id: row.get(1)?,
         component_id: row.get(2)?,
         launch_nonce: row.get(3)?,
-        planned_containment_id: row.get(4)?,
+        expected_incarnation,
+        expected_launch_spec_digest,
+        planned_containment_id: row.get(6)?,
         state: parsed_state,
         ownership_proof_json: parsed_proof,
-        created_at_ms: sqlite_u64(row.get::<_, i64>(7)?, "launch intent created_at_ms")?,
-        updated_at_ms: sqlite_u64(row.get::<_, i64>(8)?, "launch intent updated_at_ms")?,
+        created_at_ms: sqlite_u64(row.get::<_, i64>(9)?, "launch intent created_at_ms")?,
+        updated_at_ms: sqlite_u64(row.get::<_, i64>(10)?, "launch intent updated_at_ms")?,
     })
+}
+
+fn validate_name_sqlite(value: &str, field: &str, bound: usize) -> rusqlite::Result<()> {
+    if value.is_empty() || value.len() > bound || value.chars().any(char::is_control) {
+        return Err(to_sqlite_error(format!(
+            "{field} is invalid or exceeds its bound"
+        )));
+    }
+    Ok(())
 }
 
 fn to_sqlite_error<E: std::fmt::Display>(error: E) -> rusqlite::Error {
