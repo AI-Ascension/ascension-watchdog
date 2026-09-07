@@ -43,14 +43,20 @@ pub struct AdminServerConfig {
 
 impl std::fmt::Debug for AdminServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AdminServerConfig")
+        let mut builder = f.debug_struct("AdminServerConfig");
+        builder
             .field("endpoint", &"<protected-endpoint>")
             .field("auth", &self.auth)
             .field("max_clients", &self.max_clients)
             .field("worker_count", &self.worker_count)
             .field("io_timeout", &self.io_timeout)
-            .field("idempotency_capacity", &self.idempotency_capacity)
-            .finish()
+            .field("idempotency_capacity", &self.idempotency_capacity);
+        #[cfg(windows)]
+        builder.field(
+            "allowed_peer_sid",
+            &self.allowed_peer_sid.as_ref().map(|_| "<configured>"),
+        );
+        builder.finish()
     }
 }
 
@@ -256,6 +262,7 @@ impl AdminServer {
 
     /// Start the authenticated Windows named-pipe transport.
     #[cfg(windows)]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn start(
         config: AdminServerConfig,
         queue: AdminQueue,
@@ -295,12 +302,12 @@ impl AdminServer {
                 .spawn(move || {
                     windows_worker_loop(
                         pipe_server,
-                        worker_stop,
-                        worker_auth,
-                        worker_queue,
-                        worker_health,
-                        worker_cache,
-                        worker_count,
+                        &worker_stop,
+                        &worker_auth,
+                        &worker_queue,
+                        &worker_health,
+                        &worker_cache,
+                        &worker_count,
                         io_timeout,
                     );
                 })
@@ -587,12 +594,12 @@ fn handle_connection(
 #[cfg(windows)]
 fn windows_worker_loop(
     mut pipe: ascension_platform_windows::AdminPipeServer,
-    stop: Arc<AtomicBool>,
-    auth: AuthStore,
-    queue: AdminQueue,
-    health: MainLoopHealth,
-    cache: Arc<IdempotencyCache>,
-    client_count: Arc<AtomicUsize>,
+    stop: &Arc<AtomicBool>,
+    auth: &AuthStore,
+    queue: &AdminQueue,
+    health: &MainLoopHealth,
+    cache: &Arc<IdempotencyCache>,
+    client_count: &Arc<AtomicUsize>,
     io_timeout: Duration,
 ) {
     // A short accept poll keeps shutdown bounded even when no client is
@@ -601,16 +608,13 @@ fn windows_worker_loop(
     let accept_poll = Duration::from_millis(50).min(io_timeout);
     while !stop.load(Ordering::Acquire) {
         match pipe.accept(accept_poll) {
-            Ok(None) => continue,
+            Ok(None) => {}
             Err(_) => {
                 let _ = pipe.disconnect();
-                continue;
             }
             Ok(Some(_peer)) => {
                 client_count.fetch_add(1, Ordering::AcqRel);
-                windows_handle_connection(
-                    &mut pipe, &auth, &queue, &health, &cache, io_timeout, &stop,
-                );
+                windows_handle_connection(&mut pipe, auth, queue, health, cache, io_timeout, stop);
                 let _ = pipe.cancel();
                 let _ = pipe.disconnect();
                 client_count.fetch_sub(1, Ordering::AcqRel);
@@ -670,18 +674,15 @@ fn windows_handle_connection(
             return;
         }
     };
-    let context = match request.dispatch_context(principal) {
-        Ok(context) => context,
-        Err(_) => {
-            let response = AdminResponse::error(
-                request.request_id,
-                request.idempotency_key,
-                ReplyStatus::Invalid,
-                health,
-            );
-            let _ = send_pipe_response(pipe, &response, io_timeout);
-            return;
-        }
+    let Ok(context) = request.dispatch_context(principal) else {
+        let response = AdminResponse::error(
+            request.request_id,
+            request.idempotency_key,
+            ReplyStatus::Invalid,
+            health,
+        );
+        let _ = send_pipe_response(pipe, &response, io_timeout);
+        return;
     };
     let fingerprint = context.command_fingerprint().to_owned();
     let cache_key = context.idempotency_key().to_owned();
