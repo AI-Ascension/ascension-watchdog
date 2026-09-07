@@ -6,6 +6,7 @@ use ascension_watchdog::storage::{
     RESERVED_CRITICAL_AUDIT_RECORDS, SingletonLock, Store,
 };
 use serde_json::json;
+#[cfg(unix)]
 use std::fs;
 use tempfile::TempDir;
 
