@@ -56,9 +56,6 @@ pub const RUNTIME_V3_SCHEMA_JSON: &str = include_str!(concat!(
 
 const MAX_LINE_BYTES: usize = MAX_FRAME_BYTES + 1;
 const FIXTURE_TIMESTAMP: &str = "2026-09-06T00:00:00Z";
-const FIXTURE_EPOCH_SECONDS: i64 = 0;
-const DEFAULT_TTL_SECONDS: i64 = 30;
-const DEFAULT_RENEWAL_INTERVAL_SECONDS: i64 = 10;
 const FIXTURE_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const MAX_RUNTIME_INTEGER: i64 = 9_007_199_254_740_991;
 
@@ -690,11 +687,32 @@ fn serve_connection(
         }
         return Ok(ConnectionAction::Continue);
     }
-    let (response, action) = {
+    let handled = {
         let mut guard = store
             .lock()
             .map_err(|_| FixtureError::Invalid("store mutex poisoned".to_owned()))?;
-        guard.handle(&frame, faults)?
+        guard.handle(&frame, faults)
+    };
+    let (response, action) = match handled {
+        Ok(value) => value,
+        Err(error)
+            if matches!(
+                &error,
+                FixtureError::Stale(_)
+                    | FixtureError::HostNotReady
+                    | FixtureError::Conflict
+                    | FixtureError::Forbidden
+                    | FixtureError::Bounds(_)
+            ) =>
+        {
+            let response = error_frame(&frame, &error);
+            if response.validate().is_ok() {
+                write_frame(&mut stream, &response)?;
+                return Ok(ConnectionAction::Continue);
+            }
+            return Err(error);
+        }
+        Err(error) => return Err(error),
     };
     response.validate()?;
     let action = if action == ResponseAction::Send && frame.kind == "host_tick" {
@@ -1137,6 +1155,14 @@ fn migrate_columns(connection: &Connection) -> Result<(), FixtureError> {
             "instance_id",
             "TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000000'",
         ),
+        ("fence", "authority_state", "TEXT NOT NULL DEFAULT 'READY'"),
+        ("fence", "lease_epoch_counter", "INTEGER NOT NULL DEFAULT 0"),
+        ("fence", "lease_ttl_seconds", "INTEGER NOT NULL DEFAULT 30"),
+        (
+            "fence",
+            "lease_renewal_interval_seconds",
+            "INTEGER NOT NULL DEFAULT 10",
+        ),
         (
             "lease",
             "deployment_id",
@@ -1343,7 +1369,11 @@ impl DurableHost {
                     instance_incarnation TEXT NOT NULL,
                     authority_generation INTEGER NOT NULL,
                     host_fence_id TEXT NOT NULL,
-                    fence_generation INTEGER NOT NULL
+                    fence_generation INTEGER NOT NULL,
+                    authority_state TEXT NOT NULL DEFAULT 'READY',
+                    lease_epoch_counter INTEGER NOT NULL DEFAULT 0,
+                    lease_ttl_seconds INTEGER NOT NULL DEFAULT 30,
+                    lease_renewal_interval_seconds INTEGER NOT NULL DEFAULT 10
                 );
                 CREATE TABLE IF NOT EXISTS lease (
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -1402,6 +1432,24 @@ impl DurableHost {
                     receipt_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS lease_history (
+                    lease_id TEXT PRIMARY KEY,
+                    lease_epoch INTEGER NOT NULL UNIQUE,
+                    deployment_id TEXT NOT NULL,
+                    instance_id TEXT NOT NULL,
+                    boot_id TEXT NOT NULL,
+                    instance_incarnation TEXT NOT NULL,
+                    host_fence_id TEXT NOT NULL,
+                    fence_token_digest TEXT NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    issued_tick INTEGER NOT NULL,
+                    expires_tick INTEGER NOT NULL,
+                    ttl_seconds INTEGER NOT NULL,
+                    renewal_interval_seconds INTEGER NOT NULL,
+                    renew_sequence INTEGER NOT NULL DEFAULT 0,
+                    revoked INTEGER NOT NULL DEFAULT 0
+                );
                 CREATE TABLE IF NOT EXISTS fixture_clock (
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                     tick INTEGER NOT NULL
@@ -1447,22 +1495,74 @@ impl DurableHost {
             )
             .map_err(FixtureError::Sql)?;
         migrate_columns(&connection)?;
-        // An EXECUTING runtime row has crossed the in-memory host boundary,
-        // but this process cannot prove whether the game effect happened
-        // before a prior owner disappeared.  Reopen it as UNKNOWN and remove
-        // any queue entry so no restart can execute it a second time.
-        connection
+        // Preserve the current singleton lease as historical evidence before
+        // invalidating it. The history table is append-only; `lease` is only
+        // the active projection.
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(FixtureError::Sql)?;
+        transaction
             .execute(
-                "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?1 WHERE status='EXECUTING'",
+                "INSERT OR IGNORE INTO lease_history(lease_id,lease_epoch,deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,fence_token_digest,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked)
+                 SELECT lease_id,lease_epoch,deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,?1,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked FROM lease WHERE singleton=1",
+                params![digest(FIXTURE_TOKEN)],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE fence SET lease_epoch_counter=MAX(lease_epoch_counter,COALESCE((SELECT MAX(lease_epoch) FROM lease_history),0)) WHERE singleton=1",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE lease_history SET revoked=1 WHERE lease_id IN (SELECT lease_id FROM lease WHERE singleton=1)",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute("UPDATE lease SET revoked=1 WHERE singleton=1", [])
+            .map_err(FixtureError::Sql)?;
+        // An admitted or executing runtime operation crossed the prior host
+        // boundary. The replacement cannot prove whether its effect happened,
+        // so retain UNKNOWN and remove only the executable queue entry.
+        transaction
+            .execute(
+                "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?1 WHERE status IN ('ADMITTED','EXECUTING')",
                 params![FIXTURE_TIMESTAMP],
             )
             .map_err(FixtureError::Sql)?;
-        connection
+        transaction
             .execute(
                 "DELETE FROM runtime_queue WHERE operation_id IN (SELECT operation_id FROM runtime_operations WHERE status='UNKNOWN')",
                 [],
             )
             .map_err(FixtureError::Sql)?;
+        // Legacy queue entries crossed the same process boundary. Preserve
+        // their attempt identity as uncertainty; never leave them executable
+        // for a replacement process with a different lease.
+        transaction
+            .execute(
+                "UPDATE operations SET state='UNKNOWN',uncertainty_reason='authority_rotated',ticket_json=json_set(ticket_json,'$.state','UNKNOWN'),updated_at=?1 WHERE state='MAY_HAVE_BEEN_DISPATCHED'",
+                params![FIXTURE_TIMESTAMP],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "DELETE FROM queue WHERE operation_id IN (SELECT operation_id FROM operations WHERE state='UNKNOWN')",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        // Every process restart requires a fresh bootstrap/fence handshake;
+        // retain the old fields for diagnostics but make them unusable as
+        // current mutation authority.
+        transaction
+            .execute(
+                "UPDATE fence SET authority_state='RESTART_REQUIRED' WHERE singleton=1",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction.commit().map_err(FixtureError::Sql)?;
         validate_database_integrity(&connection)?;
         Ok(Self {
             connection,
@@ -1500,11 +1600,19 @@ impl DurableHost {
         Ok(result)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn bootstrap(&mut self, frame: &Frame) -> Result<(Frame, ResponseAction), FixtureError> {
         require_capability(frame, "bootstrap")?;
         let deployment_id = field_string(&frame.payload, "deployment_id")?;
         let instance_id = field_string(&frame.payload, "instance_id")?;
         let incarnation = field_string(&frame.payload, "instance_incarnation")?;
+        let policy = frame
+            .payload
+            .get("lease_policy")
+            .ok_or_else(|| FixtureError::Invalid("lease policy missing".to_owned()))?;
+        validate_policy(policy)?;
+        let ttl_seconds = field_i64(policy, "ttl_seconds")?;
+        let renewal_interval_seconds = field_i64(policy, "renewal_interval_seconds")?;
         valid_v4(&deployment_id)?;
         valid_v4(&instance_id)?;
         valid_v4(&incarnation)?;
@@ -1529,14 +1637,90 @@ impl DurableHost {
         let boot_id = Uuid::new_v4().to_string();
         let fence_id = Uuid::new_v4().to_string();
         let tx = self.connection.transaction().map_err(FixtureError::Sql)?;
-        tx.execute("DELETE FROM lease", [])
+        let fence_counter: Option<i64> = tx
+            .query_row(
+                "SELECT lease_epoch_counter FROM fence WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
             .map_err(FixtureError::Sql)?;
+        let history_counter: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(lease_epoch),0) FROM lease_history",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(FixtureError::Sql)?;
+        let lease_epoch_counter = fence_counter.unwrap_or(0).max(history_counter);
+        if !(0..=MAX_RUNTIME_INTEGER).contains(&lease_epoch_counter) {
+            return Err(FixtureError::Invalid(
+                "lease epoch history exhausted".to_owned(),
+            ));
+        }
         tx.execute(
-            "INSERT OR REPLACE INTO fence(singleton, deployment_id, instance_id, boot_id, instance_incarnation, authority_generation, host_fence_id, fence_generation)
-             VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?5)",
-            params![deployment_id, instance_id, boot_id, incarnation, generation, fence_id],
+            "UPDATE lease_history SET revoked=1 WHERE lease_id IN (SELECT lease_id FROM lease WHERE singleton=1)",
+            [],
         )
         .map_err(FixtureError::Sql)?;
+        tx.execute("UPDATE lease SET revoked=1 WHERE singleton=1", [])
+            .map_err(FixtureError::Sql)?;
+        // Authority replacement makes every previously admitted runtime item
+        // uncertain. Keep its journal row but remove the executable queue.
+        tx.execute(
+            "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?1 WHERE status IN ('ADMITTED','EXECUTING')",
+            params![FIXTURE_TIMESTAMP],
+        )
+        .map_err(FixtureError::Sql)?;
+        tx.execute(
+            "DELETE FROM runtime_queue WHERE operation_id IN (SELECT operation_id FROM runtime_operations WHERE status='UNKNOWN')",
+            [],
+        )
+        .map_err(FixtureError::Sql)?;
+        tx.execute(
+            "UPDATE operations SET state='UNKNOWN',uncertainty_reason='authority_rotated',ticket_json=json_set(ticket_json,'$.state','UNKNOWN'),updated_at=?1 WHERE state='MAY_HAVE_BEEN_DISPATCHED'",
+            params![FIXTURE_TIMESTAMP],
+        )
+        .map_err(FixtureError::Sql)?;
+        tx.execute(
+            "DELETE FROM queue WHERE operation_id IN (SELECT operation_id FROM operations WHERE state='UNKNOWN')",
+            [],
+        )
+        .map_err(FixtureError::Sql)?;
+        let updated = tx
+            .execute(
+                "UPDATE fence SET deployment_id=?1,instance_id=?2,boot_id=?3,instance_incarnation=?4,authority_generation=?5,host_fence_id=?6,fence_generation=?5,authority_state='FENCE_REQUIRED',lease_epoch_counter=?7,lease_ttl_seconds=?8,lease_renewal_interval_seconds=?9 WHERE singleton=1",
+                params![
+                    deployment_id,
+                    instance_id,
+                    boot_id,
+                    incarnation,
+                    generation,
+                    fence_id,
+                    lease_epoch_counter,
+                    ttl_seconds,
+                    renewal_interval_seconds,
+                ],
+            )
+            .map_err(FixtureError::Sql)?;
+        if updated == 0 {
+            tx.execute(
+                "INSERT INTO fence(singleton,deployment_id,instance_id,boot_id,instance_incarnation,authority_generation,host_fence_id,fence_generation,authority_state,lease_epoch_counter,lease_ttl_seconds,lease_renewal_interval_seconds)
+                 VALUES(1,?1,?2,?3,?4,?5,?6,?5,'FENCE_REQUIRED',?7,?8,?9)",
+                params![
+                    deployment_id,
+                    instance_id,
+                    boot_id,
+                    incarnation,
+                    generation,
+                    fence_id,
+                    lease_epoch_counter,
+                    ttl_seconds,
+                    renewal_interval_seconds,
+                ],
+            )
+            .map_err(FixtureError::Sql)?;
+        }
         tx.commit().map_err(FixtureError::Sql)?;
         let boot = json!({
             "deployment_id": deployment_id,
@@ -1582,12 +1766,12 @@ impl DurableHost {
         let boot_id = field_string(boot, "boot_id")?;
         let incarnation = field_string(boot, "instance_incarnation")?;
         let generation = field_i64(boot, "authority_generation")?;
-        let current: Option<(String, String, String, String, i64)> = self
+        let current: Option<(String, String, String, String, i64, String)> = self
             .connection
             .query_row(
-                "SELECT deployment_id, instance_id, boot_id, instance_incarnation, authority_generation FROM fence WHERE singleton = 1",
+                "SELECT deployment_id, instance_id, boot_id, instance_incarnation, authority_generation, authority_state FROM fence WHERE singleton = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
             .map_err(FixtureError::Sql)?;
@@ -1597,6 +1781,7 @@ impl DurableHost {
             current_boot,
             current_incarnation,
             current_generation,
+            authority_state,
         )) = current
         else {
             return Err(FixtureError::HostNotReady);
@@ -1608,6 +1793,22 @@ impl DurableHost {
             || generation != current_generation
         {
             return Err(FixtureError::Stale("boot"));
+        }
+        if !matches!(authority_state.as_str(), "FENCE_REQUIRED" | "READY") {
+            return Err(FixtureError::HostNotReady);
+        }
+        // Fencing is the explicit transition that makes the freshly
+        // bootstrapped authority usable. A restarted host remains blocked
+        // until bootstrap replaces the old boot/fence fields.
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE fence SET authority_state='READY' WHERE singleton=1 AND deployment_id=?1 AND instance_id=?2 AND boot_id=?3 AND instance_incarnation=?4 AND authority_generation=?5 AND authority_state IN ('FENCE_REQUIRED','READY')",
+                params![deployment_id, instance_id, boot_id, incarnation, generation],
+            )
+            .map_err(FixtureError::Sql)?;
+        if changed != 1 {
+            return Err(FixtureError::HostNotReady);
         }
         let fence: (String, i64) = self
             .connection
@@ -1629,6 +1830,7 @@ impl DurableHost {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn lease_acquire(&mut self, frame: &Frame) -> Result<(Frame, ResponseAction), FixtureError> {
         require_capability(frame, "lease_acquire")?;
         let boot = frame
@@ -1644,50 +1846,152 @@ impl DurableHost {
         validate_host_fence(fence)?;
         let lease_id = Uuid::new_v4().to_string();
         let token = FIXTURE_TOKEN;
-        let epoch: i64 = self
-            .connection
+        let deployment_id = field_string(boot, "deployment_id")?;
+        let instance_id = field_string(boot, "instance_id")?;
+        let boot_id = field_string(boot, "boot_id")?;
+        let incarnation = field_string(boot, "instance_incarnation")?;
+        let host_fence_id = field_string(fence, "host_fence_id")?;
+        let transaction = self.connection.transaction().map_err(FixtureError::Sql)?;
+        let (counter, ttl_seconds, renewal_interval_seconds, authority_state): (i64, i64, i64, String) =
+            transaction
+                .query_row(
+                    "SELECT lease_epoch_counter,lease_ttl_seconds,lease_renewal_interval_seconds,authority_state FROM fence WHERE singleton=1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(FixtureError::Sql)?
+                .ok_or(FixtureError::HostNotReady)?;
+        if authority_state != "READY" {
+            return Err(FixtureError::HostNotReady);
+        }
+        validate_lease_policy_values(ttl_seconds, renewal_interval_seconds)?;
+        let history_counter: i64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(lease_epoch), 0) + 1 FROM lease",
+                "SELECT COALESCE(MAX(lease_epoch),0) FROM lease_history",
                 [],
                 |row| row.get(0),
             )
             .map_err(FixtureError::Sql)?;
-        if !(1..=MAX_RUNTIME_INTEGER).contains(&epoch) {
+        let counter = counter.max(history_counter);
+        if !(0..MAX_RUNTIME_INTEGER).contains(&counter) {
             return Err(FixtureError::Invalid("lease epoch exhausted".to_owned()));
         }
-        self.connection
-            .execute("DELETE FROM lease", [])
+        let epoch = counter + 1;
+        let issued_tick: i64 = transaction
+            .query_row(
+                "SELECT tick FROM fixture_clock WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
             .map_err(FixtureError::Sql)?;
-        self.connection
+        let expires_tick = issued_tick.saturating_add(ttl_seconds);
+        let issued_at = timestamp_for_tick(issued_tick);
+        let expires_at = timestamp_for_tick(expires_tick);
+
+        // Reacquiring in one fenced boot revokes the prior projection while
+        // retaining its immutable history row. Any queued work under that
+        // lease is now uncertain and must not remain executable.
+        transaction
             .execute(
-                "INSERT INTO lease(singleton, deployment_id, instance_id, lease_id, lease_epoch, boot_id, instance_incarnation, host_fence_id, fence_token, issued_at, expires_at, issued_tick, expires_tick, ttl_seconds, renewal_interval_seconds, renew_sequence, revoked)
-                 VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0)",
+                "INSERT OR IGNORE INTO lease_history(lease_id,lease_epoch,deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,fence_token_digest,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked)
+                 SELECT lease_id,lease_epoch,deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,?1,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked FROM lease WHERE singleton=1",
+                params![digest(token)],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE lease_history SET revoked=1 WHERE lease_id IN (SELECT lease_id FROM lease WHERE singleton=1)",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute("UPDATE lease SET revoked=1 WHERE singleton=1", [])
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE runtime_operations SET status='UNKNOWN',updated_at=?1 WHERE status IN ('ADMITTED','EXECUTING')",
+                params![FIXTURE_TIMESTAMP],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_queue WHERE operation_id IN (SELECT operation_id FROM runtime_operations WHERE status='UNKNOWN')",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE operations SET state='UNKNOWN',uncertainty_reason='authority_rotated',ticket_json=json_set(ticket_json,'$.state','UNKNOWN'),updated_at=?1 WHERE state='MAY_HAVE_BEEN_DISPATCHED'",
+                params![FIXTURE_TIMESTAMP],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "DELETE FROM queue WHERE operation_id IN (SELECT operation_id FROM operations WHERE state='UNKNOWN')",
+                [],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE fence SET lease_epoch_counter=?1 WHERE singleton=1",
+                params![epoch],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "INSERT INTO lease_history(lease_id,lease_epoch,deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,fence_token_digest,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,0)",
                 params![
-                    field_string(boot, "deployment_id")?,
-                    field_string(boot, "instance_id")?,
                     lease_id,
                     epoch,
-                    field_string(boot, "boot_id")?,
-                    field_string(boot, "instance_incarnation")?,
-                    field_string(fence, "host_fence_id")?,
-                    token,
-                    FIXTURE_TIMESTAMP,
-                    timestamp_for_tick(DEFAULT_TTL_SECONDS),
-                    FIXTURE_EPOCH_SECONDS,
-                    DEFAULT_TTL_SECONDS,
-                    DEFAULT_TTL_SECONDS,
-                    DEFAULT_RENEWAL_INTERVAL_SECONDS,
+                    deployment_id,
+                    instance_id,
+                    boot_id,
+                    incarnation,
+                    host_fence_id,
+                    digest(token),
+                    issued_at,
+                    expires_at,
+                    issued_tick,
+                    expires_tick,
+                    ttl_seconds,
+                    renewal_interval_seconds,
                 ],
             )
             .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "INSERT INTO lease(singleton,deployment_id,instance_id,lease_id,lease_epoch,boot_id,instance_incarnation,host_fence_id,fence_token,issued_at,expires_at,issued_tick,expires_tick,ttl_seconds,renewal_interval_seconds,renew_sequence,revoked)
+                 VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,0)
+                 ON CONFLICT(singleton) DO UPDATE SET deployment_id=excluded.deployment_id,instance_id=excluded.instance_id,lease_id=excluded.lease_id,lease_epoch=excluded.lease_epoch,boot_id=excluded.boot_id,instance_incarnation=excluded.instance_incarnation,host_fence_id=excluded.host_fence_id,fence_token=excluded.fence_token,issued_at=excluded.issued_at,expires_at=excluded.expires_at,issued_tick=excluded.issued_tick,expires_tick=excluded.expires_tick,ttl_seconds=excluded.ttl_seconds,renewal_interval_seconds=excluded.renewal_interval_seconds,renew_sequence=excluded.renew_sequence,revoked=excluded.revoked",
+                params![
+                    deployment_id,
+                    instance_id,
+                    lease_id,
+                    epoch,
+                    boot_id,
+                    incarnation,
+                    host_fence_id,
+                    token,
+                    issued_at,
+                    expires_at,
+                    issued_tick,
+                    expires_tick,
+                    ttl_seconds,
+                    renewal_interval_seconds,
+                ],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction.commit().map_err(FixtureError::Sql)?;
         let lease = json!({
             "deployment_id": boot["deployment_id"], "instance_id": boot["instance_id"],
             "instance_incarnation": boot["instance_incarnation"], "boot_id": boot["boot_id"],
             "authority_generation": boot["authority_generation"], "lease_id": lease_id,
             "lease_epoch": epoch,
-            "fence_token": token, "issued_at": FIXTURE_TIMESTAMP,
-            "expires_at": timestamp_for_tick(DEFAULT_TTL_SECONDS),
-            "ttl_seconds": DEFAULT_TTL_SECONDS, "renewal_interval_seconds": DEFAULT_RENEWAL_INTERVAL_SECONDS
+            "fence_token": token, "issued_at": issued_at,
+            "expires_at": expires_at,
+            "ttl_seconds": ttl_seconds, "renewal_interval_seconds": renewal_interval_seconds
         });
         Ok((
             frame.response(
@@ -1731,10 +2035,19 @@ impl DurableHost {
             .map_err(FixtureError::Sql)?;
         transaction
             .execute(
-                "UPDATE lease SET expires_at=?1,expires_tick=?2,renew_sequence=?3 WHERE singleton=1",
-                params![new_expires_at, new_expires_tick, renew_sequence],
+                "UPDATE lease SET expires_at=?1,expires_tick=?2,renew_sequence=?3 WHERE singleton=1 AND lease_id=?4",
+                params![new_expires_at, new_expires_tick, renew_sequence, field_string(lease, "lease_id")?],
             )
             .map_err(FixtureError::Sql)?;
+        let history_changed = transaction
+            .execute(
+                "UPDATE lease_history SET expires_at=?1,expires_tick=?2,renew_sequence=?3 WHERE lease_id=?4",
+                params![new_expires_at, new_expires_tick, renew_sequence, field_string(lease, "lease_id")?],
+            )
+            .map_err(FixtureError::Sql)?;
+        if history_changed != 1 {
+            return Err(FixtureError::Conflict);
+        }
         transaction.commit().map_err(FixtureError::Sql)?;
         let mut renewed = lease.clone();
         renewed["expires_at"] = Value::String(new_expires_at);
@@ -1754,9 +2067,26 @@ impl DurableHost {
             .get("lease")
             .ok_or_else(|| FixtureError::Invalid("lease missing".to_owned()))?;
         self.validate_lease(lease)?;
-        self.connection
-            .execute("UPDATE lease SET revoked = 1 WHERE singleton = 1", [])
+        let transaction = self.connection.transaction().map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE lease SET revoked=1 WHERE singleton=1 AND lease_id=?1 AND lease_epoch=?2",
+                params![
+                    field_string(lease, "lease_id")?,
+                    field_i64(lease, "lease_epoch")?
+                ],
+            )
             .map_err(FixtureError::Sql)?;
+        transaction
+            .execute(
+                "UPDATE lease_history SET revoked=1 WHERE lease_id=?1 AND lease_epoch=?2",
+                params![
+                    field_string(lease, "lease_id")?,
+                    field_i64(lease, "lease_epoch")?
+                ],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction.commit().map_err(FixtureError::Sql)?;
         Ok((
             frame.response(
                 "lease_revoke_response",
@@ -2295,6 +2625,20 @@ impl DurableHost {
                 "stale_lease",
             );
         }
+        // A replacement authority may finish recovery for a historical
+        // session, but it must not rewrite that session's lease identity or
+        // use its stale credentials for a new mutation. `v3_recover_value`
+        // only marks a proved historical operation reconciled and retains the
+        // operation/session rows as written under the old authority.
+        if authority_current
+            && kind == "recover_request"
+            && request["recovery"]["kind"].as_str() == Some("reconcile")
+            && (state.instance_id != instance_id
+                || state.lease_id != lease_id
+                || state.lease_epoch != lease_epoch)
+        {
+            return self.v3_recover_value(request, &mut state);
+        }
         if !authority_current
             && (kind == "wait_request"
                 || (kind == "recover_request"
@@ -2382,7 +2726,8 @@ impl DurableHost {
                  WHERE l.singleton=1 AND f.singleton=1 AND l.instance_id=?1
                  AND l.lease_id=?2 AND l.lease_epoch=?3 AND l.revoked=0
                  AND l.expires_tick>?4 AND f.authority_generation BETWEEN 1 AND ?5
-                 AND f.fence_generation=f.authority_generation)",
+                 AND f.fence_generation=f.authority_generation
+                 AND f.authority_state='READY')",
                 params![
                     instance_id,
                     lease_id,
@@ -2583,12 +2928,20 @@ impl DurableHost {
             }
             "release_lease" | "stop_episode" => {
                 if recovery_kind == "release_lease" {
-                    self.connection
+                    let transaction = self.connection.transaction().map_err(FixtureError::Sql)?;
+                    transaction
                         .execute(
-                            "UPDATE lease SET revoked=1 WHERE lease_id=?1 AND lease_epoch=?2",
+                            "UPDATE lease SET revoked=1 WHERE singleton=1 AND lease_id=?1 AND lease_epoch=?2",
                             params![state.lease_id, state.lease_epoch],
                         )
                         .map_err(FixtureError::Sql)?;
+                    transaction
+                        .execute(
+                            "UPDATE lease_history SET revoked=1 WHERE lease_id=?1 AND lease_epoch=?2",
+                            params![state.lease_id, state.lease_epoch],
+                        )
+                        .map_err(FixtureError::Sql)?;
+                    transaction.commit().map_err(FixtureError::Sql)?;
                 }
                 // Once a dispatch has been admitted, stopping cannot claim it
                 // never reached the host.  Retain an unresolved journal row;
@@ -3455,15 +3808,16 @@ impl DurableHost {
         self.validate_current_fence(fence)
     }
 
+    #[allow(clippy::type_complexity)]
     fn validate_current_fence(&self, fence: &Value) -> Result<(), FixtureError> {
         validate_host_fence(fence)?;
         let supplied = field_string(fence, "host_fence_id")?;
-        let current: Option<(String, String, String, String, String, i64, i64)> = self
+        let current: Option<(String, String, String, String, String, i64, i64, String)> = self
             .connection
             .query_row(
-                "SELECT deployment_id, instance_id, boot_id, instance_incarnation, host_fence_id, authority_generation, fence_generation FROM fence WHERE singleton=1",
+                "SELECT deployment_id, instance_id, boot_id, instance_incarnation, host_fence_id, authority_generation, fence_generation, authority_state FROM fence WHERE singleton=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
             )
             .optional()
             .map_err(FixtureError::Sql)?;
@@ -3475,10 +3829,14 @@ impl DurableHost {
             current_fence,
             authority_generation,
             fence_generation,
+            authority_state,
         )) = current
         else {
             return Err(FixtureError::HostNotReady);
         };
+        if authority_state != "READY" {
+            return Err(FixtureError::HostNotReady);
+        }
         if current_fence != supplied
             || field_string(fence, "deployment_id")? != deployment_id
             || field_string(fence, "instance_id")? != instance_id
@@ -3549,6 +3907,7 @@ impl DurableHost {
         else {
             return Err(FixtureError::HostNotReady);
         };
+        validate_lease_policy_values(ttl_seconds, renewal_interval_seconds)?;
         if revoked != 0 {
             return Err(FixtureError::Stale("revoked lease"));
         }
@@ -3588,12 +3947,12 @@ impl DurableHost {
         authority_generation: i64,
         fence_id: &str,
     ) -> Result<(), FixtureError> {
-        let current: Option<(String, String, String, String, String, i64)> = self
+        let current: Option<(String, String, String, String, String, i64, String)> = self
             .connection
             .query_row(
-                "SELECT deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,authority_generation FROM fence WHERE singleton=1",
+                "SELECT deployment_id,instance_id,boot_id,instance_incarnation,host_fence_id,authority_generation,authority_state FROM fence WHERE singleton=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
             )
             .optional()
             .map_err(FixtureError::Sql)?;
@@ -3604,10 +3963,14 @@ impl DurableHost {
             current_incarnation,
             current_fence,
             current_generation,
+            authority_state,
         )) = current
         else {
             return Err(FixtureError::HostNotReady);
         };
+        if authority_state != "READY" {
+            return Err(FixtureError::HostNotReady);
+        }
         if deployment_id != current_deployment
             || instance_id != current_instance
             || boot_id != current_boot
@@ -4880,7 +5243,11 @@ fn validate_policy(value: &Value) -> Result<(), FixtureError> {
     )?;
     let ttl = field_i64(value, "ttl_seconds")?;
     let renewal = field_i64(value, "renewal_interval_seconds")?;
-    if !(5..=300).contains(&ttl) || !(1..=100).contains(&renewal) {
+    validate_lease_policy_values(ttl, renewal)
+}
+
+fn validate_lease_policy_values(ttl: i64, renewal: i64) -> Result<(), FixtureError> {
+    if !(5..=300).contains(&ttl) || !(1..=100).contains(&renewal) || renewal >= ttl {
         return Err(FixtureError::Invalid("lease policy".to_owned()));
     }
     Ok(())
@@ -5029,10 +5396,7 @@ fn validate_lease_context(value: &Value) -> Result<(), FixtureError> {
     }
     let ttl = field_i64(value, "ttl_seconds")?;
     let renewal = field_i64(value, "renewal_interval_seconds")?;
-    if !(5..=300).contains(&ttl) || !(1..=100).contains(&renewal) {
-        return Err(FixtureError::Invalid("lease policy".to_owned()));
-    }
-    Ok(())
+    validate_lease_policy_values(ttl, renewal)
 }
 
 fn validate_original_context(value: &Value) -> Result<(), FixtureError> {
