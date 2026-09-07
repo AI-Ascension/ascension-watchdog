@@ -8,7 +8,9 @@
 
 use ascension_platform_windows::{
     AdminPipeClient, AdminPipeServer, MAX_ADMIN_PIPE_FRAME, PlatformError,
+    read_protected_payload_file,
 };
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -113,4 +115,27 @@ fn native_pipe_rejects_invalid_namespace_and_oversized_frames() {
         Err(PlatformError::Timeout(_) | PlatformError::Win32 { .. })
     ));
     assert!(MAX_ADMIN_PIPE_FRAME < u32::MAX as usize);
+}
+
+#[test]
+fn protected_payload_reader_rejects_nonlocal_paths_at_the_boundary() {
+    for path in [
+        r"\\server\share\payload.json",
+        r"\\.\PIPE\payload",
+        r"C:\payload\..\secret.json",
+        r"C:\payload\data.json:secret",
+        r"relative\payload.json",
+    ] {
+        assert!(
+            matches!(
+                read_protected_payload_file(Path::new(path), 1024),
+                Err(PlatformError::Invalid(_))
+            ),
+            "path should be rejected before opening: {path}"
+        );
+    }
+    assert!(matches!(
+        read_protected_payload_file(Path::new(r"C:\payload.json"), 0),
+        Err(PlatformError::Invalid(_))
+    ));
 }
