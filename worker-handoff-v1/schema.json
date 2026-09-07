@@ -34,6 +34,7 @@
       "maxLength": 128
     },
     "existingId": {
+      "$comment": "Rust is authoritative for the 128-byte UTF-8 bound; JSON Schema maxLength counts Unicode code points and is not byte-equivalent.",
       "type": "string",
       "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
       "minLength": 1,
@@ -50,9 +51,7 @@
         "request_id": { "$ref": "#/$defs/uuid4" },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 5000 },
         "watchdog_boot_id": { "$ref": "#/$defs/uuid4" },
-        "worker_boot_id": {
-          "anyOf": [{ "$ref": "#/$defs/uuid4" }, { "type": "null" }]
-        }
+        "worker_boot_id": { "$ref": "#/$defs/uuid4" }
       },
       "required": ["contract", "schema_digest", "direction", "command", "scope", "request_id", "timeout_ms", "watchdog_boot_id"]
     },
@@ -89,7 +88,13 @@
         "payload_digest": { "const": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" },
         "status": { "enum": ["completed", "failed"] },
         "checkpoint_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-        "terminal_ref": { "type": "string", "pattern": "^[^\\u0000-\\u001f\\u007f]+$", "minLength": 1, "maxLength": 1024 },
+        "terminal_ref": {
+          "$comment": "Rust is authoritative for the 1024-byte UTF-8 bound; JSON Schema maxLength counts Unicode code points and is not byte-equivalent.",
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "minLength": 1,
+          "maxLength": 1024
+        },
         "result_digest": { "$ref": "#/$defs/digest" }
       },
       "required": ["handoff_id", "deployment_id", "job_id", "attempt_id", "attempt_number", "worker_owner_id", "worker_profile_digest", "run_id", "episode_id", "trajectory_id", "payload_digest", "status", "checkpoint_sequence", "terminal_ref", "result_digest"],
@@ -138,9 +143,9 @@
             "release_digest": { "$ref": "#/$defs/digest" },
             "config_digest": { "$ref": "#/$defs/digest" },
             "ready": { "type": "boolean" },
-            "admitting": { "const": false }
+            "admitting": { "const": false },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
           },
-            "worker_boot_id": { "$ref": "#/$defs/uuid4" },
             "required": ["direction", "command", "scope", "deployment_id", "worker_owner_id", "worker_profile_digest", "release_digest", "config_digest", "ready", "admitting", "worker_boot_id"]
         }
       ],
@@ -158,9 +163,9 @@
             "scope": { "const": "dispatch" },
             "mode_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
             "operation": { "const": "runtime_v3_episode" },
-            "parameters": { "const": {} }
+            "parameters": { "const": {} },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
           },
-            "worker_boot_id": { "$ref": "#/$defs/uuid4" },
             "required": ["direction", "command", "scope", "mode_sequence", "operation", "parameters", "worker_boot_id"]
         }
       ],
@@ -177,9 +182,9 @@
             "command": { "const": "dispatch" },
             "scope": { "const": "dispatch" },
             "status": { "enum": ["accepted", "already_completed", "terminal", "busy", "rejected"] },
-            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] }
+            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
           },
-            "worker_boot_id": { "$ref": "#/$defs/uuid4" },
             "required": ["direction", "command", "scope", "status", "worker_boot_id"],
           "oneOf": [
             {
@@ -211,9 +216,9 @@
             "command": { "const": "lookup" },
             "scope": { "const": "lookup" },
             "status": { "enum": ["running", "terminal", "unknown", "rejected"] },
-            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] }
+            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
           },
-            "worker_boot_id": { "$ref": "#/$defs/uuid4" },
             "required": ["direction", "command", "scope", "status", "worker_boot_id"],
           "oneOf": [
             { "properties": { "status": { "const": "terminal" }, "terminal": { "$ref": "#/$defs/terminal" } }, "required": ["terminal"] },

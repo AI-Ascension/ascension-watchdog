@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 
-const HEADER: &[&str] = &[
+const PROBE_REQUEST: &[&str] = &[
     "contract",
     "schema_digest",
     "direction",
@@ -15,7 +15,6 @@ const HEADER: &[&str] = &[
     "request_id",
     "timeout_ms",
     "watchdog_boot_id",
-    "worker_boot_id",
 ];
 const PROBE_RESPONSE: &[&str] = &[
     "contract",
@@ -250,7 +249,7 @@ pub fn encode_frame(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
 
 fn allowed_fields(direction: &str, command: &str) -> Option<&'static [&'static str]> {
     match (direction, command) {
-        ("request", "probe") => Some(HEADER),
+        ("request", "probe") => Some(PROBE_REQUEST),
         ("response", "probe") => Some(PROBE_RESPONSE),
         ("request", "dispatch") => Some(DISPATCH_REQUEST),
         ("request", "lookup") => Some(JOB_REQUEST),

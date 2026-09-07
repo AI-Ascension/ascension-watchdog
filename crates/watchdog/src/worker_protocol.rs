@@ -11,7 +11,7 @@ pub use types::*;
 
 pub const CONTRACT: &str = "ascension-watchdog-worker-handoff-v1";
 /// SHA-256 of the exact checked-in `worker-handoff-v1/schema.json` bytes.
-pub const SCHEMA_DIGEST: &str = "ad2aa53eb00a4438ebfdd5f07ea78e6e7d152f3839dd5fa53d06a71807d8af90";
+pub const SCHEMA_DIGEST: &str = "bb13d15f6c0e4b8d0f58f7391fe4ba319ebc57a0a09effc06d73ea718bbff4cf";
 pub const MAX_FRAME_BYTES: usize = 65_536;
 pub const MAX_JSON_DEPTH: usize = 16;
 pub const MAX_TIMEOUT_MS: u64 = 5_000;

@@ -35,9 +35,17 @@ fn valid_fixture(name: &str) -> &'static [u8] {
             env!("CARGO_MANIFEST_DIR"),
             "/../../worker-handoff-v1/fixtures/valid/lookup-request.json"
         )),
+        "lookup-response" => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../worker-handoff-v1/fixtures/valid/lookup-response.json"
+        )),
         "acknowledge-request" => include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../worker-handoff-v1/fixtures/valid/acknowledge-request.json"
+        )),
+        "acknowledge-response" => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../worker-handoff-v1/fixtures/valid/acknowledge-response.json"
         )),
         "control-request" => include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -112,7 +120,9 @@ fn valid_fixtures_decode_and_round_trip() {
         "dispatch",
         "dispatch-response",
         "lookup-request",
+        "lookup-response",
         "acknowledge-request",
+        "acknowledge-response",
         "control-request",
         "control-response",
     ] {
@@ -179,4 +189,107 @@ fn dispatch_requires_a_positive_acknowledged_mode_sequence() {
         decode_frame(&bytes),
         Err(ProtocolError::InvalidNumber(message)) if message.contains("mode_sequence")
     ));
+}
+
+#[test]
+fn targeted_frames_require_a_worker_boot_and_probe_cannot_target_one() {
+    for name in [
+        "probe-response",
+        "dispatch",
+        "dispatch-response",
+        "lookup-request",
+        "lookup-response",
+        "acknowledge-request",
+        "acknowledge-response",
+        "control-request",
+        "control-response",
+    ] {
+        let mut missing: Value = serde_json::from_slice(valid_fixture(name)).expect(name);
+        missing
+            .as_object_mut()
+            .expect("object fixture")
+            .remove("worker_boot_id");
+        assert!(
+            decode_frame(&serde_json::to_vec(&missing).expect(name)).is_err(),
+            "{name} missing worker boot"
+        );
+
+        let mut null_boot: Value = serde_json::from_slice(valid_fixture(name)).expect(name);
+        null_boot["worker_boot_id"] = Value::Null;
+        assert!(
+            decode_frame(&serde_json::to_vec(&null_boot).expect(name)).is_err(),
+            "{name} null worker boot"
+        );
+    }
+
+    let mut probe: Value =
+        serde_json::from_slice(valid_fixture("probe-request")).expect("probe JSON");
+    probe["worker_boot_id"] = Value::Null;
+    let bytes = serde_json::to_vec(&probe).expect("null probe target JSON");
+    assert!(decode_frame(&bytes).is_err());
+
+    probe["worker_boot_id"] = Value::String("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned());
+    let bytes = serde_json::to_vec(&probe).expect("mutated probe JSON");
+    assert!(decode_frame(&bytes).is_err());
+}
+
+#[test]
+fn durable_ids_and_terminal_references_use_utf8_byte_bounds() {
+    let mut valid: Value =
+        serde_json::from_slice(valid_fixture("dispatch")).expect("dispatch JSON");
+    valid["job_id"] = Value::String("é".repeat(64));
+    let bytes = serde_json::to_vec(&valid).expect("unicode dispatch JSON");
+    assert!(decode_frame(&bytes).is_ok());
+
+    valid["job_id"] = Value::String("é".repeat(65));
+    let bytes = serde_json::to_vec(&valid).expect("oversized unicode dispatch JSON");
+    assert!(matches!(
+        decode_frame(&bytes),
+        Err(ProtocolError::InvalidIdentity(message)) if message.contains("job_id")
+    ));
+
+    let mut terminal: Value =
+        serde_json::from_slice(valid_fixture("dispatch-response")).expect("dispatch response JSON");
+    terminal["terminal"]["terminal_ref"] = Value::String("completion\nref".to_owned());
+    let bytes = serde_json::to_vec(&terminal).expect("control-character terminal JSON");
+    assert!(matches!(
+        decode_frame(&bytes),
+        Err(ProtocolError::InvalidTerminal(message)) if message.contains("terminal_ref")
+    ));
+
+    terminal["terminal"]["terminal_ref"] = Value::String("completion/\u{007f}".to_owned());
+    let bytes = serde_json::to_vec(&terminal).expect("DEL terminal JSON");
+    assert!(matches!(
+        decode_frame(&bytes),
+        Err(ProtocolError::InvalidTerminal(message)) if message.contains("terminal_ref")
+    ));
+
+    terminal["terminal"]["terminal_ref"] = Value::String("é".repeat(513));
+    let bytes = serde_json::to_vec(&terminal).expect("oversized unicode terminal JSON");
+    assert!(matches!(
+        decode_frame(&bytes),
+        Err(ProtocolError::InvalidTerminal(message)) if message.contains("terminal_ref")
+    ));
+}
+
+#[test]
+fn nested_terminal_fields_are_closed_and_status_correlated() {
+    let mut unknown: Value =
+        serde_json::from_slice(valid_fixture("dispatch-response")).expect("dispatch response");
+    unknown["terminal"]["unexpected"] = Value::Bool(true);
+    assert!(decode_frame(&serde_json::to_vec(&unknown).expect("unknown terminal field")).is_err());
+
+    let source = std::str::from_utf8(valid_fixture("dispatch-response")).expect("UTF-8 fixture");
+    let duplicate = source.replacen(
+        "    \"result_digest\": \"9999999999999999999999999999999999999999999999999999999999999999\"\n",
+        "    \"result_digest\": \"9999999999999999999999999999999999999999999999999999999999999999\",\n    \"result_digest\": \"9999999999999999999999999999999999999999999999999999999999999999\"\n",
+        1,
+    );
+    assert_ne!(duplicate, source);
+    assert!(decode_frame(duplicate.as_bytes()).is_err());
+
+    let mut mismatch: Value =
+        serde_json::from_slice(valid_fixture("dispatch-response")).expect("dispatch response");
+    mismatch["status"] = Value::String("accepted".to_owned());
+    assert!(decode_frame(&serde_json::to_vec(&mismatch).expect("status mismatch")).is_err());
 }
