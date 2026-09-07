@@ -37,6 +37,13 @@ alternate clients/providers or ancestry resets are permitted. Three descendant
 levels and depth-4 rejection are unmet, and full assignment completion cannot be
 claimed even if independent implementation succeeds.
 
+Revalidated during the 2026-09-07 proof-conformance review: the active depth-1
+reviewer's callable tool schema again exposed no child-spawn/collaboration
+function. It therefore created no depth-2 coordinator or depth-3 specialist and
+made no depth-4 attempt. Root released the two reserved descendant slots. This
+is a recorded capability failure, not a successful nested-routing smoke test;
+independent implementation and verification continued without an alternate client.
+
 The project configuration and explicit lead/coordinator/leaf role files were
 parsed by the installed client. A fresh `config/read` with layers reports the
 project layer disabled because this newly created repository is not individually

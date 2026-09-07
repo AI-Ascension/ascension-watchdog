@@ -26,8 +26,25 @@ cargo run --locked --offline --package repo-policy -- --strict
 # 394 sized files; 0 warnings; 0 errors
 ```
 
-The separate completed-resume process-supervisor repair is not included in
-this source checkpoint and remains under independent review.
+The completed-resume process-supervisor repair was subsequently independently
+reviewed and integrated through `2c55c8a`. Root resolved its two missing lock
+entries and separated the adversarial reader tests from process support to
+satisfy strict policy. Root then passed the locked workspace/all-target/all-feature
+test and Clippy gates, formatting, and strict policy (396 sized files, zero
+warnings/errors), including 81 runtime tests and seven completed-resume process
+tests. The process supervisor uses nonblocking bounded drains and keeps the
+owned group leader waitable until group signaling. No production timeout was
+increased. This remains Linux synthetic process evidence, not live recovery.
+
+## Lease-proof vectors
+
+Watchdog commit `e1a2147` derives the expected six proof domains from frame kind
+instead of trusting vector metadata, and checks that a one-byte key change
+invalidates all nine published frame proofs. Root passed the locked/offline
+`host_lease_proof_vectors` test and its strict Clippy gate. This test independently
+recomputes fixture hashes, canonical bytes, and HMACs; it is not a production
+decoder, raw-JSON rejection suite, key-rotation implementation, or proof that
+gateway and host consumers enforce the profile.
 
 ## Managed/native recovery transport
 
