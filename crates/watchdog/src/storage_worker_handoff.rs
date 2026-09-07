@@ -4,9 +4,32 @@
 //! public identity types, claim/control admission, completion/acknowledgment,
 //! and read-side projections each live in their own focused module.
 
-mod storage_worker_claims;
-mod storage_worker_completion;
-mod storage_worker_queries;
+#[path = "storage_worker_claims_admission.rs"]
+mod storage_worker_claims_admission;
+#[path = "storage_worker_claims_lifecycle.rs"]
+mod storage_worker_claims_lifecycle;
+#[path = "storage_worker_claims_state.rs"]
+mod storage_worker_claims_state;
+#[path = "storage_worker_claims_validation.rs"]
+mod storage_worker_claims_validation;
+#[path = "storage_worker_completion_ack.rs"]
+mod storage_worker_completion_ack;
+#[path = "storage_worker_completion_dispatch.rs"]
+mod storage_worker_completion_dispatch;
+#[path = "storage_worker_completion_terminal.rs"]
+mod storage_worker_completion_terminal;
+#[path = "storage_worker_queries_consistency.rs"]
+mod storage_worker_queries_consistency;
+#[path = "storage_worker_queries_handoff.rs"]
+mod storage_worker_queries_handoff;
+#[path = "storage_worker_queries_handoff_row.rs"]
+mod storage_worker_queries_handoff_row;
+#[path = "storage_worker_queries_jobs.rs"]
+mod storage_worker_queries_jobs;
+#[path = "storage_worker_queries_projection.rs"]
+mod storage_worker_queries_projection;
+#[path = "storage_worker_queries_terminal.rs"]
+mod storage_worker_queries_terminal;
 mod storage_worker_schema;
 mod storage_worker_types;
 
@@ -24,7 +47,7 @@ pub use storage_worker_types::{
 // visibility beyond this storage module.
 pub(crate) use super::{
     Store, insert_audit_tx, metadata_from_conn, now_unix_ms, parse_mode, sqlite_timestamp,
-    sqlite_u32, sqlite_u64, table_exists, to_sqlite_error, validate_claim_payload, validate_name,
+    sqlite_u64, table_exists, to_sqlite_error, validate_claim_payload, validate_name,
 };
 
 pub(crate) use storage_worker_schema::{
