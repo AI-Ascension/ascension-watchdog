@@ -6,6 +6,9 @@
 //! stores request identity, capability class, a command digest, and a bounded
 //! response; it never stores credentials or command payloads.
 
+#[path = "storage_backup_admin.rs"]
+mod storage_backup_admin;
+
 use super::{
     SCHEMA_VERSION, SingletonLock, Store, Transaction, TransactionBehavior, WatchdogError,
     ensure_owner_lock, insert_audit_tx, metadata_from_conn, mode_as_str,

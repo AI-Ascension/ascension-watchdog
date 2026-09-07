@@ -49,6 +49,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "resume"
                 | "drain"
                 | "stop"
+                | "backup"
                 | "daemon"
                 | "run"
                 | "job"
@@ -77,7 +78,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args),
-        "status" | "start" | "pause" | "resume" | "drain" | "stop" => {
+        "status" | "start" | "pause" | "resume" | "drain" | "stop" | "backup" => {
             operator_command(&command, &mut args, &config_path)
         }
         "daemon" | "run" => daemon_command(&mut args, &config_path),
@@ -91,9 +92,18 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
 
 fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<Option<String>> {
     use crate::admin::{
-        AdminClient, AdminClientConfig, AdminCommand, Capability, EmptyParams, ReplyStatus,
+        AdminClient, AdminClientConfig, AdminCommand, BackupRequest, Capability, EmptyParams,
+        ReplyStatus,
     };
     let key = take_option(args, "--idempotency-key");
+    let backup_id =
+        if name == "backup" {
+            Some(take_option(args, "--backup-id").ok_or_else(|| {
+                WatchdogError::InvalidInput("backup requires --backup-id".to_owned())
+            })?)
+        } else {
+            None
+        };
     if !args.is_empty() {
         return Err(WatchdogError::InvalidInput(
             "unexpected operator command argument".to_owned(),
@@ -101,6 +111,11 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
     }
     let config = WatchdogConfig::from_file(path)?;
     let Some(admin) = config.admin else {
+        if name == "backup" {
+            return Err(WatchdogError::Unauthorized(
+                "backup requires authenticated admin configuration".to_owned(),
+            ));
+        }
         if name == "status" {
             return status_command(path);
         }
@@ -129,6 +144,11 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         "pause" => AdminCommand::Pause(EmptyParams {}),
         "drain" => AdminCommand::Drain(EmptyParams {}),
         "stop" => AdminCommand::Stop(EmptyParams {}),
+        "backup" => AdminCommand::Backup(BackupRequest {
+            backup_id: backup_id.ok_or_else(|| {
+                WatchdogError::InvalidInput("backup requires --backup-id".to_owned())
+            })?,
+        }),
         _ => {
             return Err(WatchdogError::InvalidInput(
                 "unknown lifecycle command".to_owned(),
@@ -703,5 +723,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog daemon --config PATH [--once]\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }
