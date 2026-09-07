@@ -1232,18 +1232,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let jobs: i64 = tx.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))?;
-        if u64::try_from(jobs).unwrap_or(u64::MAX) >= self.max_jobs {
-            tx.rollback()?;
-            return Err(WatchdogError::Conflict(
-                "job retention bound is full".to_string(),
-            ));
-        }
-        tx.execute(
-            "INSERT INTO jobs (id, kind, payload, payload_digest, status, created_at_ms, attempt_count, next_retry_at_ms) VALUES (?, ?, ?, ?, 'queued', ?, 0, ?)",
-            params![id, kind, String::from_utf8(encoded).map_err(|error| WatchdogError::InvalidInput(error.to_string()))?, digest, sqlite_timestamp(now_ms)?, sqlite_timestamp(now_ms)?],
-        )?;
-        insert_audit_tx(&tx, "job_submitted", &id, now_ms)?;
+        insert_job_tx(&tx, &id, kind, &encoded, &digest, self.max_jobs, now_ms)?;
         tx.commit()?;
         self.get_job(&id)?
             .ok_or_else(|| WatchdogError::Conflict("job disappeared after commit".to_string()))
@@ -2024,6 +2013,33 @@ impl Store {
         )?)
         .map_err(|_| WatchdogError::Conflict("job count overflow".to_string()))
     }
+}
+
+/// Shared transaction primitive for worker-local and authenticated operator
+/// admission. The caller owns commit so a job and its replay receipt can be
+/// published atomically; neither insert is acknowledged independently.
+fn insert_job_tx(
+    tx: &Transaction<'_>,
+    id: &str,
+    kind: &str,
+    encoded: &[u8],
+    digest: &str,
+    max_jobs: u64,
+    now_ms: u64,
+) -> Result<()> {
+    let jobs: i64 = tx.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))?;
+    if u64::try_from(jobs).unwrap_or(u64::MAX) >= max_jobs {
+        return Err(WatchdogError::Conflict(
+            "job retention bound is full".to_owned(),
+        ));
+    }
+    let payload = std::str::from_utf8(encoded)
+        .map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
+    tx.execute(
+        "INSERT INTO jobs (id, kind, payload, payload_digest, status, created_at_ms, attempt_count, next_retry_at_ms) VALUES (?, ?, ?, ?, 'queued', ?, 0, ?)",
+        params![id, kind, payload, digest, sqlite_timestamp(now_ms)?, sqlite_timestamp(now_ms)?],
+    )?;
+    insert_audit_tx(tx, "job_submitted", id, now_ms)
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {

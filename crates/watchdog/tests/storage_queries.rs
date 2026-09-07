@@ -2,6 +2,25 @@ use ascension_watchdog::{DesiredMode, Store, WatchdogConfig};
 use serde_json::json;
 
 #[test]
+fn job_insert_rolls_back_when_its_audit_cannot_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        ..WatchdogConfig::default()
+    };
+    let mut store = Store::initialize(&config.database, &config).unwrap();
+    let fault = rusqlite::Connection::open(&config.database).unwrap();
+    fault.execute_batch("CREATE TRIGGER reject_job_audit BEFORE INSERT ON audit WHEN NEW.action='job_submitted' BEGIN SELECT RAISE(ABORT, 'synthetic audit persistence failure'); END;").unwrap();
+    assert!(store.submit_job_at("episode", &json!({}), 1).is_err());
+    assert!(store.job_summaries(None, 1).unwrap().jobs.is_empty());
+    fault
+        .execute_batch("DROP TRIGGER reject_job_audit;")
+        .unwrap();
+    store.submit_job_at("episode", &json!({}), 2).unwrap();
+    assert_eq!(store.job_summaries(None, 1).unwrap().jobs.len(), 1);
+}
+
+#[test]
 fn summaries_filter_before_limit_and_never_export_private_values() {
     let directory = tempfile::tempdir().unwrap();
     let config = WatchdogConfig {
