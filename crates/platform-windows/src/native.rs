@@ -32,11 +32,11 @@ use windows_service::service_control_handler::{
 use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
-    ERROR_NO_DATA, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED,
-    ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED, ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME,
-    GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND,
+    ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND,
+    ERROR_OPERATION_ABORTED, ERROR_PATH_NOT_FOUND, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING,
+    ERROR_PIPE_NOT_CONNECTED, ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME, GENERIC_READ,
+    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::{
@@ -82,6 +82,8 @@ const SERVICE_NAME: &str = "ascension-watchdog";
 const HEALTH_STALE_AFTER: Duration = Duration::from_secs(90);
 const SERVICE_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const PLANNED_JOB_PREFIX: &str = "windows-job:";
+const MAX_PLANNED_JOB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
 const HASH_READ_BYTES: usize = 64 * 1024;
 const SHA256_K: [u32; 64] = [
@@ -331,7 +333,8 @@ impl JobOwnedProcess {
     /// the caller.  Generic Windows processes have no safe portable TERM
     /// equivalent, so this boundary refuses to fake graceful completion.
     pub fn graceful_stop(&self) -> Result<StopOutcome, PlatformError> {
-        if !self.is_running()? {
+        self.verify_identity()?;
+        if self.active_processes()? == 0 {
             return Ok(StopOutcome::AlreadyExited);
         }
         Err(PlatformError::Unsupported(format!(
@@ -343,30 +346,7 @@ impl JobOwnedProcess {
     /// Terminate the verified Job Object and wait for all owned descendants.
     pub fn force_stop(&self) -> Result<StopOutcome, PlatformError> {
         self.verify_identity()?;
-        let running = self.is_running()?;
-        if self.active_processes()? == 0 {
-            return Ok(StopOutcome::AlreadyExited);
-        }
-        let terminated = unsafe { TerminateJobObject(self.job.raw(), 1) };
-        if terminated == 0 {
-            return Err(last_error("TerminateJobObject"));
-        }
-        let deadline = std::time::Instant::now()
-            .checked_add(self.force_timeout)
-            .unwrap_or_else(std::time::Instant::now);
-        loop {
-            if self.active_processes()? == 0 {
-                return Ok(if running {
-                    StopOutcome::Exited
-                } else {
-                    StopOutcome::AlreadyExited
-                });
-            }
-            if std::time::Instant::now() >= deadline {
-                return Ok(StopOutcome::TimedOut);
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
+        terminate_job_and_wait(&self.job, self.force_timeout)
     }
 
     /// Reopen a named job after watchdog restart and verify its recorded
@@ -493,23 +473,7 @@ impl JobOwnedProcess {
     }
 
     fn active_processes(&self) -> Result<u32, PlatformError> {
-        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        let mut returned = 0_u32;
-        let ok = unsafe {
-            QueryInformationJobObject(
-                self.job.raw(),
-                JobObjectBasicAccountingInformation,
-                (&raw mut accounting).cast(),
-                u32::try_from(size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>()).map_err(
-                    |_| PlatformError::Invalid("Job Object accounting size overflow".to_owned()),
-                )?,
-                &raw mut returned,
-            )
-        };
-        if ok == 0 {
-            return Err(last_error("QueryInformationJobObject"));
-        }
-        Ok(accounting.ActiveProcesses)
+        active_processes(&self.job)
     }
 }
 
@@ -542,6 +506,29 @@ impl WindowsProcessLauncher {
             config,
             allowlist_guards,
         })
+    }
+
+    /// Reopen and terminate one exact planned Job Object without a process
+    /// identity.  This is the recovery authority for a durable launch intent
+    /// that was persisted before a child identity was returned.  The caller
+    /// must supply the persisted `windows-job:<launch_nonce>` containment; the
+    /// native boundary validates that closed namespace, derives only its
+    /// nonce-based local name, and never searches by PID or process name.
+    ///
+    /// An absent exact object is conclusive only when `OpenJobObjectW` reports
+    /// `ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND`.  Other open failures
+    /// remain errors, because they do not prove that the authority is gone.
+    pub fn force_cleanup_planned_containment(
+        &self,
+        planned_containment: &str,
+        force_timeout: Duration,
+    ) -> Result<StopOutcome, PlatformError> {
+        self.config.validate()?;
+        validate_planned_job_cleanup_timeout(force_timeout)?;
+        let Some(job) = open_planned_job(planned_containment, self.config.max_processes)? else {
+            return Ok(StopOutcome::AlreadyExited);
+        };
+        terminate_job_and_wait(&job, force_timeout)
     }
 
     /// Launch a direct executable with Job Object assignment before resume.
@@ -739,6 +726,98 @@ fn verify_job_limits(job: &OwnedHandle, max_processes: u32) -> Result<(), Platfo
         ));
     }
     Ok(())
+}
+
+fn open_planned_job(
+    planned_containment: &str,
+    max_processes: u32,
+) -> Result<Option<OwnedHandle>, PlatformError> {
+    if max_processes == 0 || max_processes > 128 {
+        return Err(PlatformError::Invalid(
+            "planned Job Object process limit is outside bounds".to_owned(),
+        ));
+    }
+    let nonce = planned_job_nonce(planned_containment)?;
+    let name = job_name(nonce)?;
+    let wide_name = wide(&name)?;
+    let raw = unsafe {
+        windows_sys::Win32::System::JobObjects::OpenJobObjectW(
+            JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE | READ_CONTROL,
+            0,
+            wide_name.as_ptr(),
+        )
+    };
+    if raw.is_null() || raw == INVALID_HANDLE_VALUE {
+        let code = unsafe { GetLastError() };
+        if code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND {
+            return Ok(None);
+        }
+        return Err(win32_error("OpenJobObjectW(planned containment)", code));
+    }
+    let job = OwnedHandle::new(raw, "OpenJobObjectW(planned containment)")?;
+    // The name is necessary but not sufficient authority.  Reopened jobs
+    // must still be owned by this service identity and carry the configured
+    // containment limit; an unrelated same-user object is rejected before
+    // any termination request is attempted.
+    verify_job_owner(&job)?;
+    verify_job_limits(&job, max_processes)?;
+    Ok(Some(job))
+}
+
+fn terminate_job_and_wait(
+    job: &OwnedHandle,
+    force_timeout: Duration,
+) -> Result<StopOutcome, PlatformError> {
+    let active = active_processes(job)?;
+    if active == 0 {
+        return Ok(StopOutcome::AlreadyExited);
+    }
+    let terminated = unsafe { TerminateJobObject(job.raw(), 1) };
+    if terminated == 0 {
+        return Err(last_error("TerminateJobObject"));
+    }
+    if wait_for_job_empty(job, force_timeout)? {
+        Ok(StopOutcome::Exited)
+    } else {
+        Ok(StopOutcome::TimedOut)
+    }
+}
+
+fn active_processes(job: &OwnedHandle) -> Result<u32, PlatformError> {
+    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    let mut returned = 0_u32;
+    let ok = unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectBasicAccountingInformation,
+            (&raw mut accounting).cast(),
+            u32::try_from(size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>()).map_err(|_| {
+                PlatformError::Invalid("Job Object accounting size overflow".to_owned())
+            })?,
+            &raw mut returned,
+        )
+    };
+    if ok == 0 {
+        return Err(last_error("QueryInformationJobObject"));
+    }
+    Ok(accounting.ActiveProcesses)
+}
+
+fn wait_for_job_empty(job: &OwnedHandle, timeout: Duration) -> Result<bool, PlatformError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if active_processes(job)? == 0 {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(
+            Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
 }
 
 fn verify_job_owner(job: &OwnedHandle) -> Result<(), PlatformError> {
@@ -2427,6 +2506,18 @@ fn job_name(nonce: &str) -> Result<String, PlatformError> {
     Ok(format!("{JOB_NAME_PREFIX}{nonce}"))
 }
 
+fn planned_job_nonce(planned_containment: &str) -> Result<&str, PlatformError> {
+    let nonce = planned_containment
+        .strip_prefix(PLANNED_JOB_PREFIX)
+        .ok_or_else(|| {
+            PlatformError::Invalid(
+                "planned Windows containment must use the windows-job:<nonce> authority".to_owned(),
+            )
+        })?;
+    validate_nonce(nonce)?;
+    Ok(nonce)
+}
+
 fn validate_pipe_name(name: &str) -> Result<(), PlatformError> {
     if !name.starts_with(PIPE_NAME_PREFIX)
         || name.len() > 192
@@ -2559,6 +2650,16 @@ fn validate_stop_timeouts(graceful: Duration, force: Duration) -> Result<(), Pla
     Ok(())
 }
 
+fn validate_planned_job_cleanup_timeout(timeout: Duration) -> Result<(), PlatformError> {
+    if timeout.is_zero() || timeout > MAX_PLANNED_JOB_CLEANUP_TIMEOUT {
+        return Err(PlatformError::Invalid(
+            "planned Job Object cleanup deadline is outside the 1ms..=30s bound".to_owned(),
+        ));
+    }
+    let _ = duration_to_millis(timeout)?;
+    Ok(())
+}
+
 fn last_error(operation: &str) -> PlatformError {
     PlatformError::Win32 {
         operation: operation.to_owned(),
@@ -2651,6 +2752,46 @@ mod tests {
         assert!(server.configure_replay_policy(6, "older").is_err());
         server.configure_replay_policy(8, "epoch-eight")?;
         assert_eq!(server.last_sequence, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn planned_job_recovery_rejects_an_unrelated_job_limit() -> Result<(), PlatformError> {
+        let executable = std::env::current_exe()
+            .map_err(|error| PlatformError::Io(format!("current test executable: {error}")))?;
+        let nonce = format!(
+            "planned-limits-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        );
+        let name = job_name(&nonce)?;
+        let job = create_job(&name, 7)?;
+        let mut allowlisted_executables = BTreeMap::new();
+        allowlisted_executables.insert(
+            crate::contract::ComponentKind::Synthetic,
+            executable.clone(),
+        );
+        let launcher = WindowsProcessLauncher::new(WindowsPlatformConfig {
+            service_name: SERVICE_NAME.to_owned(),
+            pipe_name: format!(r"\\.\pipe\ascension-watchdog-test-{nonce}"),
+            allowlisted_executables,
+            authorized_peer_executable: executable,
+            max_arguments: 8,
+            max_environment: 8,
+            max_processes: 8,
+        })?;
+        let planned = format!("{PLANNED_JOB_PREFIX}{nonce}");
+        assert!(matches!(
+            launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(1)),
+            Err(PlatformError::IdentityMismatch(_))
+        ));
+        drop(job);
+        assert_eq!(
+            launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(1))?,
+            StopOutcome::AlreadyExited
+        );
         Ok(())
     }
 }
