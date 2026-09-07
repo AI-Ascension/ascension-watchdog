@@ -12,7 +12,7 @@ use crate::PlatformError;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr::{null, null_mut};
 use std::slice;
 use std::thread;
@@ -565,6 +565,7 @@ pub fn read_protected_payload_file(
             "protected payload bound is outside the platform limit".to_owned(),
         ));
     }
+    validate_local_protected_path(path)?;
     let _ancestors = open_protected_ancestors(path)?;
     let wide_path = wide_path(path)?;
     let raw_file = unsafe {
@@ -583,16 +584,52 @@ pub fn read_protected_payload_file(
     read_protected_file_handle(&file, max_bytes)
 }
 
-fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformError> {
+fn validate_local_protected_path(path: &Path) -> Result<(), PlatformError> {
     let components = path.components().collect::<Vec<_>>();
     if components.is_empty()
         || !path.is_absolute()
-        || !matches!(components.last(), Some(std::path::Component::Normal(_)))
+        || !matches!(components.last(), Some(Component::Normal(_)))
     {
         return Err(PlatformError::Invalid(
             "protected payload path must be an absolute local file".to_owned(),
         ));
     }
+    if path.as_os_str().encode_wide().count() > 32_767 {
+        return Err(PlatformError::Invalid(
+            "protected payload path exceeds the Windows path bound".to_owned(),
+        ));
+    }
+    for component in components {
+        match component {
+            Component::Prefix(prefix)
+                if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => {}
+            Component::Prefix(_) => {
+                return Err(PlatformError::Invalid(
+                    "protected payload path must use a local drive prefix".to_owned(),
+                ));
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(PlatformError::Invalid(
+                    "protected payload path contains traversal".to_owned(),
+                ));
+            }
+            Component::Normal(value)
+                if value
+                    .encode_wide()
+                    .any(|unit| unit == u16::from(b':') || unit == 0) =>
+            {
+                return Err(PlatformError::Invalid(
+                    "protected payload path contains an alternate data stream or NUL".to_owned(),
+                ));
+            }
+            Component::RootDir | Component::Normal(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformError> {
+    let components = path.components().collect::<Vec<_>>();
     let mut current = PathBuf::new();
     let mut ancestors = Vec::new();
     for (index, component) in components.iter().enumerate() {

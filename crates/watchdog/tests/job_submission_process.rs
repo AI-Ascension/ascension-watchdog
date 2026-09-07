@@ -13,7 +13,9 @@ use ascension_watchdog::config::{AdminConfig, WatchdogConfig};
 use ascension_watchdog::storage::{SingletonLock, Store, now_unix_ms};
 use serde_json::json;
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
@@ -21,6 +23,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_CLI_OUTPUT_BYTES: usize = 256 * 1024;
 
 #[test]
@@ -186,6 +189,37 @@ fn cli_process_rejects_fifo_payload_without_blocking_before_ipc()
     Ok(())
 }
 
+#[test]
+fn bounded_cli_runner_cleans_descendant_holding_output_pipes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let descendant_pid = temp.path().join("descendant.pid");
+    let mut command = Command::new("sh");
+    command.args([
+        "-c",
+        "sleep 30 & printf '%s' $! > \"$1\"; exit 0",
+        "watchdog-test",
+    ]);
+    command.arg(&descendant_pid);
+    let started = Instant::now();
+    let output = run_bounded_cli(command)?;
+    assert!(output.status.success());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "runner waited for a descendant-owned output pipe"
+    );
+    let pid = std::fs::read_to_string(&descendant_pid)?.parse::<i32>()?;
+    let pid = rustix::process::Pid::from_raw(pid).ok_or("descendant PID was zero")?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if rustix::process::test_kill_process(pid).is_err() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err("synthetic descendant survived bounded CLI cleanup".into())
+}
+
 fn response_job_id(
     response: &ascension_watchdog::admin::AdminResponse,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -331,10 +365,13 @@ impl DaemonGuard {
 
     fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(child) = self.child.as_mut() {
-            if child.try_wait()?.is_none() {
-                child.kill()?;
+            if child.try_wait()?.is_none()
+                && let Err(error) = child.kill()
+                && child.try_wait()?.is_none()
+            {
+                return Err(error.into());
             }
-            child.wait()?;
+            reap_child_until(child, Instant::now() + CHILD_REAP_TIMEOUT)?;
         }
         self.child = None;
         self.remove_owned_test_endpoint();
@@ -354,7 +391,7 @@ impl Drop for DaemonGuard {
             if child.try_wait().ok().flatten().is_none() {
                 let _ = child.kill();
             }
-            let _ = child.wait();
+            let _ = reap_child_until(child, Instant::now() + CHILD_REAP_TIMEOUT);
         }
         self.child = None;
         self.remove_owned_test_endpoint();
@@ -362,6 +399,7 @@ impl Drop for DaemonGuard {
 }
 
 fn run_bounded_cli(mut command: Command) -> Result<Output, Box<dyn std::error::Error>> {
+    command.process_group(0);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = CliChildGuard::spawn(command)?;
     let stdout = child
@@ -374,13 +412,18 @@ fn run_bounded_cli(mut command: Command) -> Result<Output, Box<dyn std::error::E
         .stderr
         .take()
         .ok_or("CLI stderr pipe was not created")?;
-    let stdout_reader = thread::spawn(|| read_bounded_output(stdout));
-    let stderr_reader = thread::spawn(|| read_bounded_output(stderr));
+    set_nonblocking_pipe(&stdout)?;
+    set_nonblocking_pipe(&stderr)?;
 
     let deadline = Instant::now() + CLI_COMMAND_TIMEOUT;
+    let stdout_reader = thread::spawn(move || read_bounded_output(stdout, deadline));
+    let stderr_reader = thread::spawn(move || read_bounded_output(stderr, deadline));
     let status = loop {
         match child.child_mut()?.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => {
+                child.kill_and_wait()?;
+                break status;
+            }
             Ok(None) if Instant::now() >= deadline => {
                 let cleanup = child.kill_and_wait();
                 let _ = stdout_reader.join();
@@ -397,9 +440,9 @@ fn run_bounded_cli(mut command: Command) -> Result<Output, Box<dyn std::error::E
             }
         }
     };
-    child.disarm();
     let stdout = join_bounded_reader(stdout_reader)?;
     let stderr = join_bounded_reader(stderr_reader)?;
+    child.disarm();
     Ok(Output {
         status,
         stdout,
@@ -407,17 +450,31 @@ fn run_bounded_cli(mut command: Command) -> Result<Output, Box<dyn std::error::E
     })
 }
 
-fn read_bounded_output(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
+fn set_nonblocking_pipe(pipe: &impl AsFd) -> std::io::Result<()> {
+    let flags = rustix::fs::fcntl_getfl(pipe)?;
+    rustix::fs::fcntl_setfl(pipe, flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(std::io::Error::from)
+}
+
+fn read_bounded_output(mut reader: impl Read, deadline: Instant) -> std::io::Result<Vec<u8>> {
     let mut retained = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(retained);
-        }
-        if retained.len() < MAX_CLI_OUTPUT_BYTES {
-            let keep = (MAX_CLI_OUTPUT_BYTES - retained.len()).min(read);
-            retained.extend_from_slice(&buffer[..keep]);
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(retained),
+            Ok(read) => {
+                if retained.len() < MAX_CLI_OUTPUT_BYTES {
+                    let keep = (MAX_CLI_OUTPUT_BYTES - retained.len()).min(read);
+                    retained.extend_from_slice(&buffer[..keep]);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Ok(retained);
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
         }
     }
 }
@@ -452,10 +509,12 @@ impl CliChildGuard {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
+        let group = rustix::process::Pid::from_child(child);
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         if child.try_wait()?.is_none() {
-            child.kill()?;
+            let _ = child.kill();
         }
-        child.wait().map(|_| ())
+        reap_child_until(child, Instant::now() + CHILD_REAP_TIMEOUT)
     }
 
     fn disarm(&mut self) {
@@ -465,12 +524,22 @@ impl CliChildGuard {
 
 impl Drop for CliChildGuard {
     fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
-            }
-            let _ = child.wait();
-        }
+        let _ = self.kill_and_wait();
         self.child = None;
+    }
+}
+
+fn reap_child_until(child: &mut Child, deadline: Instant) -> std::io::Result<()> {
+    loop {
+        match child.try_wait()? {
+            Some(_) => return Ok(()),
+            None if Instant::now() >= deadline => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "child did not exit before the bounded reap deadline",
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
     }
 }
