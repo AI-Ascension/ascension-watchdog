@@ -2,7 +2,7 @@
 
 use ascension_platform_windows::{
     ComponentKind, JobOwnedProcess, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,
-    WindowsProcessLauncher, select_active_session,
+    WindowsProcessLauncher,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -94,16 +94,6 @@ where
     }
 }
 
-fn active_session() -> Option<u32> {
-    match select_active_session() {
-        ascension_platform_windows::ActiveSession::Available(session) => Some(session),
-        ascension_platform_windows::ActiveSession::WaitingForSession => {
-            eprintln!("native Windows synthetic test skipped: WAITING_FOR_SESSION");
-            None
-        }
-    }
-}
-
 fn unique_nonce(label: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -113,9 +103,6 @@ fn unique_nonce(label: &str) -> String {
 
 #[test]
 fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box<dyn Error>> {
-    let Some(session) = active_session() else {
-        return Ok(());
-    };
     let directory = TestDirectory::create()?;
     let executable = fixture();
     let launcher = WindowsProcessLauncher::new(config(&executable, &unique_nonce("pipe")))?;
@@ -124,7 +111,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     let owner = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        session,
+        0,
         &unique_nonce("descendant"),
         vec![
             "--spawn-descendant".to_owned(),
@@ -163,7 +150,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     let crashed = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        session,
+        0,
         &unique_nonce("crash"),
         vec!["--crash-after-ms".to_owned(), "50".to_owned()],
     ))?;
@@ -173,7 +160,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     let restarted = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        session,
+        0,
         &unique_nonce("restart"),
         vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
     ))?;

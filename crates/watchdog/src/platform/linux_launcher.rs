@@ -1,0 +1,1298 @@
+//! Race-free Linux launch handoff.
+//!
+//! A normal `Command::spawn` starts the requested program before a caller can
+//! write its PID to a cgroup.  That ordering is not an ownership proof.  This
+//! module instead starts the trusted watchdog executable in a barrier mode.
+//! The helper accepts one bounded request frame, waits for a nonce-bound `GO`,
+//! and only then starts the approved component.  The parent places the helper
+//! in the durable cgroup and verifies membership before sending `GO`.
+//!
+//! The helper calls the safe Unix `CommandExt::exec` operation only after the
+//! complete request and cgroup membership have been checked.  `exec` replaces
+//! the helper in place, preserving the PID and all inherited stream handles;
+//! there is no second target process or post-spawn PID move to authorize.
+
+use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::io::{self, Cursor, Read, Write};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const FRAME_MAGIC: &[u8; 8] = b"ASC-LNX1";
+const FRAME_VERSION: u8 = 1;
+const GO_MAGIC: &[u8; 8] = b"ASC-GO01";
+const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
+const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
+const MAX_FRAME_BYTES: usize = 256 * 1024;
+const MAX_FIELD_BYTES: usize = 16 * 1024;
+const MAX_ARGUMENTS: usize = 64;
+const MAX_ENVIRONMENT: usize = 64;
+const MAX_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Immutable bootstrap context supplied separately from the untrusted launch
+/// frame.  The real watchdog should bind this path to its already validated
+/// configuration/database location before spawning the helper.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHelperBootstrap {
+    protected_config_path: PathBuf,
+}
+
+impl LinuxHelperBootstrap {
+    /// Validate and canonicalize an owner-protected configuration path.
+    ///
+    /// The path must already exist as a regular, non-symlink file and must not
+    /// be writable by group or other users.  This check is only a bootstrap
+    /// guard; the caller still has to compare the result with its fixed
+    /// configuration path before reading durable launch intent.
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, AdapterError> {
+        let path = path.into();
+        if !path.is_absolute() || path.as_os_str().is_empty() {
+            return Err(AdapterError::Invalid(
+                "Linux protected config path must be absolute".to_owned(),
+            ));
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            AdapterError::Unavailable(format!("Linux protected config is unavailable: {error}"))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(AdapterError::Invalid(
+                "Linux protected config must be a regular non-symlink file".to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = metadata.permissions().mode();
+            if mode & 0o022 != 0 || mode & 0o400 == 0 {
+                return Err(AdapterError::Invalid(
+                    "Linux protected config must not be group/other writable and must be owner-readable"
+                        .to_owned(),
+                ));
+            }
+        }
+        let canonical = fs::canonicalize(&path).map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux protected config cannot be resolved: {error}"
+            ))
+        })?;
+        if canonical != path {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux protected config path is not canonical".to_owned(),
+            ));
+        }
+        Ok(Self {
+            protected_config_path: canonical,
+        })
+    }
+
+    /// Return the canonical path that was validated for helper bootstrap.
+    #[must_use]
+    pub fn protected_config_path(&self) -> &Path {
+        &self.protected_config_path
+    }
+}
+
+/// Hidden command-line argument recognized by the watchdog's real executable
+/// entrypoint.  The normal CLI must dispatch this before parsing user input.
+#[must_use]
+pub const fn helper_argument() -> &'static str {
+    HELPER_ARGUMENT
+}
+
+/// Hidden argument carrying the separately validated protected config path.
+#[must_use]
+pub const fn protected_config_argument() -> &'static str {
+    PROTECTED_CONFIG_ARGUMENT
+}
+
+/// How a launched component's standard stream is connected.
+///
+/// The launcher never reads a component stream in a detached thread.  When a
+/// stream is [`OutputMode::Piped`], ownership remains with the returned
+/// [`Child`] and the caller is responsible for bounded draining.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputMode {
+    Null,
+    Inherit,
+    Piped,
+}
+
+impl OutputMode {
+    fn into_stdio(self) -> Stdio {
+        match self {
+            Self::Null => Stdio::null(),
+            Self::Inherit => Stdio::inherit(),
+            Self::Piped => Stdio::piped(),
+        }
+    }
+}
+
+/// Standard-stream policy for one trusted launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LauncherStreams {
+    pub stdout: OutputMode,
+    pub stderr: OutputMode,
+}
+
+impl LauncherStreams {
+    /// Keep component output disabled, matching the platform adapter default.
+    #[must_use]
+    pub const fn null() -> Self {
+        Self {
+            stdout: OutputMode::Null,
+            stderr: OutputMode::Null,
+        }
+    }
+}
+
+impl Default for LauncherStreams {
+    fn default() -> Self {
+        Self::null()
+    }
+}
+
+/// The request supplied to the root-owned durable-intent authorizer.
+///
+/// A caller must authorize the complete specification and exact cgroup path;
+/// authorizing only the launch nonce or executable path is insufficient.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHelperRequest {
+    pub specification: LaunchSpec,
+    pub cgroup_path: PathBuf,
+}
+
+/// Authorization returned by the root-owned durable-intent lookup.
+///
+/// The helper compares the request to this value, canonicalizes the approved
+/// role path, and hashes the executable again immediately before launch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHelperAuthorization {
+    pub specification: LaunchSpec,
+    pub cgroup_path: PathBuf,
+    pub allowlisted_executables: BTreeMap<ComponentKind, PathBuf>,
+}
+
+impl LinuxHelperAuthorization {
+    /// Validate the closed helper authorization surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit error when the durable authorization is malformed,
+    /// has no role allowlist entry, or names an untrusted cgroup path.
+    pub fn validate(&self) -> Result<(), AdapterError> {
+        self.specification.validate()?;
+        if !self.cgroup_path.is_absolute() {
+            return Err(AdapterError::Invalid(
+                "Linux helper cgroup path must be absolute".to_owned(),
+            ));
+        }
+        let Some(approved) = self
+            .allowlisted_executables
+            .get(&self.specification.component)
+        else {
+            return Err(AdapterError::Unsupported(
+                "Linux helper role is not allowlisted".to_owned(),
+            ));
+        };
+        if !approved.is_absolute() {
+            return Err(AdapterError::Invalid(
+                "Linux helper allowlist path must be absolute".to_owned(),
+            ));
+        }
+        if self.specification.executable_sha256.len() != 64
+            || !self
+                .specification
+                .executable_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(AdapterError::Invalid(
+                "Linux helper executable digest is not SHA-256".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A helper process that has received its frame but not yet been released.
+///
+/// Dropping a pending launch kills the exact helper handle.  The cgroup owner
+/// must still remove the cgroup or use `cgroup.kill` when a post-release error
+/// occurs.
+pub(crate) struct PendingLaunch {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    launch_nonce: String,
+    timeout: Duration,
+    released: bool,
+}
+
+impl std::fmt::Debug for PendingLaunch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingLaunch")
+            .field("pid", &self.child.as_ref().map(Child::id))
+            .field("released", &self.released)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingLaunch {
+    /// Return the helper PID that must be assigned before release.
+    #[must_use]
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
+    /// Return the helper's nonce-bound launch timeout.
+    #[must_use]
+    pub(crate) const fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Send `GO` after the parent has proved exact cgroup membership.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the helper closed its anonymous pipe or the
+    /// nonce-bound control frame could not be written.
+    pub(crate) fn release_gate(&mut self) -> Result<(), AdapterError> {
+        if self.released {
+            return Err(AdapterError::Invalid(
+                "Linux helper release was already sent".to_owned(),
+            ));
+        }
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(AdapterError::Invalid(
+                "Linux helper stdin is unavailable".to_owned(),
+            ));
+        };
+        stdin
+            .write_all(GO_MAGIC)
+            .and_then(|()| put_string_io(stdin, &self.launch_nonce))
+            .map_err(|error| {
+                AdapterError::Io(format!("Linux helper GO handoff failed: {error}"))
+            })?;
+        self.released = true;
+        Ok(())
+    }
+
+    /// Consume the barrier and return the exact helper child handle.
+    ///
+    /// The helper is replaced in place by the target after the gate.  The
+    /// returned handle therefore remains authoritative for the target PID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the gate was not released or the child handle was
+    /// unexpectedly unavailable.
+    pub(crate) fn into_child(mut self) -> Result<Child, AdapterError> {
+        if !self.released {
+            return Err(AdapterError::Invalid(
+                "Linux helper cannot be consumed before GO".to_owned(),
+            ));
+        }
+        self.stdin.take();
+        self.child.take().ok_or_else(|| {
+            AdapterError::Unavailable("Linux helper child handle was lost".to_owned())
+        })
+    }
+}
+
+impl Drop for PendingLaunch {
+    fn drop(&mut self) {
+        self.stdin.take();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Trusted current-executable helper launcher.
+#[derive(Clone, Debug)]
+pub struct TrustedLinuxLauncher {
+    helper_executable: PathBuf,
+    helper_argument: String,
+    bootstrap: Option<LinuxHelperBootstrap>,
+    streams: LauncherStreams,
+    timeout: Duration,
+}
+
+impl TrustedLinuxLauncher {
+    /// Construct a launcher around a canonical trusted watchdog executable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Unavailable`] if the executable cannot be
+    /// canonicalized or is not a regular file.
+    pub fn new(helper_executable: impl Into<PathBuf>) -> Result<Self, AdapterError> {
+        let helper_executable = helper_executable.into();
+        let canonical = fs::canonicalize(&helper_executable).map_err(|error| {
+            AdapterError::Unavailable(format!("Linux helper executable is unavailable: {error}"))
+        })?;
+        let metadata = fs::metadata(&canonical).map_err(|error| {
+            AdapterError::Unavailable(format!("Linux helper metadata is unavailable: {error}"))
+        })?;
+        if !metadata.is_file() {
+            return Err(AdapterError::Invalid(
+                "Linux helper executable is not a regular file".to_owned(),
+            ));
+        }
+        Ok(Self {
+            helper_executable: canonical,
+            helper_argument: HELPER_ARGUMENT.to_owned(),
+            bootstrap: None,
+            streams: LauncherStreams::default(),
+            timeout: Duration::from_secs(10),
+        })
+    }
+
+    /// Construct a launcher from the executable containing the watchdog main.
+    ///
+    /// The root executable must dispatch [`helper_argument`] before normal CLI
+    /// parsing.  This constructor does not silently fall back to direct target
+    /// spawning when that dispatch is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit platform error when the current executable cannot
+    /// be trusted as a regular file.
+    pub fn current_executable() -> Result<Self, AdapterError> {
+        Self::new(env::current_exe().map_err(|error| {
+            AdapterError::Unavailable(format!("current Linux helper is unavailable: {error}"))
+        })?)
+    }
+
+    /// Set the bounded helper barrier timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Invalid`] for a zero or overlarge timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Result<Self, AdapterError> {
+        if timeout.is_zero() || timeout > MAX_TIMEOUT {
+            return Err(AdapterError::Invalid(
+                "Linux helper timeout is outside bounds".to_owned(),
+            ));
+        }
+        self.timeout = timeout;
+        Ok(self)
+    }
+
+    /// Set the caller-owned standard-stream policy.
+    #[must_use]
+    pub fn with_streams(mut self, streams: LauncherStreams) -> Self {
+        self.streams = streams;
+        self
+    }
+
+    /// Bind a protected configuration path to every helper invocation.
+    ///
+    /// The path is passed as a separate fixed argument, never accepted from
+    /// the launch frame.  A root-owned authorizer should compare this context
+    /// with its own configured path before opening a read-only durable store.
+    pub fn with_protected_config_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        self.bootstrap = Some(LinuxHelperBootstrap::new(path)?);
+        Ok(self)
+    }
+
+    /// Bind a previously validated helper bootstrap context.
+    #[must_use]
+    pub fn with_bootstrap(mut self, bootstrap: LinuxHelperBootstrap) -> Self {
+        self.bootstrap = Some(bootstrap);
+        self
+    }
+
+    /// Return the protected context bound to this launcher, if configured.
+    #[must_use]
+    pub fn bootstrap(&self) -> Option<&LinuxHelperBootstrap> {
+        self.bootstrap.as_ref()
+    }
+
+    /// Return the canonical helper executable path.
+    #[must_use]
+    pub fn helper_executable(&self) -> &Path {
+        &self.helper_executable
+    }
+
+    /// Spawn only the trusted helper and send its bounded request frame.
+    ///
+    /// The caller must assign [`PendingLaunch::pid`] to the exact durable
+    /// cgroup, verify membership, and call [`PendingLaunch::release_gate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit error for malformed launch data, an oversized
+    /// frame, or helper process/pipe failure.
+    pub(crate) fn prepare(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+    ) -> Result<PendingLaunch, AdapterError> {
+        specification.validate()?;
+        let frame = encode_frame(specification, cgroup_path)?;
+        let mut command = Command::new(&self.helper_executable);
+        command.arg(&self.helper_argument);
+        if let Some(bootstrap) = &self.bootstrap {
+            command
+                .arg(PROTECTED_CONFIG_ARGUMENT)
+                .arg(bootstrap.protected_config_path());
+        }
+        command
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(self.streams.stdout.into_stdio())
+            .stderr(self.streams.stderr.into_stdio());
+        let mut child = command
+            .spawn()
+            .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AdapterError::Io(
+                "Linux helper did not provide anonymous stdin".to_owned(),
+            ));
+        };
+        if let Err(error) = stdin.write_all(&frame) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AdapterError::Io(format!(
+                "Linux helper request handoff failed: {error}"
+            )));
+        }
+        Ok(PendingLaunch {
+            child: Some(child),
+            stdin: Some(stdin),
+            launch_nonce: specification.launch_nonce.clone(),
+            timeout: self.timeout,
+            released: false,
+        })
+    }
+}
+
+/// Return true only for the exact hidden helper invocation.
+#[must_use]
+pub fn helper_invocation_requested() -> bool {
+    let mut arguments = env::args();
+    let _ = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|value| value == HELPER_ARGUMENT)
+}
+
+fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError> {
+    let mut arguments = env::args();
+    let _ = arguments.next();
+    let Some(argument) = arguments.next() else {
+        return Ok(None);
+    };
+    if argument != HELPER_ARGUMENT {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let Some(config_argument) = arguments.next() else {
+        return Ok(None);
+    };
+    if config_argument != PROTECTED_CONFIG_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid bootstrap argument".to_owned(),
+        ));
+    }
+    let path = arguments.next().ok_or_else(|| {
+        AdapterError::Invalid("Linux helper protected config path is missing".to_owned())
+    })?;
+    if arguments.next().is_some() {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has unexpected arguments".to_owned(),
+        ));
+    }
+    LinuxHelperBootstrap::new(path).map(Some)
+}
+
+/// Run the hidden helper after root code has authorized its frame.
+///
+/// The authorizer is deliberately called after the frame is decoded and must
+/// resolve the launch nonce against durable intent.  It must not authorize a
+/// request solely because the executable or role is familiar.
+///
+/// # Errors
+///
+/// Returns an explicit error for malformed input, authorization mismatch,
+/// cgroup mismatch, GO timeout/nonce mismatch, or target launch failure.
+pub fn run_hidden_helper_with_authorizer<F>(authorizer: F) -> Result<i32, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    if parse_helper_bootstrap()?.is_some() {
+        return Err(AdapterError::Invalid(
+            "Linux helper protected bootstrap requires the bootstrap authorizer API".to_owned(),
+        ));
+    }
+    run_hidden_helper_core(authorizer)
+}
+
+/// Run the hidden helper with the separately supplied protected-config
+/// context.  The authorizer receives both the decoded frame and this context,
+/// allowing it to perform a read-only launch-intent lookup against the exact
+/// root-configured store rather than trusting a path from the frame.
+pub fn run_hidden_helper_with_bootstrap_authorizer<F>(authorizer: F) -> Result<i32, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let bootstrap = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
+        )
+    })?;
+    run_hidden_helper_core(|request| authorizer(request, &bootstrap))
+}
+
+fn run_hidden_helper_core<F>(authorizer: F) -> Result<i32, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    let (frame_rx, go_rx) = spawn_protocol_reader();
+    let started = Instant::now();
+    let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    let authorization = authorizer(&request)?;
+    authorize_request(&request, &authorization)?;
+    verify_current_cgroup(&authorization.cgroup_path)?;
+    let go = recv_bounded(&go_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    if go != request.specification.launch_nonce {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper GO nonce does not match the authorized launch".to_owned(),
+        ));
+    }
+    verify_current_cgroup(&authorization.cgroup_path)?;
+    spawn_authorized_target(&authorization.specification).map(|()| 0)
+}
+
+/// Run the hidden helper if the current process was invoked in helper mode.
+///
+/// This convenience function is intended for the real watchdog `main`: when
+/// it returns `Ok(false)`, normal CLI parsing may continue.  The authorizer
+/// remains root-owned so this module cannot invent durable intent.
+///
+/// # Errors
+///
+/// Returns the same bounded helper errors as
+/// [`run_hidden_helper_with_authorizer`].
+pub fn run_hidden_helper_if_requested<F>(authorizer: F) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_authorizer(authorizer).map(Some)
+}
+
+/// Run the hidden helper with protected bootstrap context when requested.
+pub fn run_hidden_helper_if_requested_with_bootstrap_authorizer<F>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_bootstrap_authorizer(authorizer).map(Some)
+}
+
+fn spawn_protocol_reader() -> (
+    Receiver<Result<LinuxHelperRequest, AdapterError>>,
+    Receiver<Result<String, AdapterError>>,
+) {
+    let (frame_tx, frame_rx) = mpsc::sync_channel(1);
+    let (go_tx, go_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut stdin = io::stdin();
+        let result = read_frame(&mut stdin);
+        match result {
+            Ok(request) => {
+                if frame_tx.send(Ok(request)).is_err() {
+                    return;
+                }
+                let go = read_go(&mut stdin);
+                let _ = go_tx.send(go);
+            }
+            Err(error) => {
+                let _ = frame_tx.send(Err(error));
+            }
+        }
+    });
+    (frame_rx, go_rx)
+}
+
+fn recv_bounded<T>(
+    receiver: &Receiver<Result<T, AdapterError>>,
+    timeout: Duration,
+) -> Result<Result<T, AdapterError>, AdapterError> {
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|error| AdapterError::Timeout(format!("Linux helper barrier timed out: {error}")))
+}
+
+fn remaining_timeout(started: Instant, limit: Duration) -> Duration {
+    limit.checked_sub(started.elapsed()).unwrap_or_default()
+}
+
+fn read_frame(reader: &mut impl Read) -> Result<LinuxHelperRequest, AdapterError> {
+    let mut length = [0_u8; 4];
+    reader
+        .read_exact(&mut length)
+        .map_err(|error| protocol_io(&error))?;
+    let length = u32::from_le_bytes(length);
+    let length = usize::try_from(length)
+        .map_err(|_| AdapterError::Invalid("Linux helper frame length overflow".to_owned()))?;
+    if length == 0 || length > MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame exceeds bounds".to_owned(),
+        ));
+    }
+    let mut payload = vec![0_u8; length];
+    reader
+        .read_exact(&mut payload)
+        .map_err(|error| protocol_io(&error))?;
+    decode_frame(&payload)
+}
+
+fn read_go(reader: &mut impl Read) -> Result<String, AdapterError> {
+    let mut magic = [0_u8; GO_MAGIC.len()];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| protocol_io(&error))?;
+    if &magic != GO_MAGIC {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper received an invalid GO marker".to_owned(),
+        ));
+    }
+    read_string(reader, MAX_FIELD_BYTES)
+}
+
+fn encode_frame(specification: &LaunchSpec, cgroup_path: &Path) -> Result<Vec<u8>, AdapterError> {
+    if !cgroup_path.is_absolute() {
+        return Err(AdapterError::Invalid(
+            "Linux helper cgroup path must be absolute".to_owned(),
+        ));
+    }
+    let mut payload = Vec::with_capacity(1024);
+    payload.extend_from_slice(FRAME_MAGIC);
+    payload.push(FRAME_VERSION);
+    payload.push(component_code(specification.component));
+    match specification.session {
+        SessionSelector::ActiveUser => payload.push(0),
+        SessionSelector::Explicit(session) => {
+            payload.push(1);
+            payload.extend_from_slice(&session.to_le_bytes());
+        }
+    }
+    payload.push(0);
+    put_string(&mut payload, &specification.deployment_id)?;
+    put_string(&mut payload, &specification.instance_id)?;
+    put_string(&mut payload, &specification.incarnation)?;
+    put_string(&mut payload, &specification.launch_nonce)?;
+    put_path(&mut payload, cgroup_path)?;
+    put_path(&mut payload, &specification.executable)?;
+    put_string(&mut payload, &specification.executable_sha256)?;
+    payload.extend_from_slice(
+        &u64::try_from(specification.graceful_timeout.as_millis())
+            .map_err(|_| AdapterError::Invalid("Linux graceful timeout overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    payload.extend_from_slice(
+        &u64::try_from(specification.force_timeout.as_millis())
+            .map_err(|_| AdapterError::Invalid("Linux force timeout overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    match specification.working_directory.as_deref() {
+        Some(path) => {
+            payload.push(1);
+            put_path(&mut payload, path)?;
+        }
+        None => payload.push(0),
+    }
+    put_count(&mut payload, specification.arguments.len(), MAX_ARGUMENTS)?;
+    for argument in &specification.arguments {
+        put_string(&mut payload, argument)?;
+    }
+    put_count(
+        &mut payload,
+        specification.environment.len(),
+        MAX_ENVIRONMENT,
+    )?;
+    for (name, value) in &specification.environment {
+        put_string(&mut payload, name)?;
+        put_string(&mut payload, value)?;
+    }
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame exceeds bounds".to_owned(),
+        ));
+    }
+    let mut frame = Vec::with_capacity(payload.len() + 4);
+    frame.extend_from_slice(
+        &u32::try_from(payload.len())
+            .map_err(|_| AdapterError::Invalid("Linux helper frame length overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+fn decode_frame(payload: &[u8]) -> Result<LinuxHelperRequest, AdapterError> {
+    let mut cursor = Cursor::new(payload);
+    let mut magic = [0_u8; FRAME_MAGIC.len()];
+    cursor
+        .read_exact(&mut magic)
+        .map_err(|error| protocol_io(&error))?;
+    if &magic != FRAME_MAGIC {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame magic is invalid".to_owned(),
+        ));
+    }
+    let version = read_byte(&mut cursor)?;
+    if version != FRAME_VERSION {
+        return Err(AdapterError::Unsupported(
+            "Linux helper frame version is unsupported".to_owned(),
+        ));
+    }
+    let component = component_from_code(read_byte(&mut cursor)?)?;
+    let session_code = read_byte(&mut cursor)?;
+    let session = match session_code {
+        0 => SessionSelector::ActiveUser,
+        1 => SessionSelector::Explicit(read_u32(&mut cursor)?),
+        _ => {
+            return Err(AdapterError::Invalid(
+                "Linux helper session selector is invalid".to_owned(),
+            ));
+        }
+    };
+    let reserved = read_byte(&mut cursor)?;
+    if reserved != 0 {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame reserved byte is nonzero".to_owned(),
+        ));
+    }
+    let deployment_id = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let instance_id = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let incarnation = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let launch_nonce = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let cgroup_path = read_path(&mut cursor)?;
+    let executable = read_path(&mut cursor)?;
+    let executable_sha256 = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let graceful_timeout = Duration::from_millis(read_u64(&mut cursor)?);
+    let force_timeout = Duration::from_millis(read_u64(&mut cursor)?);
+    let working_directory = match read_byte(&mut cursor)? {
+        0 => None,
+        1 => Some(read_path(&mut cursor)?),
+        _ => {
+            return Err(AdapterError::Invalid(
+                "Linux helper working-directory marker is invalid".to_owned(),
+            ));
+        }
+    };
+    let argument_count = read_count(&mut cursor, MAX_ARGUMENTS)?;
+    let mut arguments = Vec::with_capacity(argument_count);
+    for _ in 0..argument_count {
+        arguments.push(read_string(&mut cursor, MAX_FIELD_BYTES)?);
+    }
+    let environment_count = read_count(&mut cursor, MAX_ENVIRONMENT)?;
+    let mut environment = Vec::with_capacity(environment_count);
+    for _ in 0..environment_count {
+        environment.push((
+            read_string(&mut cursor, MAX_FIELD_BYTES)?,
+            read_string(&mut cursor, MAX_FIELD_BYTES)?,
+        ));
+    }
+    if cursor.position() != u64::try_from(payload.len()).unwrap_or(u64::MAX) {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame contains trailing bytes".to_owned(),
+        ));
+    }
+    let specification = LaunchSpec {
+        deployment_id,
+        instance_id,
+        component,
+        incarnation,
+        launch_nonce,
+        executable,
+        executable_sha256,
+        arguments,
+        working_directory,
+        environment,
+        session,
+        graceful_timeout,
+        force_timeout,
+    };
+    specification.validate()?;
+    Ok(LinuxHelperRequest {
+        specification,
+        cgroup_path,
+    })
+}
+
+fn authorize_request(
+    request: &LinuxHelperRequest,
+    authorization: &LinuxHelperAuthorization,
+) -> Result<(), AdapterError> {
+    authorization.validate()?;
+    if request.specification != authorization.specification
+        || request.cgroup_path != authorization.cgroup_path
+    {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper request differs from durable authorization".to_owned(),
+        ));
+    }
+    let approved = fs::canonicalize(
+        authorization
+            .allowlisted_executables
+            .get(&request.specification.component)
+            .ok_or_else(|| {
+                AdapterError::Unsupported("Linux helper role is not allowlisted".to_owned())
+            })?,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!("Linux helper allowlist unavailable: {error}"))
+    })?;
+    let requested = fs::canonicalize(&request.specification.executable).map_err(|error| {
+        AdapterError::Invalid(format!(
+            "Linux helper executable cannot be resolved: {error}"
+        ))
+    })?;
+    if approved != requested {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper executable is outside the role allowlist".to_owned(),
+        ));
+    }
+    let digest = hash_file(&requested)?;
+    if digest != request.specification.executable_sha256 {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper executable digest changed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn spawn_authorized_target(specification: &LaunchSpec) -> Result<(), AdapterError> {
+    if specification.component == ComponentKind::HostBroker {
+        return Err(AdapterError::Unsupported(
+            "Linux helper does not launch graphical HostBroker sessions".to_owned(),
+        ));
+    }
+    if let SessionSelector::Explicit(session) = specification.session
+        && session != 0
+    {
+        return Err(AdapterError::Unsupported(
+            "Linux helper does not select Windows user sessions".to_owned(),
+        ));
+    }
+    let executable = fs::canonicalize(&specification.executable).map_err(|error| {
+        AdapterError::Invalid(format!("Linux helper target cannot be resolved: {error}"))
+    })?;
+    if hash_file(&executable)? != specification.executable_sha256 {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper target digest changed before launch".to_owned(),
+        ));
+    }
+    let mut command = Command::new(&executable);
+    command.args(&specification.arguments).env_clear().envs(
+        specification
+            .environment
+            .iter()
+            .map(|(name, value)| (name, value)),
+    );
+    if let Some(path) = specification.working_directory.as_deref() {
+        let canonical = fs::canonicalize(path).map_err(|error| {
+            AdapterError::Invalid(format!(
+                "Linux helper working directory is invalid: {error}"
+            ))
+        })?;
+        command.current_dir(canonical);
+    }
+    let error = command.exec();
+    Err(AdapterError::Io(format!(
+        "Linux target exec failed: {error}"
+    )))
+}
+
+fn verify_current_cgroup(expected: &Path) -> Result<(), AdapterError> {
+    let expected = fs::canonicalize(expected).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux helper cgroup cannot be resolved: {error}"))
+    })?;
+    let current = discover_current_cgroup()?;
+    if current != expected {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper is not in the authorized cgroup".to_owned(),
+        ));
+    }
+    let pid = std::process::id();
+    let pids = fs::read_to_string(expected.join("cgroup.procs")).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux helper cgroup membership is unreadable: {error}"
+        ))
+    })?;
+    if !pids
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .any(|member| member == pid)
+    {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper PID is not present in the authorized cgroup".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn discover_current_cgroup() -> Result<PathBuf, AdapterError> {
+    let mountpoint = fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("cgroup mountinfo unavailable: {error}"))
+        })?
+        .lines()
+        .find_map(parse_cgroup2_mountpoint)
+        .ok_or_else(|| AdapterError::Unavailable("no cgroup v2 mount is available".to_owned()))?;
+    let relative = fs::read_to_string("/proc/self/cgroup")
+        .map_err(|error| AdapterError::Unavailable(format!("process cgroup unavailable: {error}")))?
+        .lines()
+        .find_map(|line| line.strip_prefix("0::").map(str::to_owned))
+        .ok_or_else(|| AdapterError::Unavailable("process has no cgroup v2 path".to_owned()))?;
+    let relative = relative.trim_start_matches('/');
+    if relative
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(AdapterError::Unavailable(
+            "process cgroup path is malformed".to_owned(),
+        ));
+    }
+    let path = if relative.is_empty() {
+        mountpoint
+    } else {
+        mountpoint.join(relative)
+    };
+    fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!("current cgroup cannot be resolved: {error}"))
+    })
+}
+
+fn parse_cgroup2_mountpoint(line: &str) -> Option<PathBuf> {
+    let mut sections = line.split(" - ");
+    let pre = sections.next()?;
+    let post = sections.next()?;
+    if post.split_whitespace().next()? != "cgroup2" {
+        return None;
+    }
+    let fields = pre.split_whitespace().collect::<Vec<_>>();
+    fields
+        .get(4)
+        .map(|field| PathBuf::from(unescape_mountinfo(field)))
+}
+
+fn unescape_mountinfo(value: &str) -> String {
+    value
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\134", "\\")
+}
+
+fn hash_file(path: &Path) -> Result<String, AdapterError> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        AdapterError::Unavailable(format!("cannot inspect Linux executable bytes: {error}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux executable is not a regular file".to_owned(),
+        ));
+    }
+    if metadata.len() > MAX_HASH_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux executable exceeds the hash size bound".to_owned(),
+        ));
+    }
+    let mut reader = fs::File::open(path).map_err(|error| {
+        AdapterError::Unavailable(format!("cannot open Linux executable bytes: {error}"))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| AdapterError::Io(format!("cannot hash Linux executable: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn protocol_io(error: &io::Error) -> AdapterError {
+    if error.kind() == io::ErrorKind::UnexpectedEof {
+        AdapterError::Unavailable("Linux helper pipe closed before the next frame".to_owned())
+    } else {
+        AdapterError::Io(format!("Linux helper protocol I/O failed: {error}"))
+    }
+}
+
+fn component_code(component: ComponentKind) -> u8 {
+    match component {
+        ComponentKind::Gateway => 1,
+        ComponentKind::Harness => 2,
+        ComponentKind::HostBroker => 3,
+        ComponentKind::Synthetic => 4,
+    }
+}
+
+fn component_from_code(code: u8) -> Result<ComponentKind, AdapterError> {
+    match code {
+        1 => Ok(ComponentKind::Gateway),
+        2 => Ok(ComponentKind::Harness),
+        3 => Ok(ComponentKind::HostBroker),
+        4 => Ok(ComponentKind::Synthetic),
+        _ => Err(AdapterError::Unsupported(
+            "Linux helper component role is unsupported".to_owned(),
+        )),
+    }
+}
+
+fn put_count(bytes: &mut Vec<u8>, count: usize, maximum: usize) -> Result<(), AdapterError> {
+    if count > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper collection exceeds bounds".to_owned(),
+        ));
+    }
+    bytes.extend_from_slice(
+        &u16::try_from(count)
+            .map_err(|_| {
+                AdapterError::Invalid("Linux helper collection length overflow".to_owned())
+            })?
+            .to_le_bytes(),
+    );
+    Ok(())
+}
+
+fn read_count(reader: &mut impl Read, maximum: usize) -> Result<usize, AdapterError> {
+    let mut bytes = [0_u8; 2];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    let count = usize::from(u16::from_le_bytes(bytes));
+    if count > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper collection exceeds bounds".to_owned(),
+        ));
+    }
+    Ok(count)
+}
+
+fn put_path(bytes: &mut Vec<u8>, path: &Path) -> Result<(), AdapterError> {
+    let value = path.to_str().ok_or_else(|| {
+        AdapterError::Invalid("Linux helper paths must be valid UTF-8".to_owned())
+    })?;
+    put_string(bytes, value)
+}
+
+fn read_path(reader: &mut impl Read) -> Result<PathBuf, AdapterError> {
+    Ok(PathBuf::from(read_string(reader, MAX_FIELD_BYTES)?))
+}
+
+fn put_string(bytes: &mut Vec<u8>, value: &str) -> Result<(), AdapterError> {
+    if value.is_empty() || value.len() > MAX_FIELD_BYTES || value.contains('\0') {
+        return Err(AdapterError::Invalid(
+            "Linux helper string is outside bounds".to_owned(),
+        ));
+    }
+    bytes.extend_from_slice(
+        &u16::try_from(value.len())
+            .map_err(|_| AdapterError::Invalid("Linux helper string length overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn put_string_io(writer: &mut impl Write, value: &str) -> io::Result<()> {
+    let length = u16::try_from(value.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "string is too long"))?;
+    writer.write_all(&length.to_le_bytes())?;
+    writer.write_all(value.as_bytes())
+}
+
+fn read_string(reader: &mut impl Read, maximum: usize) -> Result<String, AdapterError> {
+    let mut length = [0_u8; 2];
+    reader
+        .read_exact(&mut length)
+        .map_err(|error| protocol_io(&error))?;
+    let length = usize::from(u16::from_le_bytes(length));
+    if length == 0 || length > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper string is outside bounds".to_owned(),
+        ));
+    }
+    let mut bytes = vec![0_u8; length];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    String::from_utf8(bytes)
+        .map_err(|_| AdapterError::Invalid("Linux helper string is not UTF-8".to_owned()))
+}
+
+fn read_byte(reader: &mut impl Read) -> Result<u8, AdapterError> {
+    let mut byte = [0_u8; 1];
+    reader
+        .read_exact(&mut byte)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(byte[0])
+}
+
+fn read_u64(reader: &mut impl Read) -> Result<u64, AdapterError> {
+    let mut bytes = [0_u8; 8];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_u32(reader: &mut impl Read) -> Result<u32, AdapterError> {
+    let mut bytes = [0_u8; 4];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn specification() -> LaunchSpec {
+        LaunchSpec {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "instance".to_owned(),
+            component: ComponentKind::Synthetic,
+            incarnation: "incarnation".to_owned(),
+            launch_nonce: "nonce-1".to_owned(),
+            executable: PathBuf::from("/bin/true"),
+            executable_sha256: "a".repeat(64),
+            arguments: vec!["--fixture".to_owned()],
+            working_directory: None,
+            environment: vec![("PATH".to_owned(), "/usr/bin".to_owned())],
+            session: SessionSelector::Explicit(0),
+            graceful_timeout: Duration::from_secs(1),
+            force_timeout: Duration::from_secs(2),
+        }
+    }
+
+    #[test]
+    fn frame_round_trip_preserves_exact_spec_and_cgroup() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let specification = specification();
+        let path = PathBuf::from("/sys/fs/cgroup/ascension-test");
+        let frame = encode_frame(&specification, &path)?;
+        let payload_length = u32::from_le_bytes(frame[..4].try_into()?);
+        assert_eq!(usize::try_from(payload_length)?, frame.len() - 4);
+        let request = decode_frame(&frame[4..])?;
+        assert_eq!(request.specification, specification);
+        assert_eq!(request.cgroup_path, path);
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_nonce_go_is_rejected_before_target_spawn() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(GO_MAGIC);
+        assert!(put_string_io(&mut bytes, "wrong").is_ok());
+        let mut cursor = Cursor::new(bytes);
+        let result = read_go(&mut cursor);
+        assert_eq!(result.as_deref(), Ok("wrong"));
+        assert_ne!(result.as_deref(), Ok("nonce-1"));
+    }
+
+    #[test]
+    fn eof_before_go_is_a_hard_failure() {
+        let mut cursor = Cursor::new(Vec::<u8>::new());
+        assert!(matches!(
+            read_go(&mut cursor),
+            Err(AdapterError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn unsupported_component_cannot_be_authorized() {
+        let mut specification = specification();
+        specification.component = ComponentKind::HostBroker;
+        let authorization = LinuxHelperAuthorization {
+            specification,
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+            allowlisted_executables: BTreeMap::new(),
+        };
+        assert!(matches!(
+            authorization.validate(),
+            Err(AdapterError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn durable_authorization_mismatch_is_rejected_before_hashing() {
+        let specification = specification();
+        let request = LinuxHelperRequest {
+            specification: specification.clone(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let mut authorized = specification;
+        authorized.launch_nonce = "different-nonce".to_owned();
+        let mut allowlist = BTreeMap::new();
+        allowlist.insert(ComponentKind::Synthetic, PathBuf::from("/bin/true"));
+        let authorization = LinuxHelperAuthorization {
+            specification: authorized,
+            cgroup_path: request.cgroup_path.clone(),
+            allowlisted_executables: allowlist,
+        };
+        assert!(matches!(
+            authorize_request(&request, &authorization),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn timeout_is_bounded() {
+        let result = TrustedLinuxLauncher::new("/bin/true")
+            .and_then(|launcher| launcher.with_timeout(Duration::from_secs(16)));
+        assert!(result.is_err());
+    }
+}

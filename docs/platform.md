@@ -1,7 +1,8 @@
 # Platform operations contract
 
-Status: implementation in progress. Linux notification and packaging sources
-are present; native Windows and live service evidence remain separate gates.
+Status: implementation in progress. Linux notification, bounded launch
+containment, and packaging sources are present; native Windows and live service
+evidence remain separate gates.
 
 ## Ownership boundary
 
@@ -18,12 +19,28 @@ containment authority, not enumerate by process name. Identity mismatch or
 ambiguous orphan ownership is quarantined; force stop applies only to the
 verified containment owner and descendants.
 
+On Linux, `LinuxProcessAdapter` creates the durable cgroup before starting the
+trusted watchdog helper. `TrustedLinuxLauncher` sends one bounded launch frame,
+the adapter assigns and verifies the helper PID in that cgroup, and only then
+sends the nonce-bound release marker. The helper rechecks root-owned durable
+authorization, cgroup membership, the role allowlist, and the executable hash
+before replacing itself with the approved target via `exec`. A helper EOF,
+nonce mismatch, timeout, or failed target launch is a hard failure and cleans
+the cgroup; there is no direct-spawn fallback. Persist the result of
+`LinuxProcessAdapter::planned_containment_for` before effects and pass it to
+`launch_with_planned_containment` so a retry cannot silently choose a new
+containment authority. When a protected config path is available, bind it with
+`LinuxHelperBootstrap`/`TrustedLinuxLauncher::with_bootstrap` and use
+`run_hidden_helper_with_bootstrap_authorizer` from the executable entrypoint.
+
 ## Linux service
 
 `deploy/linux/ascension-watchdog.service` uses `Type=notify`, finite startup and
-stop deadlines, `WatchdogSec`, `KillMode=control-group`, a dedicated account,
-and protected state. The watchdog must call `SystemdNotifier::progress` from the
-actual reconciliation loop. The first increasing progress sequence emits
+stop deadlines, `WatchdogSec`, `KillMode=control-group`, `Delegate=yes`, a
+dedicated account, and protected state. It intentionally has no reload action:
+the daemon has no unreviewed signal-based reconfiguration path. The watchdog
+must call `SystemdNotifier::progress` from the actual reconciliation loop. The
+first increasing progress sequence emits
 `READY=1`; later increasing sequences emit `WATCHDOG=1` only when systemd has
 provided `WATCHDOG_USEC`. Repeated or stalled sequences emit no heartbeat.
 `STOPPING=1` is idempotent. Missing `NOTIFY_SOCKET` is reported as an explicit

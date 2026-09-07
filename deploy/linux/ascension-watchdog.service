@@ -9,7 +9,6 @@ NotifyAccess=main
 User=ascension-watchdog
 Group=ascension-watchdog
 ExecStart=/opt/ascension-watchdog/current/watchdog daemon --config /etc/ascension-watchdog/watchdog.json
-ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s

@@ -9,6 +9,8 @@ const MAX_ARGUMENT_BYTES: usize = 8 * 1024;
 const MAX_ENVIRONMENT: usize = 64;
 const MAX_ENVIRONMENT_BYTES: usize = 8 * 1024;
 const MAX_PIPE_NAME_BYTES: usize = 192;
+const MAX_COMMAND_LINE_UNITS: usize = 32_767;
+const MAX_ENVIRONMENT_UNITS: usize = 32_767;
 
 /// Fixed roles the broker is allowed to supervise.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -23,6 +25,9 @@ pub enum ComponentKind {
 /// capture is represented by this type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionSelector {
+    /// Keep a non-graphical component in the service's current session.
+    /// This is normally session 0 for an SCM service and never performs login.
+    CurrentService,
     ActiveUser,
     Explicit(u32),
 }
@@ -177,6 +182,8 @@ pub struct ProcessIdentity {
     pub creation_time_100ns: u64,
     pub launch_nonce: String,
     pub executable: PathBuf,
+    /// SHA-256 of the immutable executable file held by the owner.
+    pub executable_sha256: String,
     pub session_id: u32,
 }
 
@@ -203,6 +210,7 @@ impl WindowsLaunchSpec {
     ///
     /// Returns [`PlatformError::Invalid`] when a path, argument, environment,
     /// session, or timeout is outside the configured bounds.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self, config: &WindowsPlatformConfig) -> Result<(), PlatformError> {
         config.validate()?;
         validate_id("launch nonce", &self.launch_nonce)?;
@@ -234,6 +242,51 @@ impl WindowsLaunchSpec {
                 "Windows environment exceeds bounds".to_owned(),
             ));
         }
+        // CreateProcessW has a UTF-16 command-line bound.  Account for the
+        // worst-case quote/backslash expansion here, before any native call;
+        // the native builder repeats the exact check after Windows quoting.
+        let executable_units = self
+            .executable
+            .to_string_lossy()
+            .encode_utf16()
+            .count()
+            .saturating_mul(2)
+            .saturating_add(4);
+        let command_units = self
+            .arguments
+            .iter()
+            .try_fold(executable_units, |total, argument| {
+                total
+                    .checked_add(
+                        argument
+                            .encode_utf16()
+                            .count()
+                            .saturating_mul(2)
+                            .saturating_add(4),
+                    )
+                    .ok_or(())
+            });
+        if command_units.map_or(true, |units| units > MAX_COMMAND_LINE_UNITS) {
+            return Err(PlatformError::Invalid(
+                "Windows command line exceeds the CreateProcessW bound".to_owned(),
+            ));
+        }
+        let environment_units =
+            self.environment
+                .iter()
+                .try_fold(1_usize, |total, (name, value)| {
+                    total
+                        .checked_add(name.encode_utf16().count())
+                        .and_then(|total| total.checked_add(1))
+                        .and_then(|total| total.checked_add(value.encode_utf16().count()))
+                        .and_then(|total| total.checked_add(1))
+                        .ok_or(())
+                });
+        if environment_units.map_or(true, |units| units > MAX_ENVIRONMENT_UNITS) {
+            return Err(PlatformError::Invalid(
+                "Windows environment block exceeds the CreateProcessW bound".to_owned(),
+            ));
+        }
         if self.graceful_timeout_ms == 0
             || self.force_timeout_ms == 0
             || self.force_timeout_ms < self.graceful_timeout_ms
@@ -242,12 +295,23 @@ impl WindowsLaunchSpec {
                 "Windows stop deadlines are invalid".to_owned(),
             ));
         }
-        if let SessionSelector::Explicit(session) = self.session
-            && session == 0
-        {
-            return Err(PlatformError::Invalid(
-                "Windows session number is invalid".to_owned(),
-            ));
+        match (self.component, self.session) {
+            (ComponentKind::HostBroker, SessionSelector::ActiveUser)
+            | (
+                ComponentKind::Gateway | ComponentKind::Harness | ComponentKind::Synthetic,
+                SessionSelector::CurrentService | SessionSelector::Explicit(_),
+            ) => {}
+            (ComponentKind::HostBroker, _) => {
+                return Err(PlatformError::Unsupported(
+                    "graphical HostBroker requires an approved active user session".to_owned(),
+                ));
+            }
+            (_, SessionSelector::ActiveUser) => {
+                return Err(PlatformError::Unsupported(
+                    "background Windows components cannot target the interactive user session"
+                        .to_owned(),
+                ));
+            }
         }
         Ok(())
     }

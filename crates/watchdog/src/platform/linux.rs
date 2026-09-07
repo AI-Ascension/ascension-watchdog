@@ -57,6 +57,9 @@ impl SystemdNotifier {
             return Err("abstract systemd notify sockets are not enabled in this build".to_owned());
         }
         let socket = UnixDatagram::unbound().map_err(|error| format!("notify socket: {error}"))?;
+        socket
+            .set_nonblocking(true)
+            .map_err(|error| format!("notify socket nonblocking mode: {error}"))?;
         Ok(Self {
             socket: Some(socket),
             socket_path: Some(path.to_owned()),
@@ -96,7 +99,6 @@ impl SystemdNotifier {
         let mut fields = Vec::new();
         if !self.ready_sent {
             fields.push("READY=1");
-            self.ready_sent = true;
         }
         if self.watchdog_interval.is_some() {
             fields.push("WATCHDOG=1");
@@ -130,10 +132,13 @@ impl SystemdNotifier {
         let (Some(socket), Some(path)) = (&self.socket, &self.socket_path) else {
             return Ok(NotificationResult::Disabled);
         };
-        socket
-            .send_to(message.as_bytes(), path)
-            .map_err(|error| format!("systemd notification failed: {error}"))?;
-        Ok(NotificationResult::Sent)
+        match socket.send_to(message.as_bytes(), path) {
+            Ok(_) => Ok(NotificationResult::Sent),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(NotificationResult::Suppressed)
+            }
+            Err(error) => Err(format!("systemd notification failed: {error}")),
+        }
     }
 }
 
@@ -239,6 +244,26 @@ mod tests {
             notifier.progress(1, "no-systemd")?,
             NotificationResult::Disabled
         );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_ready_send_does_not_poison_retry() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("notify.sock");
+        let mut notifier = SystemdNotifier::from_path(&path, None)?;
+        assert!(notifier.progress(1, "first-attempt").is_err());
+
+        let receiver = UnixDatagram::bind(&path)?;
+        assert_eq!(
+            notifier.progress(1, "retry-after-bind")?,
+            NotificationResult::Sent
+        );
+        let mut bytes = [0_u8; MAX_MESSAGE_BYTES];
+        let count = receiver.recv(&mut bytes)?;
+        let message = std::str::from_utf8(&bytes[..count])?;
+        assert!(message.contains("READY=1\n"));
+        assert!(message.contains("retry-after-bind"));
         Ok(())
     }
 }
