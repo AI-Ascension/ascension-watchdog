@@ -219,6 +219,13 @@ fn assert_schema(validator: &Validator, value: &Value) {
     }
 }
 
+fn with_lease(mut request: Value, lease: &Value) -> Value {
+    for field in ["instance_id", "lease_id", "lease_epoch"] {
+        request[field] = lease[field].clone();
+    }
+    request
+}
+
 #[test]
 fn newline_runtime_queue_guard_and_recovery_are_schema_valid()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -229,6 +236,10 @@ fn newline_runtime_queue_guard_and_recovery_are_schema_valid()
         .build(&schema)?;
     let server = RunningServer::start()?;
 
+    let lease = bootstrap(&Client::new(server.address))?;
+    let envelope = |kind, generation, state_id, operation_id| {
+        with_lease(envelope(kind, generation, state_id, operation_id), &lease)
+    };
     let state_request = envelope("state_request", 0, None, None);
     let state_response = send_raw(server.address, &state_request)?;
     assert_schema(&validator, &state_response);
@@ -324,6 +335,10 @@ fn http_runtime_action_and_wait_use_the_same_durable_queue()
         .should_validate_formats(true)
         .build(&schema)?;
     let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let envelope = |kind, generation, state_id, operation_id| {
+        with_lease(envelope(kind, generation, state_id, operation_id), &lease)
+    };
     let operation_id = "http-operation-1";
     let mut action_request = envelope(
         "dispatch_action_request",
@@ -357,6 +372,33 @@ fn http_runtime_action_and_wait_use_the_same_durable_queue()
     assert_schema(&validator, &settled);
     assert_eq!(settled["status"], "settled");
     assert_eq!(settled["generation"], 1);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn http_runtime_cannot_create_its_own_mutation_authority() -> Result<(), Box<dyn std::error::Error>>
+{
+    let server = RunningServer::start()?;
+    let mut request = envelope(
+        "dispatch_action_request",
+        0,
+        Some("unapproved-state"),
+        Some("unapproved-operation"),
+    );
+    request["action"] = json!({
+        "action_id":"action-end-turn", "action":{"kind":"end_turn"}
+    });
+    let (status, _) = send_http(server.address, "POST", "/api/v3/runtime/action", &request)?;
+    assert_eq!(status, 409);
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let rows: (i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM runtime_sessions), (SELECT COUNT(*) FROM runtime_operations)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(rows, (0, 0));
+    drop(connection);
     server.stop()?;
     Ok(())
 }
@@ -409,8 +451,21 @@ fn http_runtime_rejects_queued_old_lease_after_authority_rotation()
         status, 409,
         "queued runtime work must not execute after authority rotation: {settled}"
     );
-    assert_eq!(settled["status"], "rejected");
+    // The frozen wait contract reports blocked progress as unknown, never as
+    // settlement or as proof of non-execution from an HTTP status alone.
+    assert_eq!(settled["status"], "unknown");
+    assert_eq!(settled["wait_outcome"], "recovery_required");
     assert_eq!(settled["error_code"], "stale_lease");
+    let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
+    assert_schema(&jsonschema::validator_for(&schema)?, &settled);
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let durable: (String, i64) = connection.query_row(
+        "SELECT o.status,s.generation FROM runtime_operations o JOIN runtime_sessions s ON o.session_id=s.session_id WHERE o.operation_id='stale-operation'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(durable, ("ADMITTED".to_owned(), 0));
+    drop(connection);
     server.stop()?;
     Ok(())
 }
