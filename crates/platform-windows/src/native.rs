@@ -206,9 +206,9 @@ impl From<PlatformError> for WindowsLaunchError {
 }
 
 /// Handles held for the complete owner lifetime so the approved executable
-/// bytes and its release directory cannot be replaced or modified underneath
-/// a running process.  The directory handle also protects DLL lookup files in
-/// the release directory; no delete/write sharing is granted.
+/// file object and its release directory cannot be replaced underneath a
+/// running process.  The directory handle protects the directory object from
+/// removal or rename; it does not hash or pin dependent DLL contents.
 #[derive(Debug)]
 struct IntegrityGuards {
     // These handles are retained for their no-share lifetime; the fields are
@@ -576,6 +576,14 @@ impl WindowsProcessLauncher {
             .get(&specification.component)
             .ok_or_else(|| PlatformError::Unsupported("component is not allowlisted".to_owned()))
             .map_err(WindowsLaunchError::Ordinary)?;
+        let approved_digest = self
+            .config
+            .approved_executable_sha256
+            .get(&specification.component)
+            .ok_or_else(|| {
+                PlatformError::Unsupported("component has no approved executable digest".to_owned())
+            })
+            .map_err(WindowsLaunchError::Ordinary)?;
         let executable = canonicalize_executable(&specification.executable)
             .map_err(WindowsLaunchError::Ordinary)?;
         let approved = canonicalize_executable(approved).map_err(WindowsLaunchError::Ordinary)?;
@@ -588,6 +596,14 @@ impl WindowsProcessLauncher {
         }
         let integrity =
             Arc::new(IntegrityGuards::open(&executable).map_err(WindowsLaunchError::Ordinary)?);
+        if integrity.digest() != approved_digest {
+            return Err(WindowsLaunchError::Ordinary(
+                PlatformError::IdentityMismatch(
+                    "approved executable bytes differ from the configured release digest"
+                        .to_owned(),
+                ),
+            ));
+        }
         if normalize_path(integrity.path()) != normalize_path(&executable) {
             return Err(WindowsLaunchError::Ordinary(
                 PlatformError::IdentityMismatch(
@@ -632,8 +648,20 @@ impl WindowsProcessLauncher {
             &job,
             &executable,
             specification,
-        )
-        .map_err(WindowsLaunchError::Ordinary)?;
+        );
+        let process = match process {
+            Ok(process) => process,
+            Err(SpawnFailure::BeforeCreate(error)) => {
+                return Err(WindowsLaunchError::Ordinary(error));
+            }
+            Err(SpawnFailure::Created(error)) => {
+                return Err(classify_spawn_cleanup(
+                    &job,
+                    launch_force_timeout(specification),
+                    error,
+                ));
+            }
+        };
         let (process_handle, thread_handle, pid) = process;
         if let Err(error) = integrity.verify_path_barrier() {
             return Err(classify_spawn_cleanup(
@@ -740,6 +768,21 @@ fn classify_spawn_cleanup(
                 "post-spawn launch validation failed ({launch_error}); exact Job cleanup failed: {cleanup_error}"
             )))
         }
+    }
+}
+
+/// A process creation call can succeed before one of its returned native
+/// handles can be wrapped.  Keep that distinction typed so the caller cannot
+/// accidentally report a created child as an ordinary pre-spawn rejection.
+#[derive(Debug)]
+enum SpawnFailure {
+    BeforeCreate(PlatformError),
+    Created(PlatformError),
+}
+
+impl From<PlatformError> for SpawnFailure {
+    fn from(error: PlatformError) -> Self {
+        Self::BeforeCreate(error)
     }
 }
 
@@ -1007,7 +1050,7 @@ fn spawn_suspended_with_job(
     job: &OwnedHandle,
     executable: &Path,
     specification: &WindowsLaunchSpec,
-) -> Result<(OwnedHandle, OwnedHandle, u32), PlatformError> {
+) -> Result<(OwnedHandle, OwnedHandle, u32), SpawnFailure> {
     let mut command_line = command_line(executable, &specification.arguments)?;
     let mut environment = environment_block(&specification.environment)?;
     let current_directory = specification
@@ -1023,7 +1066,7 @@ fn spawn_suspended_with_job(
     let mut attribute_size = 0_usize;
     let _ = unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &raw mut attribute_size) };
     if attribute_size == 0 {
-        return Err(last_error("InitializeProcThreadAttributeList(size)"));
+        return Err(last_error("InitializeProcThreadAttributeList(size)").into());
     }
     // `PROC_THREAD_ATTRIBUTE_LIST` is an opaque native structure whose
     // alignment is not guaranteed by `Vec<u8>`.  Allocate whole `usize`
@@ -1043,13 +1086,14 @@ fn spawn_suspended_with_job(
     {
         return Err(PlatformError::Invalid(
             "attribute list storage does not satisfy alignment/size invariants".to_owned(),
-        ));
+        )
+        .into());
     }
     let attribute_list = attribute_storage.as_mut_ptr().cast();
     let initialized =
         unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &raw mut attribute_size) };
     if initialized == 0 {
-        return Err(last_error("InitializeProcThreadAttributeList"));
+        return Err(last_error("InitializeProcThreadAttributeList").into());
     }
     let jobs = [job.raw()];
     let updated = unsafe {
@@ -1066,7 +1110,7 @@ fn spawn_suspended_with_job(
     };
     if updated == 0 {
         unsafe { DeleteProcThreadAttributeList(attribute_list) };
-        return Err(last_error("UpdateProcThreadAttribute(JOB_LIST)"));
+        return Err(last_error("UpdateProcThreadAttribute(JOB_LIST)").into());
     }
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = u32::try_from(size_of::<STARTUPINFOEXW>())
@@ -1115,11 +1159,32 @@ fn spawn_suspended_with_job(
     };
     unsafe { DeleteProcThreadAttributeList(attribute_list) };
     if result == 0 {
-        return Err(last_error("CreateProcess"));
+        return Err(last_error("CreateProcess").into());
     }
-    let process = OwnedHandle::new(information.hProcess, "CreateProcess process handle")?;
-    let thread = OwnedHandle::new(information.hThread, "CreateProcess thread handle")?;
-    Ok((process, thread, information.dwProcessId))
+    let pid = information.dwProcessId;
+    let (process, thread) = wrap_created_process_handles(information)?;
+    Ok((process, thread, pid))
+}
+
+fn wrap_created_process_handles(
+    information: windows_sys::Win32::System::Threading::PROCESS_INFORMATION,
+) -> Result<(OwnedHandle, OwnedHandle), SpawnFailure> {
+    let process = match OwnedHandle::new(information.hProcess, "CreateProcess process handle") {
+        Ok(handle) => handle,
+        Err(error) => {
+            close_raw_handle(information.hProcess);
+            close_raw_handle(information.hThread);
+            return Err(SpawnFailure::Created(error));
+        }
+    };
+    let thread = match OwnedHandle::new(information.hThread, "CreateProcess thread handle") {
+        Ok(handle) => handle,
+        Err(error) => {
+            close_raw_handle(information.hThread);
+            return Err(SpawnFailure::Created(error));
+        }
+    };
+    Ok((process, thread))
 }
 
 fn query_user_token(session_id: u32) -> Result<OwnedHandle, PlatformError> {
@@ -2034,6 +2099,12 @@ impl Drop for OwnedHandle {
     }
 }
 
+fn close_raw_handle(handle: HANDLE) {
+    if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+        unsafe { CloseHandle(handle) };
+    }
+}
+
 // A Windows kernel handle is an OS-managed reference that may be used by any
 // thread in the owning process.  `OwnedHandle` never exposes a borrowed raw
 // handle and closes it exactly once, so transferring the wrapper through the
@@ -2332,6 +2403,16 @@ fn open_immutable_path(
         )
     };
     OwnedHandle::new(raw, operation)
+}
+
+/// Hash one canonical executable using the same bounded read path as launch.
+///
+/// This helper is intended for trusted configuration/test tooling.  It does
+/// not reserve the path or replace the launch-time integrity guard; callers
+/// must still pass the resulting digest as an approved configuration value.
+pub fn executable_sha256(path: &Path) -> Result<String, PlatformError> {
+    let executable = canonicalize_executable(path)?;
+    Ok(IntegrityGuards::open(&executable)?.digest().to_owned())
 }
 
 fn file_identity(file: &OwnedHandle) -> Result<FileIdentity, PlatformError> {
@@ -2835,6 +2916,14 @@ mod tests {
     }
 
     #[test]
+    fn created_handle_wrap_failure_is_typed_as_post_creation() {
+        let result = wrap_created_process_handles(
+            windows_sys::Win32::System::Threading::PROCESS_INFORMATION::default(),
+        );
+        assert!(matches!(result, Err(SpawnFailure::Created(_))));
+    }
+
+    #[test]
     fn replay_policy_cannot_reset_after_disconnect_without_a_new_epoch() -> Result<(), PlatformError>
     {
         let nonce = std::time::SystemTime::now()
@@ -2874,10 +2963,16 @@ mod tests {
             crate::contract::ComponentKind::Synthetic,
             executable.clone(),
         );
+        let mut approved_executable_sha256 = BTreeMap::new();
+        approved_executable_sha256.insert(
+            crate::contract::ComponentKind::Synthetic,
+            executable_sha256(&executable)?,
+        );
         let launcher = WindowsProcessLauncher::new(WindowsPlatformConfig {
             service_name: SERVICE_NAME.to_owned(),
             pipe_name: format!(r"\\.\pipe\ascension-watchdog-test-{nonce}"),
             allowlisted_executables,
+            approved_executable_sha256,
             authorized_peer_executable: executable,
             max_arguments: 8,
             max_environment: 8,
@@ -2916,10 +3011,17 @@ mod tests {
             executable.clone(),
         );
         allowlisted_executables.insert(crate::contract::ComponentKind::Gateway, missing);
+        let mut approved_executable_sha256 = BTreeMap::new();
+        approved_executable_sha256.insert(
+            crate::contract::ComponentKind::Synthetic,
+            executable_sha256(&executable)?,
+        );
+        approved_executable_sha256.insert(crate::contract::ComponentKind::Gateway, "0".repeat(64));
         let launcher = WindowsProcessLauncher::new(WindowsPlatformConfig {
             service_name: SERVICE_NAME.to_owned(),
             pipe_name: format!(r"\\.\pipe\ascension-watchdog-test-{nonce}"),
             allowlisted_executables,
+            approved_executable_sha256,
             authorized_peer_executable: executable,
             max_arguments: 8,
             max_environment: 8,

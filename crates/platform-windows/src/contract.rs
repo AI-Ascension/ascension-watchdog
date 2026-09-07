@@ -524,6 +524,12 @@ pub struct WindowsPlatformConfig {
     pub service_name: String,
     pub pipe_name: String,
     pub allowlisted_executables: BTreeMap<ComponentKind, PathBuf>,
+    /// SHA-256 digests approved for each role's allowlisted executable.
+    ///
+    /// The path allowlist and this digest map are one closed identity: every
+    /// role must appear in both maps, and a launch is rejected when the bytes
+    /// held by the native integrity guard do not match this value.
+    pub approved_executable_sha256: BTreeMap<ComponentKind, String>,
     pub authorized_peer_executable: PathBuf,
     pub max_arguments: usize,
     pub max_environment: usize,
@@ -553,9 +559,18 @@ impl WindowsPlatformConfig {
                 .values()
                 .any(|path| !path.is_absolute())
             || !self.authorized_peer_executable.is_absolute()
+            || self.approved_executable_sha256.len() != self.allowlisted_executables.len()
+            || self
+                .allowlisted_executables
+                .keys()
+                .any(|component| !self.approved_executable_sha256.contains_key(component))
+            || self
+                .approved_executable_sha256
+                .values()
+                .any(|digest| !is_sha256_digest(digest))
         {
             return Err(PlatformError::Invalid(
-                "Windows executable allowlist is incomplete".to_owned(),
+                "Windows executable allowlist and approved digests are incomplete".to_owned(),
             ));
         }
         if self.max_arguments == 0
@@ -571,6 +586,10 @@ impl WindowsPlatformConfig {
         }
         Ok(())
     }
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Errors preserve the distinction between invalid input, unavailable native

@@ -477,6 +477,10 @@ impl NativeBackend {
         let allowlist = native_allowlist(config)?;
         #[cfg(target_os = "linux")]
         {
+            let allowlist: BTreeMap<PlatformComponentKind, PathBuf> = allowlist
+                .into_iter()
+                .map(|(kind, (path, _digest))| (kind, path))
+                .collect();
             let probe = crate::platform::LinuxProcessAdapter::new(allowlist.clone())
                 .map_err(map_adapter_error)?;
             let root = probe.cgroup_root().to_path_buf();
@@ -500,13 +504,24 @@ impl NativeBackend {
         }
         #[cfg(windows)]
         {
+            let (allowlisted_executables, approved_executable_sha256): (
+                BTreeMap<_, _>,
+                BTreeMap<_, _>,
+            ) = allowlist
+                .into_iter()
+                .map(|(kind, (path, digest))| ((kind, path), (kind, digest)))
+                .unzip();
             let launcher = ascension_platform_windows::WindowsProcessLauncher::new(
                 ascension_platform_windows::WindowsPlatformConfig {
                     service_name: "ascension-watchdog".to_owned(),
                     pipe_name: r"\\.\pipe\ascension-watchdog-runtime".to_owned(),
-                    allowlisted_executables: allowlist
+                    allowlisted_executables: allowlisted_executables
                         .into_iter()
                         .map(|(kind, path)| (windows_component_kind(kind), path))
+                        .collect(),
+                    approved_executable_sha256: approved_executable_sha256
+                        .into_iter()
+                        .map(|(kind, digest)| (windows_component_kind(kind), digest))
                         .collect(),
                     authorized_peer_executable: std::env::current_exe()?,
                     max_arguments: 64,
@@ -1077,18 +1092,20 @@ pub(crate) fn platform_component_kind(value: &str) -> Result<PlatformComponentKi
     }
 }
 
-fn native_allowlist(config: &WatchdogConfig) -> Result<BTreeMap<PlatformComponentKind, PathBuf>> {
+fn native_allowlist(
+    config: &WatchdogConfig,
+) -> Result<BTreeMap<PlatformComponentKind, (PathBuf, String)>> {
     let mut allowlist = BTreeMap::new();
     for component in &config.components {
         let kind = component_kind(component)?;
-        if component.executable_sha256.is_none() {
-            return Err(WatchdogError::InvalidInput(format!(
+        let digest = component.executable_sha256.clone().ok_or_else(|| {
+            WatchdogError::InvalidInput(format!(
                 "native component {} requires an approved executable hash",
                 component.id
-            )));
-        }
+            ))
+        })?;
         if allowlist
-            .insert(kind, component.executable.clone())
+            .insert(kind, (component.executable.clone(), digest))
             .is_some()
         {
             return Err(WatchdogError::Conflict(format!(

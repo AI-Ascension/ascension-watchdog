@@ -31,10 +31,20 @@ fn config(max_arguments: usize, max_environment: usize) -> WindowsPlatformConfig
     ] {
         allowlisted_executables.insert(component, executable.clone());
     }
+    let approved_executable_sha256 = [
+        ComponentKind::Gateway,
+        ComponentKind::Harness,
+        ComponentKind::HostBroker,
+        ComponentKind::Synthetic,
+    ]
+    .into_iter()
+    .map(|component| (component, "0".repeat(64)))
+    .collect();
     WindowsPlatformConfig {
         service_name: "ascension-watchdog".to_owned(),
         pipe_name: r"\\.\pipe\ascension-watchdog-regression".to_owned(),
         allowlisted_executables,
+        approved_executable_sha256,
         authorized_peer_executable: executable,
         max_arguments,
         max_environment,
@@ -54,6 +64,21 @@ fn launch_spec(component: ComponentKind, session: SessionSelector) -> WindowsLau
         graceful_timeout_ms: 500,
         force_timeout_ms: 5_000,
     }
+}
+
+#[test]
+fn executable_allowlist_requires_a_matching_digest_entry_for_each_role() {
+    let mut invalid_digest_config = config(8, 8);
+    invalid_digest_config
+        .approved_executable_sha256
+        .remove(&ComponentKind::Synthetic);
+    assert!(invalid_digest_config.validate().is_err());
+
+    let mut invalid_digest_config = config(8, 8);
+    invalid_digest_config
+        .approved_executable_sha256
+        .insert(ComponentKind::Synthetic, "not-a-sha256".to_owned());
+    assert!(invalid_digest_config.validate().is_err());
 }
 
 #[test]
@@ -139,6 +164,12 @@ mod native_owner_death {
     fn native_config(executable: &Path) -> WindowsPlatformConfig {
         let mut allowlisted_executables = BTreeMap::new();
         allowlisted_executables.insert(ComponentKind::Synthetic, executable.to_owned());
+        let mut approved_executable_sha256 = BTreeMap::new();
+        approved_executable_sha256.insert(
+            ComponentKind::Synthetic,
+            ascension_platform_windows::executable_sha256(executable)
+                .expect("synthetic fixture digest must be readable"),
+        );
         WindowsPlatformConfig {
             service_name: "ascension-watchdog".to_owned(),
             pipe_name: format!(
@@ -146,6 +177,7 @@ mod native_owner_death {
                 unique_nonce("pipe")
             ),
             allowlisted_executables,
+            approved_executable_sha256,
             authorized_peer_executable: executable.to_owned(),
             max_arguments: 8,
             max_environment: 8,

@@ -29,7 +29,7 @@ mod native;
 pub use native::{
     ActiveSession, JobOwnedProcess, NamedPipePeer, NamedPipeServer, ScmHealthChecker,
     ServiceInstallPlan, ServiceRuntime, StopOutcome, WindowsLaunchError, WindowsProcessLauncher,
-    select_active_session,
+    executable_sha256, select_active_session,
 };
 
 /// Report whether this crate's native Windows boundary is available.
