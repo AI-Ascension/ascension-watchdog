@@ -463,6 +463,74 @@ fn newline_runtime_queue_guard_and_recovery_are_schema_valid()
 }
 
 #[test]
+fn runtime_rejects_a_second_session_for_the_same_instance() -> Result<(), Box<dyn std::error::Error>>
+{
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let action = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+
+    let mut first = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-a"),
+            Some("operation-a"),
+        ),
+        &lease,
+    );
+    first["session_id"] = json!("session-a");
+    first["action"] = action.clone();
+    let accepted = send_raw(server.address, &first)?;
+    assert_eq!(accepted["status"], "accepted");
+
+    // Replaying the same operation through its original session remains
+    // idempotent and must not create another journal row.
+    let replay = send_raw(server.address, &first)?;
+    assert_eq!(replay["status"], "accepted");
+    assert_eq!(replay["operation_id"], "operation-a");
+
+    let mut second = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-b"),
+            Some("operation-b"),
+        ),
+        &lease,
+    );
+    second["session_id"] = json!("session-b");
+    second["action"] = action;
+    let rejected = send_raw(server.address, &second)?;
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["error_code"], "active_session");
+    assert_eq!(rejected["session_id"], "session-b");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let rows: (i64, i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM runtime_sessions), (SELECT COUNT(*) FROM runtime_operations), (SELECT COUNT(*) FROM runtime_queue)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(rows, (1, 1, 1));
+    drop(connection);
+
+    let mut wait = with_lease(
+        envelope("wait_request", 0, None, Some("operation-a")),
+        &lease,
+    );
+    wait["session_id"] = json!("session-a");
+    wait["wait_for_millis"] = json!(1);
+    let settled = send_raw(server.address, &wait)?;
+    assert_eq!(settled["status"], "settled");
+    assert_eq!(settled["generation"], 1);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
 fn http_runtime_action_and_wait_use_the_same_durable_queue()
 -> Result<(), Box<dyn std::error::Error>> {
     let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;

@@ -288,6 +288,73 @@ fn response_loss_keeps_effect_witness_and_client_uncertainty()
 }
 
 #[test]
+fn lookup_rejects_a_reference_with_the_wrong_original_context()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start(FaultPoint::None)?;
+    let client = server.client;
+    let (_boot, _fence, lease) = bootstrap(&client)?;
+    let (_full, mut reference) = submit_and_queue(&client, &lease, "wrong-context-lookup")?;
+    reference["original_context"]["instance_id"] = json!(Uuid::new_v4());
+
+    let lookup = client.request(&Frame::request(
+        "operation_lookup_request",
+        "recovery_read",
+        json!({"operation":reference,"lookup_scope":"historical_read"}),
+    ))?;
+    assert_eq!(lookup.payload["result"]["status"], "CONFLICT");
+    assert!(lookup.payload["operation"].is_null());
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn reconcile_rejects_a_reference_with_the_wrong_original_context()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start(FaultPoint::AfterMutation)?;
+    let client = server.client;
+    let database = server.database.clone();
+    let (_boot, _fence, old_lease) = bootstrap(&client)?;
+    let (full, mut reference) = submit_and_queue(&client, &old_lease, "wrong-context-reconcile")?;
+    let tick = client.request(&Frame::request(
+        "host_tick",
+        "recovery_reconcile",
+        json!({"operation_id":full["operation_id"]}),
+    ));
+    assert!(tick.is_err(), "after-mutation crash must drop the response");
+    let mut crashed = server.child;
+    assert_eq!(crashed.wait()?.code(), Some(70));
+
+    let restarted = RunningServer::start_on_database(database.clone(), FaultPoint::None)?;
+    let restarted_client = restarted.client;
+    let (_new_boot, replacement_fence, _new_lease) = bootstrap(&restarted_client)?;
+    reference["original_context"]["instance_id"] = json!(Uuid::new_v4());
+    let reconciled = restarted_client.request(&Frame::request(
+        "operation_reconcile_request",
+        "recovery_reconcile",
+        json!({"operation":reference,"strategy":"receipt_lookup","current_fence":replacement_fence}),
+    ))?;
+    assert_eq!(reconciled.payload["result"]["status"], "CONFLICT");
+    assert!(reconciled.payload["operation"].is_null());
+    assert!(reconciled.payload["witness"].is_null());
+
+    let connection = rusqlite::Connection::open(&database)?;
+    let state: String = connection.query_row(
+        "SELECT state FROM operations WHERE operation_id=?1",
+        [full["operation_id"].as_str().ok_or("operation id")?],
+        |row| row.get(0),
+    )?;
+    assert_eq!(state, "UNKNOWN");
+    drop(connection);
+    RunningServer {
+        child: restarted.child,
+        client: restarted_client,
+        database,
+    }
+    .stop()?;
+    Ok(())
+}
+
+#[test]
 fn malformed_response_does_not_erase_the_durable_receipt() -> Result<(), Box<dyn std::error::Error>>
 {
     let server = RunningServer::start(FaultPoint::MalformedResponse)?;

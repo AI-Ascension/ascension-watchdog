@@ -2493,6 +2493,11 @@ impl DurableHost {
             .ok_or_else(|| FixtureError::Invalid("operation missing".to_owned()))?;
         let id = field_string(operation, "operation_id")?;
         let digest_value = field_string(operation, "payload_digest")?;
+        let original_context = operation
+            .get("original_context")
+            .ok_or_else(|| FixtureError::Invalid("original context missing".to_owned()))?;
+        validate_original_context(original_context)?;
+        self.validate_operation_ref_context(&id, &digest_value, original_context)?;
         let response = self.operation_value(&id, &digest_value)?;
         let (status_value, value) = match response {
             None => ("NOT_FOUND".to_owned(), Value::Null),
@@ -2532,6 +2537,11 @@ impl DurableHost {
             .ok_or_else(|| FixtureError::Invalid("operation missing".to_owned()))?;
         let id = field_string(operation, "operation_id")?;
         let digest_value = field_string(operation, "payload_digest")?;
+        let original_context = operation
+            .get("original_context")
+            .ok_or_else(|| FixtureError::Invalid("original context missing".to_owned()))?;
+        validate_original_context(original_context)?;
+        self.validate_operation_ref_context(&id, &digest_value, original_context)?;
         let Some(value) = self.operation_value(&id, &digest_value)? else {
             return Ok((
                 frame.response(
@@ -2646,6 +2656,18 @@ impl DurableHost {
         if state.is_none() {
             if !authority_current {
                 return Err(FixtureError::Stale("lease"));
+            }
+            if let Some(active_state) = self.active_runtime_session_for_instance(&instance_id)? {
+                if kind == "dispatch_action_request" {
+                    let operation_id = field_string(request, "operation_id")?;
+                    return runtime_rejected_response(
+                        request,
+                        &active_state,
+                        &operation_id,
+                        "active_session",
+                    );
+                }
+                return Err(FixtureError::Conflict);
             }
             state = Some(self.create_runtime_session(
                 &instance_id,
@@ -3210,6 +3232,24 @@ impl DurableHost {
             }
         }
         Ok(None)
+    }
+
+    fn active_runtime_session_for_instance(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<RuntimeSession>, FixtureError> {
+        let session_id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT session_id FROM runtime_sessions WHERE instance_id=?1 AND stopped=0 ORDER BY session_id LIMIT 1",
+                params![instance_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(FixtureError::Sql)?;
+        session_id
+            .as_deref()
+            .map_or(Ok(None), |session_id| self.runtime_session(session_id))
     }
 
     fn runtime_operation_count(&self) -> Result<usize, FixtureError> {
