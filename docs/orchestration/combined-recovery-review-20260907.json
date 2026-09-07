@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "classification": "local-review-checkpoint-not-release-acceptance",
+  "supersedes_checkpoint": "reservation-journal-checkpoint-20260907.json",
+  "watchdog_source_snapshot": "51d1fceb5b11bbdfbd15d97f12319e927b84cad9",
+  "reviewed_candidates": [
+    {
+      "repository": "sts2-game-mod",
+      "source": "ed71022ef546c6b9e8e9123e77cb9c1f1f74f400",
+      "evidence_head": "5567964",
+      "decision": "GO only for journal open boundary and atomic authority projection",
+      "root_gates": "Rust workspace tests, Clippy, formatting, strict policy, managed gameplay and nine proof vectors passed; interop and host-candidate builds passed; Workshop probe passed",
+      "independent_review": "G49 independently reproduced managed probe and host-candidate build success",
+      "remaining": ["semantic replay validation", "protected path and ACL validation", "live host evidence"]
+    },
+    {
+      "repository": "ascension-watchdog",
+      "source": "2d39fab38b8824fb48234c9ab98ef4a65d1400f8",
+      "decision": "NOGO for Linux broker acceptance",
+      "root_gates": "Focused Linux broker suite: 17 passed, one native-service test ignored",
+      "independent_review": "P32 replacement-process regression failed as expected: committed nonce accepted changed PID and start token for the same unit",
+      "remaining": ["bind duplicate recovery to persisted process identity", "poison admission after uncertain ledger append", "native service validation"]
+    },
+    {
+      "repository": "sts2-harness",
+      "source": "9f2647db2ab9304d92234eec7bcdf3cd1125010e",
+      "decision": "NOGO for complete recovery acceptance",
+      "verified_positive": "Canonical action identity is persisted before dispatch; incomplete legacy action identity fails closed before allocation",
+      "remaining": ["bound SQLite payload before allocation", "remove unauthorized policy exemptions through source splits", "persist original authority context", "strict recovery envelopes and state reconciliation", "worker consumer integration"]
+    },
+    {
+      "repository": "sts2-gateway",
+      "source": "f7fdef9c111b0772406ac9b627c0647a92210f39",
+      "decision": "NOGO pending host-lease deadline correction",
+      "root_gates": "Ten focused host-lease control tests passed; shared neutral proof artifacts byte-compared",
+      "remaining": ["prevent repeated installation from recreating expired deadline", "accept legitimate post-expiry revoke acknowledgment", "combined consumer validation"]
+    }
+  ],
+  "next_tasks": {
+    "P34": "Repair broker process identity and persistence uncertainty after independent reproduction",
+    "G47": "Repair managed journal semantic replay",
+    "G48": "Repair gateway deadline retry and revoke acknowledgment",
+    "G50": "Bounded protected-path audit to define secure implementation wiring",
+    "H26": "Bound operation payload reads and restore original source policy budgets",
+    "P33": "Retain Windows owner lock through native service deletion",
+    "W27": "Finish accepted typed worker handoff contract before real consumers"
+  },
+  "release_status": {
+    "implementation_complete": false,
+    "full_synthetic_integration_verified": false,
+    "native_services_verified": false,
+    "live_host_recovery_verified": false,
+    "reboot_and_soak_verified": false,
+    "remote_delivery_complete": false,
+    "required_three_descendant_levels_verified": false,
+    "host_or_service_mutations_this_checkpoint": false
+  }
+}
