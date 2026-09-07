@@ -19,11 +19,12 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ const FRAME_VERSION: u8 = 1;
 const GO_MAGIC: &[u8; 8] = b"ASC-GO01";
 const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
 const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
+const DELEGATED_CGROUP_ROOT_ARGUMENT: &str = "--ascension-linux-delegated-cgroup-root";
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_FIELD_BYTES: usize = 16 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -41,22 +43,51 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
 const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 const CHILD_CLEANUP_POLL: Duration = Duration::from_millis(10);
+const MIN_INHERITED_FD: RawFd = 3;
+const O_DIRECTORY: i32 = 0o200_000;
+const O_NONBLOCK: i32 = 0o4_000;
+const O_NOFOLLOW: i32 = 0o400_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProtectedFileIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    mode: u32,
+    size: u64,
+}
 
 /// Immutable bootstrap context supplied separately from the untrusted launch
-/// frame.  The real watchdog should bind this path to its already validated
-/// configuration/database location before spawning the helper.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// frame.  The real watchdog binds an already-open configuration file and
+/// delegated cgroup root before spawning the helper.
+#[derive(Clone, Debug)]
 pub struct LinuxHelperBootstrap {
     protected_config_path: PathBuf,
+    protected_config: Arc<File>,
+    protected_config_identity: ProtectedFileIdentity,
+    delegated_cgroup_root_path: Option<PathBuf>,
+    delegated_cgroup_root: Option<Arc<File>>,
+    delegated_cgroup_root_identity: Option<ProtectedFileIdentity>,
 }
+
+impl PartialEq for LinuxHelperBootstrap {
+    fn eq(&self, other: &Self) -> bool {
+        self.protected_config_path == other.protected_config_path
+            && self.protected_config_identity == other.protected_config_identity
+            && self.delegated_cgroup_root_path == other.delegated_cgroup_root_path
+            && self.delegated_cgroup_root_identity == other.delegated_cgroup_root_identity
+    }
+}
+
+impl Eq for LinuxHelperBootstrap {}
 
 impl LinuxHelperBootstrap {
     /// Validate and canonicalize an owner-protected configuration path.
     ///
     /// The path must already exist as a regular, non-symlink file and must not
     /// be writable by group or other users.  This check is only a bootstrap
-    /// guard; the caller still has to compare the result with its fixed
-    /// configuration path before reading durable launch intent.
+    /// guard; the caller still has to bind the resulting descriptor to its
+    /// fixed configuration before reading durable launch intent.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, AdapterError> {
         let path = path.into();
         if !path.is_absolute() || path.as_os_str().is_empty() {
@@ -64,30 +95,7 @@ impl LinuxHelperBootstrap {
                 "Linux protected config path must be absolute".to_owned(),
             ));
         }
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            AdapterError::Unavailable(format!("Linux protected config is unavailable: {error}"))
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(AdapterError::Invalid(
-                "Linux protected config must be a regular non-symlink file".to_owned(),
-            ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-            if mode & 0o022 != 0 || mode & 0o400 == 0 {
-                return Err(AdapterError::Invalid(
-                    "Linux protected config must not be group/other writable and must be owner-readable"
-                        .to_owned(),
-                ));
-            }
-        }
-        let canonical = fs::canonicalize(&path).map_err(|error| {
-            AdapterError::Unavailable(format!(
-                "Linux protected config cannot be resolved: {error}"
-            ))
-        })?;
+        let (file, canonical, identity) = open_protected_config_path(&path)?;
         if canonical != path {
             return Err(AdapterError::IdentityMismatch(
                 "Linux protected config path is not canonical".to_owned(),
@@ -95,6 +103,62 @@ impl LinuxHelperBootstrap {
         }
         Ok(Self {
             protected_config_path: canonical,
+            protected_config: Arc::new(file),
+            protected_config_identity: identity,
+            delegated_cgroup_root_path: None,
+            delegated_cgroup_root: None,
+            delegated_cgroup_root_identity: None,
+        })
+    }
+
+    fn from_inherited_fds(config_fd: RawFd, root_fd: RawFd) -> Result<Self, AdapterError> {
+        if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD || config_fd == root_fd {
+            return Err(AdapterError::Invalid(
+                "Linux helper bootstrap descriptors are invalid".to_owned(),
+            ));
+        }
+        // These descriptors were explicitly opened by the trusted parent and
+        // made inheritable for this one exec.  Opening through `/proc/self/fd`
+        // duplicates the already-open file description; it never resolves a
+        // caller-controlled filesystem path and keeps this crate's no-unsafe
+        // boundary intact.
+        let config = open_inherited_descriptor(config_fd, false)?;
+        let root = open_inherited_descriptor(root_fd, true)?;
+        let config_identity = validate_protected_config_handle(&config)?;
+        let root_metadata = root.metadata().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root metadata failed: {error}"
+            ))
+        })?;
+        let root_identity = protected_file_identity(&root_metadata);
+        if !root_metadata.is_dir() || root_identity.mode & 0o022 != 0 {
+            return Err(AdapterError::Invalid(
+                "Linux delegated cgroup root descriptor is unsafe".to_owned(),
+            ));
+        }
+        let config_path = canonical_fd_path(config_fd)?;
+        let root_path = canonical_fd_path(root_fd)?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            let metadata =
+                fs::symlink_metadata(proc_fd_child(root_fd, std::ffi::OsStr::new(control)))
+                    .map_err(|error| {
+                        AdapterError::Unavailable(format!(
+                            "Linux delegated cgroup root lacks {control}: {error}"
+                        ))
+                    })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(AdapterError::Invalid(format!(
+                    "Linux delegated cgroup root has invalid {control}"
+                )));
+            }
+        }
+        Ok(Self {
+            protected_config_path: config_path,
+            protected_config: Arc::new(config),
+            protected_config_identity: config_identity,
+            delegated_cgroup_root_path: Some(root_path),
+            delegated_cgroup_root: Some(Arc::new(root)),
+            delegated_cgroup_root_identity: Some(root_identity),
         })
     }
 
@@ -103,6 +167,307 @@ impl LinuxHelperBootstrap {
     pub fn protected_config_path(&self) -> &Path {
         &self.protected_config_path
     }
+
+    /// Attach the exact delegated cgroup root used by the parent adapter.
+    /// The directory is opened before the helper is spawned and inherited as
+    /// a descriptor, so a helper cannot substitute a sibling root by changing
+    /// a caller-controlled path or by winning a rename race.
+    pub fn with_delegated_cgroup_root(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        let path = path.into();
+        let (directory, canonical, identity) = open_delegated_cgroup_root(&path)?;
+        self.delegated_cgroup_root_path = Some(canonical);
+        self.delegated_cgroup_root = Some(Arc::new(directory));
+        self.delegated_cgroup_root_identity = Some(identity);
+        Ok(self)
+    }
+
+    /// Return the exact cgroup root path bound to this bootstrap.
+    #[must_use]
+    pub(crate) fn delegated_cgroup_root_path(&self) -> Option<&Path> {
+        self.delegated_cgroup_root_path.as_deref()
+    }
+
+    /// Read from the descriptor opened when this bootstrap was validated.
+    /// The returned handle is still bound to the original inode.
+    pub(crate) fn protected_config_file(&self) -> Result<File, AdapterError> {
+        self.protected_config.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux protected config descriptor cannot be cloned: {error}"
+            ))
+        })
+    }
+
+    fn inherited_descriptors(&self) -> Result<InheritedBootstrap, AdapterError> {
+        let Some(root) = self.delegated_cgroup_root.as_ref() else {
+            return Err(AdapterError::Invalid(
+                "Linux helper requires an exact delegated cgroup root bootstrap".to_owned(),
+            ));
+        };
+        let config = self.protected_config.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux protected config descriptor cannot be cloned: {error}"
+            ))
+        })?;
+        let root = root.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root descriptor cannot be cloned: {error}"
+            ))
+        })?;
+        make_inheritable(&config)?;
+        make_inheritable(&root)?;
+        let config_fd = config.as_raw_fd();
+        let root_fd = root.as_raw_fd();
+        if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD {
+            return Err(AdapterError::Unavailable(
+                "Linux helper bootstrap descriptor is reserved for stdio".to_owned(),
+            ));
+        }
+        Ok(InheritedBootstrap {
+            _config: config,
+            config_fd,
+            _root: root,
+            root_fd,
+        })
+    }
+}
+
+struct InheritedBootstrap {
+    _config: File,
+    config_fd: RawFd,
+    _root: File,
+    root_fd: RawFd,
+}
+
+impl std::fmt::Debug for InheritedBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InheritedBootstrap")
+            .field("config_fd", &self.config_fd)
+            .field("root_fd", &self.root_fd)
+            .finish_non_exhaustive()
+    }
+}
+
+fn protected_file_identity(metadata: &std::fs::Metadata) -> ProtectedFileIdentity {
+    ProtectedFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        uid: metadata.uid(),
+        mode: metadata.mode(),
+        size: metadata.len(),
+    }
+}
+
+fn validate_protected_config_handle(file: &File) -> Result<ProtectedFileIdentity, AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("Linux protected config metadata failed: {error}"))
+    })?;
+    let identity = protected_file_identity(&metadata);
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux protected config must be a regular file".to_owned(),
+        ));
+    }
+    if identity.uid != rustix::process::geteuid().as_raw()
+        || identity.mode & 0o077 != 0
+        || identity.mode & 0o400 == 0
+    {
+        return Err(AdapterError::Invalid(
+            "Linux protected config must be owner-readable and owner-only".to_owned(),
+        ));
+    }
+    if identity.size > 65_536 {
+        return Err(AdapterError::Invalid(
+            "Linux protected config exceeds the bounded read size".to_owned(),
+        ));
+    }
+    Ok(identity)
+}
+
+fn open_protected_config_path(
+    path: &Path,
+) -> Result<(File, PathBuf, ProtectedFileIdentity), AdapterError> {
+    let file = open_regular_path_without_links(path, "Linux protected config")?;
+    let identity = validate_protected_config_handle(&file)?;
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux protected config cannot be resolved: {error}"
+        ))
+    })?;
+    let opened = canonical_fd_path(file.as_raw_fd())?;
+    if opened != canonical {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux protected config was replaced while it was opened".to_owned(),
+        ));
+    }
+    Ok((file, canonical, identity))
+}
+
+fn open_delegated_cgroup_root(
+    path: &Path,
+) -> Result<(File, PathBuf, ProtectedFileIdentity), AdapterError> {
+    let file = open_directory_path_without_links(path, "Linux delegated cgroup root")?;
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux delegated cgroup root metadata failed: {error}"
+        ))
+    })?;
+    let identity = protected_file_identity(&metadata);
+    if !metadata.is_dir() {
+        return Err(AdapterError::Invalid(
+            "Linux delegated cgroup root must be a directory".to_owned(),
+        ));
+    }
+    if identity.mode & 0o022 != 0 {
+        return Err(AdapterError::Invalid(
+            "Linux delegated cgroup root must not be group/other writable".to_owned(),
+        ));
+    }
+    for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+        let control_path = proc_fd_child(file.as_raw_fd(), std::ffi::OsStr::new(control));
+        let metadata = fs::symlink_metadata(&control_path).map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root lacks {control}: {error}"
+            ))
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(AdapterError::Invalid(format!(
+                "Linux delegated cgroup root has invalid {control}"
+            )));
+        }
+    }
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux delegated cgroup root cannot be resolved: {error}"
+        ))
+    })?;
+    if canonical_fd_path(file.as_raw_fd())? != canonical {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux delegated cgroup root was replaced while it was opened".to_owned(),
+        ));
+    }
+    Ok((file, canonical, identity))
+}
+
+fn open_regular_path_without_links(path: &Path, label: &str) -> Result<File, AdapterError> {
+    if !path.is_absolute() {
+        return Err(AdapterError::Invalid(format!(
+            "{label} path must be absolute"
+        )));
+    }
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+        .open("/")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("{label} root is unavailable: {error}"))
+        })?;
+    let components = checked_path_components(path, label)?;
+    let Some((last, parents)) = components.split_last() else {
+        return Err(AdapterError::Invalid(format!("{label} path is empty")));
+    };
+    for component in parents {
+        directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+            .open(proc_fd_child(directory.as_raw_fd(), component))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!("{label} parent is unavailable: {error}"))
+            })?;
+    }
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+        .open(proc_fd_child(directory.as_raw_fd(), last))
+        .map_err(|error| AdapterError::Unavailable(format!("{label} is unavailable: {error}")))
+}
+
+fn open_directory_path_without_links(path: &Path, label: &str) -> Result<File, AdapterError> {
+    if !path.is_absolute() {
+        return Err(AdapterError::Invalid(format!(
+            "{label} path must be absolute"
+        )));
+    }
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+        .open("/")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("{label} root is unavailable: {error}"))
+        })?;
+    for component in checked_path_components(path, label)? {
+        directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+            .open(proc_fd_child(directory.as_raw_fd(), &component))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!("{label} directory is unavailable: {error}"))
+            })?;
+    }
+    Ok(directory)
+}
+
+fn checked_path_components(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<std::ffi::OsString>, AdapterError> {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::RootDir => None,
+            std::path::Component::Normal(value) => Some(Ok(value.to_os_string())),
+            _ => Some(Err(AdapterError::Invalid(format!(
+                "{label} path contains traversal or an unsupported component"
+            )))),
+        })
+        .collect()
+}
+
+fn proc_fd_child(fd: RawFd, component: &std::ffi::OsStr) -> PathBuf {
+    let mut path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    path.push(component);
+    path
+}
+
+fn canonical_fd_path(fd: RawFd) -> Result<PathBuf, AdapterError> {
+    fs::canonicalize(format!("/proc/self/fd/{fd}")).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux bootstrap descriptor target is unavailable: {error}"
+        ))
+    })
+}
+
+fn open_inherited_descriptor(fd: RawFd, directory: bool) -> Result<File, AdapterError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    if directory {
+        options.custom_flags(O_DIRECTORY | O_NONBLOCK);
+    } else {
+        options.custom_flags(O_NONBLOCK);
+    }
+    options
+        .open(format!("/proc/self/fd/{fd}"))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux inherited bootstrap descriptor cannot be opened: {error}"
+            ))
+        })
+}
+
+fn make_inheritable(file: &File) -> Result<(), AdapterError> {
+    let mut flags = rustix::io::fcntl_getfd(file).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux bootstrap descriptor flags are unavailable: {error}"
+        ))
+    })?;
+    flags.remove(rustix::io::FdFlags::CLOEXEC);
+    rustix::io::fcntl_setfd(file, flags).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux bootstrap descriptor cannot be inherited: {error}"
+        ))
+    })
 }
 
 /// Hidden command-line argument recognized by the watchdog's real executable
@@ -112,7 +477,7 @@ pub const fn helper_argument() -> &'static str {
     HELPER_ARGUMENT
 }
 
-/// Hidden argument carrying the separately validated protected config path.
+/// Hidden argument carrying the inherited separately validated config fd.
 #[must_use]
 pub const fn protected_config_argument() -> &'static str {
     PROTECTED_CONFIG_ARGUMENT
@@ -418,14 +783,30 @@ impl TrustedLinuxLauncher {
 
     /// Bind a protected configuration path to every helper invocation.
     ///
-    /// The path is passed as a separate fixed argument, never accepted from
-    /// the launch frame.  A root-owned authorizer should compare this context
-    /// with its own configured path before opening a read-only durable store.
+    /// The path is opened and validated immediately; the resulting file
+    /// descriptor is passed as a separate fixed argument, never accepted from
+    /// the launch frame.  The companion cgroup-root binding must be added for
+    /// production helper launches.
     pub fn with_protected_config_path(
         mut self,
         path: impl Into<PathBuf>,
     ) -> Result<Self, AdapterError> {
         self.bootstrap = Some(LinuxHelperBootstrap::new(path)?);
+        Ok(self)
+    }
+
+    /// Bind the exact delegated cgroup root to the already protected config
+    /// bootstrap.  Both descriptors are inherited by the hidden helper.
+    pub fn with_delegated_cgroup_root(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        let bootstrap = self.bootstrap.take().ok_or_else(|| {
+            AdapterError::Invalid(
+                "delegated cgroup root requires a protected config bootstrap".to_owned(),
+            )
+        })?;
+        self.bootstrap = Some(bootstrap.with_delegated_cgroup_root(path)?);
         Ok(self)
     }
 
@@ -479,11 +860,17 @@ impl TrustedLinuxLauncher {
         let mut command = Command::new(&helper_fd_path);
         command.arg0(&self.helper_executable);
         command.arg(&self.helper_argument);
-        if let Some(bootstrap) = &self.bootstrap {
+        let inherited_bootstrap = if let Some(bootstrap) = &self.bootstrap {
+            let inherited = bootstrap.inherited_descriptors()?;
             command
                 .arg(PROTECTED_CONFIG_ARGUMENT)
-                .arg(bootstrap.protected_config_path());
-        }
+                .arg(inherited.config_fd.to_string())
+                .arg(DELEGATED_CGROUP_ROOT_ARGUMENT)
+                .arg(inherited.root_fd.to_string());
+            Some(inherited)
+        } else {
+            None
+        };
         command
             .env_clear()
             .stdin(Stdio::piped())
@@ -493,6 +880,7 @@ impl TrustedLinuxLauncher {
             .spawn()
             .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
         drop(helper_file);
+        drop(inherited_bootstrap);
         let Some(mut stdin) = child.stdin.take() else {
             terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
             return Err(AdapterError::Io(
@@ -544,15 +932,42 @@ fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError
             "Linux helper invocation has an invalid bootstrap argument".to_owned(),
         ));
     }
-    let path = arguments.next().ok_or_else(|| {
-        AdapterError::Invalid("Linux helper protected config path is missing".to_owned())
+    let config_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid("Linux helper protected config descriptor is missing".to_owned())
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid("Linux helper protected config descriptor is invalid".to_owned())
+        })?;
+    let root_argument = arguments.next().ok_or_else(|| {
+        AdapterError::Invalid("Linux helper delegated cgroup root descriptor is missing".to_owned())
     })?;
+    if root_argument != DELEGATED_CGROUP_ROOT_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid cgroup root bootstrap argument".to_owned(),
+        ));
+    }
+    let root_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid(
+                "Linux helper delegated cgroup root descriptor is missing".to_owned(),
+            )
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid(
+                "Linux helper delegated cgroup root descriptor is invalid".to_owned(),
+            )
+        })?;
     if arguments.next().is_some() {
         return Err(AdapterError::Invalid(
             "Linux helper invocation has unexpected arguments".to_owned(),
         ));
     }
-    LinuxHelperBootstrap::new(path).map(Some)
+    LinuxHelperBootstrap::from_inherited_fds(config_fd, root_fd).map(Some)
 }
 
 /// Run the hidden helper after root code has authorized its frame.
@@ -1486,6 +1901,44 @@ mod tests {
         let result = TrustedLinuxLauncher::new("/bin/true")
             .and_then(|launcher| launcher.with_timeout(Duration::from_secs(16)));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn bootstrap_reads_the_opened_config_inode_after_path_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let path = directory.path().join("watchdog.json");
+        fs::write(&path, b"trusted-config")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        let bootstrap = LinuxHelperBootstrap::new(&path)?;
+
+        fs::rename(&path, directory.path().join("watchdog.json.original"))?;
+        fs::write(&path, b"attacker-config")?;
+
+        let mut bytes = String::new();
+        bootstrap
+            .protected_config_file()?
+            .read_to_string(&mut bytes)?;
+        assert_eq!(bytes, "trusted-config");
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_rejects_group_readable_or_foreign_shape_config()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let path = directory.path().join("watchdog.json");
+        fs::write(&path, b"config")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))?;
+        assert!(matches!(
+            LinuxHelperBootstrap::new(&path),
+            Err(AdapterError::Invalid(_))
+        ));
+        Ok(())
     }
 
     #[test]
