@@ -531,6 +531,230 @@ fn runtime_rejects_a_second_session_for_the_same_instance() -> Result<(), Box<dy
 }
 
 #[test]
+fn runtime_stop_keeps_instance_uncertainty_across_replacement_session()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let action = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+
+    let mut first = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-a"),
+            Some("operation-a"),
+        ),
+        &lease,
+    );
+    first["session_id"] = json!("session-a");
+    first["action"] = action.clone();
+    assert_eq!(send_raw(server.address, &first)?["status"], "accepted");
+
+    let mut stop = with_lease(envelope("recover_request", 0, None, None), &lease);
+    stop["session_id"] = json!("session-a");
+    stop["recovery"] = json!({"kind":"stop_episode","operation_id":null});
+    let stopped = send_raw(server.address, &stop)?;
+    assert_eq!(stopped["status"], "cancelled");
+
+    // Historical reads remain available from the stopped session while its
+    // unresolved operation remains an instance-wide mutation barrier.
+    let mut historical_read = with_lease(envelope("state_request", 0, None, None), &lease);
+    historical_read["session_id"] = json!("session-a");
+    assert_eq!(
+        send_raw(server.address, &historical_read)?["kind"],
+        "state_response"
+    );
+
+    let mut replacement = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-b"),
+            Some("operation-b"),
+        ),
+        &lease,
+    );
+    replacement["session_id"] = json!("session-b");
+    replacement["action"] = action;
+    let rejected = send_raw(server.address, &replacement)?;
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["error_code"], "active_session");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let rows: (i64, i64, i64, i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM runtime_sessions), (SELECT COUNT(*) FROM runtime_operations), (SELECT COUNT(*) FROM runtime_queue), (SELECT COUNT(*) FROM runtime_operations WHERE status='UNKNOWN'), (SELECT COUNT(*) FROM runtime_sessions WHERE stopped=1)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    )?;
+    assert_eq!(rows, (1, 1, 0, 1, 1));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn runtime_concurrent_replacements_cannot_bypass_instance_uncertainty()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let action = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let mut first = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-a"),
+            Some("operation-a"),
+        ),
+        &lease,
+    );
+    first["session_id"] = json!("session-a");
+    first["action"] = action;
+    assert_eq!(send_raw(server.address, &first)?["status"], "accepted");
+
+    let mut stop = with_lease(envelope("recover_request", 0, None, None), &lease);
+    stop["session_id"] = json!("session-a");
+    stop["recovery"] = json!({"kind":"stop_episode","operation_id":null});
+    assert_eq!(send_raw(server.address, &stop)?["status"], "cancelled");
+
+    let mut handles = Vec::new();
+    for (session_id, operation_id) in [("session-b", "operation-b"), ("session-c", "operation-c")] {
+        let mut request = with_lease(
+            envelope(
+                "dispatch_action_request",
+                0,
+                Some("replacement-state"),
+                Some(operation_id),
+            ),
+            &lease,
+        );
+        request["session_id"] = json!(session_id);
+        request["action"] = json!({
+            "action_id":"action-end-turn",
+            "action":{"kind":"end_turn"}
+        });
+        let address = server.address;
+        handles.push(std::thread::spawn(move || {
+            send_raw(address, &request).map_err(|error| error.to_string())
+        }));
+    }
+    for handle in handles {
+        let response = handle.join().map_err(|_| "replacement thread panicked")??;
+        assert_eq!(response["status"], "rejected");
+        assert_eq!(response["error_code"], "active_session");
+    }
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let rows: (i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM runtime_sessions), (SELECT COUNT(*) FROM runtime_operations)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(rows, (1, 1));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn runtime_releases_instance_barrier_only_after_authoritative_reconciliation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let action = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let mut first = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some("state-a"),
+            Some("operation-a"),
+        ),
+        &lease,
+    );
+    first["session_id"] = json!("session-a");
+    first["action"] = action;
+    assert_eq!(send_raw(server.address, &first)?["status"], "accepted");
+
+    let mut wait = with_lease(
+        envelope("wait_request", 0, None, Some("operation-a")),
+        &lease,
+    );
+    wait["session_id"] = json!("session-a");
+    wait["wait_for_millis"] = json!(1);
+    let settled = send_raw(server.address, &wait)?;
+    assert_eq!(settled["status"], "settled");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let durable: (String, Option<String>, Option<String>) = connection.query_row(
+        "SELECT status,witness_json,result_json FROM runtime_operations WHERE operation_id='operation-a'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(durable.0, "SETTLED");
+    assert!(
+        durable.1.is_some(),
+        "settlement must retain its effect witness"
+    );
+    assert!(
+        durable.2.is_some(),
+        "settlement must retain its result proof"
+    );
+    // Model a lost receipt without inventing an effect: retain the actual
+    // fixture-generated witness/result and move only the durable status back
+    // to UNKNOWN for the recovery path to reconcile.
+    connection.execute(
+        "UPDATE runtime_operations SET status='UNKNOWN' WHERE operation_id='operation-a' AND status='SETTLED'",
+        [],
+    )?;
+    drop(connection);
+
+    let mut stop = with_lease(envelope("recover_request", 1, None, None), &lease);
+    stop["session_id"] = json!("session-a");
+    stop["recovery"] = json!({"kind":"stop_episode","operation_id":null});
+    assert_eq!(send_raw(server.address, &stop)?["status"], "cancelled");
+
+    let mut reconcile = with_lease(envelope("recover_request", 1, None, None), &lease);
+    reconcile["session_id"] = json!("session-a");
+    reconcile["recovery"] = json!({"kind":"reconcile","operation_id":"operation-a"});
+    let reconciled = send_raw(server.address, &reconcile)?;
+    assert_eq!(reconciled["status"], "settled");
+    assert_eq!(reconciled["operation_id"], "operation-a");
+
+    let mut replacement = with_lease(
+        envelope(
+            "dispatch_action_request",
+            1,
+            settled["state_id"].as_str(),
+            Some("operation-b"),
+        ),
+        &lease,
+    );
+    replacement["session_id"] = json!("session-b");
+    replacement["action"] = settled["legal_actions"][0].clone();
+    let admitted = send_raw(server.address, &replacement)?;
+    assert_eq!(admitted["status"], "accepted");
+
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let rows: (i64, i64, String) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM runtime_sessions), (SELECT COUNT(*) FROM runtime_operations), (SELECT status FROM runtime_operations WHERE operation_id='operation-a')",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(rows, (2, 2, "RECONCILED".to_owned()));
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
 fn http_runtime_action_and_wait_use_the_same_durable_queue()
 -> Result<(), Box<dyn std::error::Error>> {
     let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;

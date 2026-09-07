@@ -2657,6 +2657,27 @@ impl DurableHost {
             if !authority_current {
                 return Err(FixtureError::Stale("lease"));
             }
+            // A stopped session can retain an UNKNOWN operation.  It is still
+            // an instance-wide mutation barrier: do not create a replacement
+            // session that could admit a second action before the original
+            // effect is authoritatively settled or reconciled.
+            if let Some(unresolved) =
+                self.unresolved_runtime_operation_for_instance(&instance_id)?
+            {
+                let historical_state = self
+                    .runtime_session(&unresolved.session_id)?
+                    .ok_or(FixtureError::HostNotReady)?;
+                if kind == "dispatch_action_request" {
+                    let operation_id = field_string(request, "operation_id")?;
+                    return runtime_rejected_response(
+                        request,
+                        &historical_state,
+                        &operation_id,
+                        "active_session",
+                    );
+                }
+                return Err(FixtureError::Conflict);
+            }
             if let Some(active_state) = self.active_runtime_session_for_instance(&instance_id)? {
                 if kind == "dispatch_action_request" {
                     let operation_id = field_string(request, "operation_id")?;
@@ -2886,6 +2907,17 @@ impl DurableHost {
             .is_some()
         {
             return runtime_rejected_response(request, state, &operation_id, "active_operation");
+        }
+
+        // The session-local check above is not sufficient after a stopped
+        // session is replaced.  Retain the instance-wide barrier across every
+        // session, while allowing an exact operation-id replay to take the
+        // idempotent path above.
+        if let Some(unresolved) =
+            self.unresolved_runtime_operation_for_instance(&state.instance_id)?
+            && unresolved.operation_id != operation_id
+        {
+            return runtime_rejected_response(request, state, &operation_id, "active_session");
         }
 
         // Runtime history is bounded by admission backpressure rather than
@@ -3250,6 +3282,24 @@ impl DurableHost {
         session_id
             .as_deref()
             .map_or(Ok(None), |session_id| self.runtime_session(session_id))
+    }
+
+    fn unresolved_runtime_operation_for_instance(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<RuntimeOperation>, FixtureError> {
+        let operation_id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT operation_id FROM runtime_operations WHERE instance_id=?1 AND status IN ('ADMITTED','EXECUTING','UNKNOWN') ORDER BY created_at,operation_id LIMIT 1",
+                params![instance_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(FixtureError::Sql)?;
+        operation_id.as_deref().map_or(Ok(None), |operation_id| {
+            self.runtime_operation(operation_id)
+        })
     }
 
     fn runtime_operation_count(&self) -> Result<usize, FixtureError> {
