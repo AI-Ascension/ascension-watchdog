@@ -1,5 +1,8 @@
 //! Reconciliation loop and approved child supervision.
 
+#[path = "runtime_admin.rs"]
+pub(crate) mod runtime_admin;
+
 use crate::config::{ComponentConfig, DesiredMode, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 use crate::policy::{

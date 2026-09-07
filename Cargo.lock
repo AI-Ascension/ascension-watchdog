@@ -17,6 +17,7 @@ dependencies = [
  "ascension-platform-windows",
  "fs2",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

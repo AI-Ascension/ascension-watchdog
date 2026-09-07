@@ -1,8 +1,7 @@
 //! Native Unix admin sideband acceptance tests.
 //!
-//! These tests intentionally use a synthetic dispatcher.  They prove the
-//! transport/queue boundary only; they do not claim a live service, gateway,
-//! host, or gameplay effect.
+//! Transport tests use a synthetic dispatcher; the durable lifecycle test uses
+//! the real `ServiceLoop` and `Supervisor` store. Neither claims host/game effects.
 
 #![cfg(unix)]
 
@@ -27,6 +26,68 @@ struct Fixture {
     socket: PathBuf,
     read_token: PathBuf,
     admin_token: PathBuf,
+}
+
+#[test]
+fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
+    use ascension_watchdog::service::ServiceLoop;
+    use ascension_watchdog::{DesiredMode, Supervisor, WatchdogConfig};
+    let fixture = Fixture::new();
+    let config = WatchdogConfig {
+        database: fixture.temp.path().join("state.sqlite"),
+        ..WatchdogConfig::default()
+    };
+    let mut service = ServiceLoop::new(
+        Supervisor::initialize(config.clone()).unwrap(),
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), service.health());
+    let client = fixture.client(Capability::Admin, &fixture.admin_token);
+    for (key, command, expected) in [
+        (
+            "start-original",
+            AdminCommand::Start(EmptyParams {}),
+            DesiredMode::Running,
+        ),
+        (
+            "stop-original",
+            AdminCommand::Stop(EmptyParams {}),
+            DesiredMode::Stopped,
+        ),
+    ] {
+        let client = client.clone();
+        let request = thread::spawn(move || client.execute(key, command));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while queue.depth() == 0 && !request.is_finished() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+        assert_eq!(request.join().unwrap().unwrap().status, ReplyStatus::Accepted);
+        assert_eq!(service.reconcile(1_000).unwrap().desired_mode, expected);
+    }
+    drop(server);
+    drop(service);
+    let mut service =
+        ServiceLoop::new(Supervisor::open(config).unwrap(), Duration::from_millis(10)).unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let _server = fixture.server(queue.clone(), service.health());
+    let request = thread::spawn(move || {
+        client.execute("start-original", AdminCommand::Start(EmptyParams {}))
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while queue.depth() == 0 && !request.is_finished() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    assert_eq!(request.join().unwrap().unwrap().status, ReplyStatus::Accepted);
+    assert_eq!(
+        service.reconcile(1_010).unwrap().desired_mode,
+        DesiredMode::Stopped
+    );
 }
 
 impl Fixture {

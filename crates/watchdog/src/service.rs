@@ -38,6 +38,20 @@ impl ServiceLoop {
         self.health.clone()
     }
 
+    /// Drain authenticated commands on the same thread that owns reconciliation.
+    pub fn drain_admin(&mut self, queue: &crate::admin::AdminQueue, now_ms: u64) -> usize {
+        let mut dispatcher = crate::runtime::runtime_admin::Dispatcher {
+            supervisor: &mut self.supervisor,
+            health: &self.health,
+        };
+        queue.drain(
+            &mut dispatcher,
+            &self.health,
+            now_ms,
+            crate::admin::MAX_DRAIN_BATCH,
+        )
+    }
+
     /// A failed iteration never advances the successful-progress sequence.
     pub fn reconcile(&mut self, now_ms: u64) -> Result<ReconcileReport> {
         let report = match self.supervisor.reconcile_once(now_ms) {
@@ -79,10 +93,31 @@ impl ServiceLoop {
         Ok(report)
     }
 
-    /// Foreground daemon compatibility: exit only after stopped intent and
-    /// verified absence of owned children. Service-manager notification is
-    /// emitted from this same thread, after successful reconciliation only.
+    /// Without an admin endpoint, exit after stopped intent and verified cleanup.
+    /// With authenticated control configured, remain available while stopped so
+    /// the operator can inspect or start the deployment. Notifications reflect
+    /// successful reconciliation on this same thread, never a transport worker.
     pub fn run_until_stopped(&mut self) -> Result<()> {
+        let admin = self
+            .supervisor
+            .admin_configuration()
+            .map(|config| {
+                use crate::admin::{
+                    AdminQueue, AdminServer, AdminServerConfig, AuthReferences, MAX_QUEUE,
+                };
+                let auth = AuthReferences::new(config.read_token_path, config.admin_token_path)?;
+                let server_config = AdminServerConfig::new(config.endpoint, auth)?;
+                #[cfg(windows)]
+                let server_config = if let Some(sid) = config.allowed_peer_sid {
+                    server_config.with_allowed_peer_sid(sid)?
+                } else {
+                    server_config
+                };
+                let queue = AdminQueue::new(MAX_QUEUE).map_err(WatchdogError::InvalidInput)?;
+                let server = AdminServer::start(server_config, queue.clone(), self.health.clone())?;
+                Ok::<_, WatchdogError>((queue, server))
+            })
+            .transpose()?;
         #[cfg(target_os = "linux")]
         let mut notifier = crate::platform::SystemdNotifier::from_environment()
             .map_err(WatchdogError::InvalidInput)?;
@@ -96,6 +131,9 @@ impl ServiceLoop {
             ));
         }
         loop {
+            if let Some((queue, _server)) = &admin {
+                self.drain_admin(queue, now_unix_ms());
+            }
             let report = self.reconcile(now_unix_ms())?;
             #[cfg(target_os = "linux")]
             notifier
@@ -104,7 +142,8 @@ impl ServiceLoop {
                     &format!("watchdog_loop={:?}", self.health.snapshot().phase),
                 )
                 .map_err(WatchdogError::InvalidInput)?;
-            if report.desired_mode == DesiredMode::Stopped
+            if admin.is_none()
+                && report.desired_mode == DesiredMode::Stopped
                 && self.supervisor.has_no_owned_children()
                 && report.quarantined.is_empty()
                 && report.errors.is_empty()
