@@ -23,12 +23,15 @@ use uuid::Uuid;
 
 #[path = "storage_admin.rs"]
 mod storage_admin;
+#[path = "storage_queries.rs"]
+mod storage_queries;
 pub use storage_admin::{
     MAX_OPERATOR_COMMANDS, MAX_OPERATOR_COMMANDS_WITH_STOP_RESERVE, MAX_OPERATOR_RESPONSE_BYTES,
     OPERATOR_LEDGER_SCHEMA_VERSION, OperatorCapability, OperatorCommand, OperatorCommandContext,
     OperatorCommandOutcome, OperatorCommandReceipt, RESERVED_LIFECYCLE_COMMANDS,
     RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
 };
+pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_AUDIT_DETAIL_BYTES: usize = 16 * 1024;

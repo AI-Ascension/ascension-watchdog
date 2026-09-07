@@ -32,6 +32,8 @@ impl AdminDispatcher for Dispatcher<'_> {
             AdminCommand::Resume(_) => OperatorCommand::Resume,
             AdminCommand::Drain(_) => OperatorCommand::Drain,
             AdminCommand::Stop(_) => OperatorCommand::Stop,
+            AdminCommand::Jobs(_) => OperatorCommand::Jobs,
+            AdminCommand::Attempt(_) => OperatorCommand::Attempt,
             _ => return Err(AdminDispatchError::Unsupported),
         };
         let durable_context = OperatorCommandContext::new(
@@ -45,6 +47,13 @@ impl AdminDispatcher for Dispatcher<'_> {
             context.command_fingerprint(),
         )
         .map_err(|error| AdminDispatchError::from(&error))?;
+        if matches!(operation, OperatorCommand::Jobs | OperatorCommand::Attempt) {
+            self.supervisor
+                .store
+                .admit_operator_read(&durable_context, operation)
+                .map_err(|error| AdminDispatchError::from(&error))?;
+            return self.inspect_work(command);
+        }
         if operation == OperatorCommand::Status {
             self.supervisor
                 .store
@@ -94,6 +103,52 @@ impl AdminDispatcher for Dispatcher<'_> {
             | OperatorCommandOutcome::Replayed(receipt) => serde_json::from_value(receipt.response)
                 .map_err(|_| AdminDispatchError::PersistenceUnavailable),
             OperatorCommandOutcome::ReadOnly => Err(AdminDispatchError::Internal),
+        }
+    }
+}
+
+impl Dispatcher<'_> {
+    fn inspect_work(&self, command: &AdminCommand) -> Result<AdminResult, AdminDispatchError> {
+        match command {
+            AdminCommand::Jobs(request) => {
+                use crate::admin::JobFilter;
+                use crate::storage::JobStatus;
+                let filter = match request.filter {
+                    JobFilter::All => None,
+                    JobFilter::Queued => Some(JobStatus::Queued),
+                    JobFilter::Running => Some(JobStatus::Running),
+                    JobFilter::Completed => Some(JobStatus::Completed),
+                    JobFilter::Failed => Some(JobStatus::Failed),
+                    JobFilter::Quarantined => Some(JobStatus::Quarantined),
+                };
+                let summary = self
+                    .supervisor
+                    .store
+                    .job_summaries(filter, request.limit)
+                    .map_err(|error| AdminDispatchError::from(&error))?;
+                // Only the deliberately redacted storage projection crosses this boundary.
+                let value =
+                    serde_json::to_value(summary).map_err(|_| AdminDispatchError::Internal)?;
+                Ok(AdminResult::Jobs(
+                    serde_json::from_value(value)
+                        .map_err(|_| AdminDispatchError::PersistenceUnavailable)?,
+                ))
+            }
+            AdminCommand::Attempt(request) => {
+                let summary = self
+                    .supervisor
+                    .store
+                    .attempt_summary(&request.attempt_id)
+                    .map_err(|error| AdminDispatchError::from(&error))?
+                    .ok_or(AdminDispatchError::NotFound)?;
+                let value =
+                    serde_json::to_value(summary).map_err(|_| AdminDispatchError::Internal)?;
+                Ok(AdminResult::Attempt(
+                    serde_json::from_value(value)
+                        .map_err(|_| AdminDispatchError::PersistenceUnavailable)?,
+                ))
+            }
+            _ => Err(AdminDispatchError::Unsupported),
         }
     }
 }

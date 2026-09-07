@@ -48,6 +48,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "daemon"
                 | "run"
                 | "job"
+                | "attempt"
                 | "help"
                 | "version"
                 | "--help"
@@ -77,6 +78,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         }
         "daemon" | "run" => daemon_command(&mut args, &config_path),
         "job" => job_command(&mut args, &config_path),
+        "attempt" => attempt_command(&mut args, &config_path),
         other => Err(WatchdogError::InvalidInput(format!(
             "unknown command {other}; try `watchdog help`"
         ))),
@@ -308,6 +310,14 @@ fn job_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Stri
         WatchdogError::InvalidInput("job requires submit/list/claim/complete/fail".to_string())
     })?;
     let config = WatchdogConfig::from_file(config_path)?;
+    if subcommand == "list" {
+        return list_jobs_command(args, &config);
+    }
+    if config.admin.is_some() || !config.allow_synthetic_children {
+        return Err(WatchdogError::Unauthorized(
+            "direct job mutations are restricted to unauthenticated synthetic fixtures; authenticated service job submission is not yet available".to_owned(),
+        ));
+    }
     let mut store = Store::open(&config.database, &config)?;
     match subcommand {
         "submit" => {
@@ -323,16 +333,6 @@ fn job_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Stri
             Ok(Some(serde_json::to_string(
                 &store.submit_job(&kind, &payload)?,
             )?))
-        }
-        "list" => {
-            let limit = take_option(args, "--limit")
-                .map(|value| value.parse::<u64>())
-                .transpose()
-                .map_err(|error| {
-                    WatchdogError::InvalidInput(format!("invalid job limit: {error}"))
-                })?
-                .unwrap_or(100);
-            Ok(Some(serde_json::to_string(&store.list_jobs(limit)?)?))
         }
         "claim" => {
             let worker = take_option(args, "--worker").unwrap_or_else(|| "cli-worker".to_string());
@@ -370,6 +370,93 @@ fn job_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Stri
             "unknown job command {other}"
         ))),
     }
+}
+
+fn list_jobs_command(args: &mut Vec<String>, config: &WatchdogConfig) -> Result<Option<String>> {
+    use crate::admin::{AdminCommand, JobFilter, JobsRequest};
+    args.remove(0);
+    let limit = take_option(args, "--limit")
+        .map(|value| value.parse::<u16>())
+        .transpose()
+        .map_err(|_| WatchdogError::InvalidInput("invalid job limit".to_owned()))?
+        .unwrap_or(64);
+    let filter = match take_option(args, "--filter").as_deref().unwrap_or("all") {
+        "all" => JobFilter::All,
+        "queued" => JobFilter::Queued,
+        "running" => JobFilter::Running,
+        "completed" => JobFilter::Completed,
+        "failed" => JobFilter::Failed,
+        "quarantined" => JobFilter::Quarantined,
+        _ => return Err(WatchdogError::InvalidInput("invalid job filter".to_owned())),
+    };
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected job list argument".to_owned(),
+        ));
+    }
+    let command = AdminCommand::Jobs(JobsRequest { filter, limit });
+    command.validate().map_err(WatchdogError::InvalidInput)?;
+    if config.admin.is_some() {
+        return read_admin_command(config, command);
+    }
+    let filter = match filter {
+        JobFilter::All => None,
+        JobFilter::Queued => Some(crate::storage::JobStatus::Queued),
+        JobFilter::Running => Some(crate::storage::JobStatus::Running),
+        JobFilter::Completed => Some(crate::storage::JobStatus::Completed),
+        JobFilter::Failed => Some(crate::storage::JobStatus::Failed),
+        JobFilter::Quarantined => Some(crate::storage::JobStatus::Quarantined),
+    };
+    let store = Store::open_read_only(&config.database, config)?;
+    Ok(Some(serde_json::to_string(
+        &store.job_summaries(filter, limit)?,
+    )?))
+}
+
+fn attempt_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
+    if args.len() != 1 {
+        return Err(WatchdogError::InvalidInput(
+            "attempt requires one attempt id".to_owned(),
+        ));
+    }
+    let config = WatchdogConfig::from_file(config_path)?;
+    let attempt_id = args.remove(0);
+    let command = crate::admin::AdminCommand::Attempt(crate::admin::AttemptRequest {
+        attempt_id: attempt_id.clone(),
+    });
+    command.validate().map_err(WatchdogError::InvalidInput)?;
+    if config.admin.is_some() {
+        return read_admin_command(&config, command);
+    }
+    let store = Store::open_read_only(&config.database, &config)?;
+    let summary = store
+        .attempt_summary(&attempt_id)?
+        .ok_or_else(|| WatchdogError::NotFound("attempt not found".to_owned()))?;
+    Ok(Some(serde_json::to_string(&summary)?))
+}
+
+fn read_admin_command(
+    config: &WatchdogConfig,
+    command: crate::admin::AdminCommand,
+) -> Result<Option<String>> {
+    use crate::admin::{AdminClient, AdminClientConfig, Capability, ReplyStatus};
+    let admin = config
+        .admin
+        .as_ref()
+        .ok_or_else(|| WatchdogError::Unauthorized("admin configuration missing".to_owned()))?;
+    let client = AdminClient::new(AdminClientConfig::new(
+        admin.endpoint.clone(),
+        admin.read_token_path.clone(),
+        Capability::Read,
+    )?)?;
+    let response = client.execute(&uuid::Uuid::new_v4().to_string(), command)?;
+    if response.status != ReplyStatus::Ok {
+        return Err(WatchdogError::Conflict(format!(
+            "administrative inspection returned {:?}",
+            response.status
+        )));
+    }
+    Ok(Some(serde_json::to_string(&response)?))
 }
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Option<String> {
