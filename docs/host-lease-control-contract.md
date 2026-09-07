@@ -186,6 +186,10 @@ the only use of wire timestamps for expiry; `issued_at` and `expires_at` remain
 audit data after that check. A renewal must pass the same check and derive a
 new deadline from its own received-at pair. The deadline is never extended from
 `ttl_seconds` alone and is never restored from durable state after restart.
+Timestamp subtraction and the `min`/addition operations preserve the wire
+fractional-second precision through the host's monotonic clock unit and use
+checked arithmetic; implementations must not truncate either wall timestamp to
+whole seconds before the expiry check or clamp.
 Clock suspend/resume or monotonic-clock ambiguity blocks mutation, discards the
 deadline, and requires revocation/rekey followed by a new install.
 

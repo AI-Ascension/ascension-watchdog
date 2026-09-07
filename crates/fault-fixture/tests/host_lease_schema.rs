@@ -21,6 +21,8 @@ const CONTRACT: &str = "watchdog-host-lease-control-v1";
 const SCHEMA_DIGEST: &str = "e22faf0f7d3cd313a007b65e52058b3c255153d5778dd8124055c283adf977f9";
 const MAX_FRAME_BYTES: usize = 262_144;
 const MAX_PROOF_BYTES: usize = 512;
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
 
 fn artifact_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -31,7 +33,7 @@ fn artifact_root() -> PathBuf {
 fn read_json(relative: &str) -> Result<Value, String> {
     let path = artifact_root().join(relative);
     let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+    parse_unique_json(&bytes).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn read_bytes(relative: &str) -> Result<Vec<u8>, String> {
@@ -64,9 +66,14 @@ fn string<'a>(map: &'a Map<String, Value>, field: &str, context: &str) -> Result
 }
 
 fn u64_value(map: &Map<String, Value>, field: &str, context: &str) -> Result<u64, String> {
-    map.get(field)
+    let value = map
+        .get(field)
         .and_then(Value::as_u64)
-        .ok_or_else(|| format!("{context}.{field} must be an unsigned integer"))
+        .ok_or_else(|| format!("{context}.{field} must be an unsigned integer"))?;
+    if value > MAX_SAFE_INTEGER {
+        return Err(format!("{context}.{field} exceeds the HCJ-1 u53 bound"));
+    }
+    Ok(value)
 }
 
 fn uuid(value: &str, random: bool, context: &str) -> Result<(), String> {
@@ -537,7 +544,7 @@ fn validate_ack(value: &Value, kind: &str) -> Result<(), String> {
         || (!result["retry_after_seconds"].is_null()
             && result["retry_after_seconds"]
                 .as_u64()
-                .is_none_or(|value| value == 0))
+                .is_none_or(|value| value == 0 || value > MAX_SAFE_INTEGER))
     {
         return Err("error acknowledgment has an invalid retry hint".to_owned());
     }
@@ -708,10 +715,8 @@ fn validate_frame(value: &Value, expected_kind: &str) -> Result<(), String> {
                     .ok_or("grant digest missing")?,
                 "grant_digest",
             )?;
-            if payload["renew_sequence"]
-                .as_u64()
-                .is_none_or(|sequence| sequence == 0)
-            {
+            let sequence = payload["renew_sequence"].as_u64();
+            if sequence.is_none_or(|sequence| sequence == 0 || sequence > MAX_SAFE_INTEGER) {
                 return Err("renew sequence must be positive".to_owned());
             }
             validate_bound_grant(&payload["grant"], string(auth, "principal_id", "auth")?)
@@ -815,6 +820,7 @@ struct StoredInstallation {
     renewal_sequence: u64,
     active: bool,
     revoked_reason: Option<String>,
+    restarted: bool,
     deadline: Option<u64>,
 }
 
@@ -909,23 +915,41 @@ fn days_in_month(year: u16, month: u8) -> u8 {
     }
 }
 
-fn wall_seconds(value: TimestampKey) -> i64 {
-    let mut days = 0_i64;
+fn wall_nanos(value: TimestampKey) -> Result<u128, String> {
+    let mut days = 0_u128;
     for year in 0..value.year {
-        days += if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-            366
-        } else {
-            365
-        };
+        days = days
+            .checked_add(if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                366
+            } else {
+                365
+            })
+            .ok_or_else(|| "wall-clock day overflow".to_owned())?;
     }
     for month in 1..value.month {
-        days += i64::from(days_in_month(value.year, month));
+        days = days
+            .checked_add(u128::from(days_in_month(value.year, month)))
+            .ok_or_else(|| "wall-clock day overflow".to_owned())?;
     }
-    days += i64::from(value.day - 1);
-    days * 86_400
-        + i64::from(value.hour) * 3_600
-        + i64::from(value.minute) * 60
-        + i64::from(value.second)
+    days = days
+        .checked_add(u128::from(value.day - 1))
+        .ok_or_else(|| "wall-clock day overflow".to_owned())?;
+    let seconds = days
+        .checked_mul(86_400)
+        .ok_or_else(|| "wall-clock second overflow".to_owned())?;
+    let seconds = seconds
+        .checked_add(u128::from(value.hour) * 3_600)
+        .ok_or_else(|| "wall-clock second overflow".to_owned())?;
+    let seconds = seconds
+        .checked_add(u128::from(value.minute) * 60)
+        .ok_or_else(|| "wall-clock second overflow".to_owned())?;
+    let seconds = seconds
+        .checked_add(u128::from(value.second))
+        .ok_or_else(|| "wall-clock second overflow".to_owned())?;
+    seconds
+        .checked_mul(NANOSECONDS_PER_SECOND)
+        .and_then(|seconds| seconds.checked_add(u128::from(value.nanosecond)))
+        .ok_or_else(|| "wall-clock nanosecond overflow".to_owned())
 }
 
 fn derive_deadline(
@@ -934,14 +958,28 @@ fn derive_deadline(
     ttl_seconds: u64,
     received_at_monotonic: u64,
 ) -> Result<u64, String> {
-    let remaining = wall_seconds(expires) - wall_seconds(received_at_wall);
-    if remaining <= 0 {
+    let received_nanos = wall_nanos(received_at_wall)?;
+    let expires_nanos = wall_nanos(expires)?;
+    let remaining_nanos = expires_nanos
+        .checked_sub(received_nanos)
+        .ok_or_else(|| "grant is expired at receipt".to_owned())?;
+    if remaining_nanos == 0 {
         return Err("grant is expired at receipt".to_owned());
     }
-    let remaining = u64::try_from(remaining).map_err(|_| "remaining deadline overflow")?;
-    received_at_monotonic
-        .checked_add(remaining.min(ttl_seconds))
-        .ok_or_else(|| "monotonic deadline overflow".to_owned())
+    let ttl_nanos = u128::from(ttl_seconds)
+        .checked_mul(NANOSECONDS_PER_SECOND)
+        .ok_or_else(|| "TTL deadline overflow".to_owned())?;
+    let bounded_nanos = remaining_nanos.min(ttl_nanos);
+    let deadline = u128::from(received_at_monotonic)
+        .checked_add(bounded_nanos)
+        .ok_or_else(|| "monotonic deadline overflow".to_owned())?;
+    u64::try_from(deadline).map_err(|_| "monotonic deadline overflow".to_owned())
+}
+
+fn monotonic_seconds(seconds: u64) -> u64 {
+    seconds
+        .checked_mul(1_000_000_000)
+        .expect("test monotonic timestamp fits in nanoseconds")
 }
 
 impl ReferenceHost {
@@ -957,6 +995,20 @@ impl ReferenceHost {
         let Ok(received) = timestamp_key(received_at, "received_at") else {
             return ReferenceStatus::Invalid;
         };
+        if let Some(existing) = self.installations.get_mut(&prepared.installation_id) {
+            if existing.initial_grant_digest == prepared.grant_digest
+                && existing.initial_persisted_grant == prepared.persisted_grant
+            {
+                // A retry replays the retained install identity. It must never
+                // reactivate a revoked or restart-invalidated tombstone.
+                return if existing.restarted {
+                    ReferenceStatus::Conflict
+                } else {
+                    ReferenceStatus::Duplicate
+                };
+            }
+            return ReferenceStatus::Conflict;
+        }
         let ttl = request
             .pointer("/payload/grant/lease/ttl_seconds")
             .and_then(Value::as_u64)
@@ -965,19 +1017,6 @@ impl ReferenceHost {
         else {
             return ReferenceStatus::Expired;
         };
-        if let Some(existing) = self.installations.get_mut(&prepared.installation_id) {
-            if existing.initial_grant_digest == prepared.grant_digest
-                && existing.initial_persisted_grant == prepared.persisted_grant
-            {
-                if !existing.active {
-                    existing.active = true;
-                    existing.deadline = Some(deadline);
-                    return ReferenceStatus::Installed;
-                }
-                return ReferenceStatus::Duplicate;
-            }
-            return ReferenceStatus::Conflict;
-        }
         if self.lease_installations.contains_key(&prepared.lease_id) {
             return ReferenceStatus::Conflict;
         }
@@ -993,6 +1032,7 @@ impl ReferenceHost {
             renewal_sequence: 0,
             active: true,
             revoked_reason: None,
+            restarted: false,
             deadline: Some(deadline),
         };
         self.lease_installations
@@ -1013,14 +1053,6 @@ impl ReferenceHost {
         let Ok(received) = timestamp_key(received_at, "received_at") else {
             return ReferenceStatus::Invalid;
         };
-        let ttl = request
-            .pointer("/payload/grant/lease/ttl_seconds")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let Ok(deadline) = derive_deadline(received, prepared.expires, ttl, received_at_monotonic)
-        else {
-            return ReferenceStatus::Expired;
-        };
         let Some(existing) = self.installations.get_mut(&prepared.installation_id) else {
             return ReferenceStatus::Missing;
         };
@@ -1028,7 +1060,11 @@ impl ReferenceHost {
             return ReferenceStatus::Invalid;
         };
         if !existing.active {
-            return ReferenceStatus::Missing;
+            return if existing.restarted {
+                ReferenceStatus::Conflict
+            } else {
+                ReferenceStatus::Missing
+            };
         }
         if existing.lease_id != prepared.lease_id
             || existing.token_digest != prepared.token_digest
@@ -1042,6 +1078,14 @@ impl ReferenceHost {
         {
             return ReferenceStatus::RenewDuplicate;
         }
+        let ttl = request
+            .pointer("/payload/grant/lease/ttl_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let Ok(deadline) = derive_deadline(received, prepared.expires, ttl, received_at_monotonic)
+        else {
+            return ReferenceStatus::Expired;
+        };
         if sequence <= existing.renewal_sequence || prepared.expires <= existing.expires {
             return ReferenceStatus::Conflict;
         }
@@ -1083,6 +1127,9 @@ impl ReferenceHost {
 
     fn restart(&mut self) {
         for installation in self.installations.values_mut() {
+            if installation.active {
+                installation.restarted = true;
+            }
             installation.active = false;
             installation.deadline = None;
         }
@@ -1231,11 +1278,11 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
 
     let mut host = ReferenceHost::default();
     assert_eq!(
-        host.install(&install, "2026-09-07T00:00:02Z", 100),
+        host.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
         ReferenceStatus::Installed
     );
     assert_eq!(
-        host.install(&install, "2026-09-07T00:00:04Z", 102),
+        host.install(&install, "2026-09-07T00:00:04Z", monotonic_seconds(102),),
         ReferenceStatus::Duplicate
     );
     assert!(
@@ -1251,11 +1298,11 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
             .is_some()
     );
     assert_eq!(
-        host.renew(&renew, "2026-09-07T00:00:10Z", 110),
+        host.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
         ReferenceStatus::Renewed
     );
     assert_eq!(
-        host.renew(&renew, "2026-09-07T00:00:11Z", 111),
+        host.renew(&renew, "2026-09-07T00:00:11Z", monotonic_seconds(111),),
         ReferenceStatus::RenewDuplicate
     );
 
@@ -1267,6 +1314,12 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         host.revoke(&renewed_revoke),
         ReferenceStatus::RevokeDuplicate
     );
+    assert_eq!(
+        host.install(&install, "2026-09-07T00:00:31Z", monotonic_seconds(131),),
+        ReferenceStatus::Duplicate
+    );
+    assert!(!host.installations[installation_id].active);
+    assert!(host.deadline(installation_id).is_none());
 
     let mut conflicting_reason = renewed_revoke.clone();
     conflicting_reason["payload"]["reason"] = Value::String("operator".to_owned());
@@ -1276,7 +1329,11 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
     changed_installation["payload"]["installation_id"] =
         Value::String("00000000-0000-4000-8000-00000000000a".to_owned());
     assert_eq!(
-        host.install(&changed_installation, "2026-09-07T00:00:02Z", 100),
+        host.install(
+            &changed_installation,
+            "2026-09-07T00:00:02Z",
+            monotonic_seconds(100),
+        ),
         ReferenceStatus::Conflict
     );
 
@@ -1285,23 +1342,27 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         Value::String("2026-09-07T00:00:31Z".to_owned());
     set_grant_digest(&mut changed_grant)?;
     assert_eq!(
-        host.install(&changed_grant, "2026-09-07T00:00:02Z", 100),
+        host.install(
+            &changed_grant,
+            "2026-09-07T00:00:02Z",
+            monotonic_seconds(100),
+        ),
         ReferenceStatus::Conflict
     );
 
     let mut missing_host = ReferenceHost::default();
     assert_eq!(
-        missing_host.renew(&renew, "2026-09-07T00:00:10Z", 110),
+        missing_host.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
         ReferenceStatus::Missing
     );
 
     let mut nonadvancing = ReferenceHost::default();
     assert_eq!(
-        nonadvancing.install(&install, "2026-09-07T00:00:02Z", 100),
+        nonadvancing.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
         ReferenceStatus::Installed
     );
     assert_eq!(
-        nonadvancing.renew(&renew, "2026-09-07T00:00:10Z", 110),
+        nonadvancing.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
         ReferenceStatus::Renewed
     );
     let mut sequence_conflict = renew.clone();
@@ -1309,39 +1370,67 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         Value::String("2026-09-07T00:02:00Z".to_owned());
     set_grant_digest(&mut sequence_conflict)?;
     assert_eq!(
-        nonadvancing.renew(&sequence_conflict, "2026-09-07T00:00:10Z", 110),
+        nonadvancing.renew(
+            &sequence_conflict,
+            "2026-09-07T00:00:10Z",
+            monotonic_seconds(110),
+        ),
         ReferenceStatus::Conflict
     );
 
     let mut restarted = ReferenceHost::default();
     assert_eq!(
-        restarted.install(&install, "2026-09-07T00:00:02Z", 100),
+        restarted.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
         ReferenceStatus::Installed
     );
     assert!(restarted.deadline(installation_id).is_some());
     restarted.restart();
     assert!(restarted.deadline(installation_id).is_none());
     assert_eq!(
-        restarted.renew(&renew, "2026-09-07T00:00:10Z", 110),
-        ReferenceStatus::Missing
+        restarted.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
+        ReferenceStatus::Conflict
     );
     assert_eq!(
-        restarted.install(&install, "2026-09-07T00:00:02Z", 100),
-        ReferenceStatus::Installed
+        restarted.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
+        ReferenceStatus::Conflict
     );
 
     let mut expired = install.clone();
     let mut deadline_host = ReferenceHost::default();
     assert_eq!(
-        deadline_host.install(&expired, "2026-09-07T00:00:30Z", 130),
+        deadline_host.install(&expired, "2026-09-07T00:00:30Z", monotonic_seconds(130),),
         ReferenceStatus::Expired
     );
     expired["payload"]["grant"]["lease"]["expires_at"] =
         Value::String("2026-09-07T00:00:31Z".to_owned());
     set_grant_digest(&mut expired)?;
     assert_eq!(
-        deadline_host.install(&expired, "2026-09-07T00:00:30Z", 130),
+        deadline_host.install(&expired, "2026-09-07T00:00:30Z", monotonic_seconds(130),),
         ReferenceStatus::Installed
+    );
+
+    let mut late_install = ReferenceHost::default();
+    assert_eq!(
+        late_install.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
+        ReferenceStatus::Installed
+    );
+    assert_eq!(
+        late_install.install(&install, "2026-09-07T00:01:30Z", monotonic_seconds(190),),
+        ReferenceStatus::Duplicate
+    );
+
+    let mut late_renew = ReferenceHost::default();
+    assert_eq!(
+        late_renew.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
+        ReferenceStatus::Installed
+    );
+    assert_eq!(
+        late_renew.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
+        ReferenceStatus::Renewed
+    );
+    assert_eq!(
+        late_renew.renew(&renew, "2026-09-07T02:00:00Z", monotonic_seconds(7_300),),
+        ReferenceStatus::RenewDuplicate
     );
     Ok(())
 }
@@ -1350,19 +1439,46 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
 fn received_wall_checks_clamp_monotonic_deadlines() -> Result<(), Box<dyn std::error::Error>> {
     let received = timestamp_key("2026-09-07T00:00:10Z", "received")?;
     let short_expiry = timestamp_key("2026-09-07T00:00:15Z", "expiry")?;
-    assert_eq!(derive_deadline(received, short_expiry, 30, 100)?, 105);
+    assert_eq!(
+        derive_deadline(received, short_expiry, 30, monotonic_seconds(100))?,
+        monotonic_seconds(105)
+    );
 
     let long_expiry = timestamp_key("2026-09-07T00:01:15Z", "expiry")?;
-    assert_eq!(derive_deadline(received, long_expiry, 30, 100)?, 130);
-    assert!(derive_deadline(received, received, 30, 100).is_err());
+    assert_eq!(
+        derive_deadline(received, long_expiry, 30, monotonic_seconds(100))?,
+        monotonic_seconds(130)
+    );
+    assert!(derive_deadline(received, received, 30, monotonic_seconds(100)).is_err());
     assert!(
         derive_deadline(
             received,
             timestamp_key("2026-09-07T00:00:09Z", "expiry")?,
             30,
-            100
+            monotonic_seconds(100)
         )
         .is_err()
+    );
+    let fractional_received = timestamp_key("2026-09-07T00:00:10.900Z", "received")?;
+    let fractional_expiry = timestamp_key("2026-09-07T00:00:15.100Z", "expiry")?;
+    assert_eq!(
+        derive_deadline(
+            fractional_received,
+            fractional_expiry,
+            30,
+            monotonic_seconds(100)
+        )?,
+        monotonic_seconds(104) + 200_000_000
+    );
+    let fractional_clamped = timestamp_key("2026-09-07T00:01:15.100Z", "expiry")?;
+    assert_eq!(
+        derive_deadline(
+            fractional_received,
+            fractional_clamped,
+            30,
+            monotonic_seconds(100)
+        )?,
+        monotonic_seconds(130)
     );
     Ok(())
 }
@@ -1387,6 +1503,16 @@ fn timestamp_and_semantic_identity_checks_are_strict() -> Result<(), Box<dyn std
     let mut wrong_capability = install.clone();
     wrong_capability["auth"]["capability"] = Value::String("lease_revoke".to_owned());
     assert!(validate_frame(&wrong_capability, "lease_install_request").is_err());
+
+    let mut wrong_u53 = install.clone();
+    wrong_u53["payload"]["grant"]["boot"]["authority_generation"] =
+        Value::Number((MAX_SAFE_INTEGER + 1).into());
+    set_grant_digest(&mut wrong_u53)?;
+    assert!(validate_request_semantics(&wrong_u53, "lease_install_request").is_err());
+
+    let mut wrong_sequence = read_json("fixtures/valid/lease-renew-request.json")?;
+    wrong_sequence["payload"]["renew_sequence"] = Value::Number((MAX_SAFE_INTEGER + 1).into());
+    assert!(validate_frame(&wrong_sequence, "lease_renew_request").is_err());
 
     let mut duplicate_status = read_json("fixtures/valid/lease-install-response.json")?;
     duplicate_status["payload"]["ack"]["result"]["status"] = Value::String("RENEWED".to_owned());
@@ -1431,7 +1557,7 @@ fn manifest_pins_the_exact_closed_schema_without_self_reference()
     assert_eq!(manifest_object["schema_digest"], SCHEMA_DIGEST);
     assert_eq!(manifest_object["schema_file"], "frame.schema.json");
     assert_ne!(manifest_object["schema_digest"], manifest_object["$id"]);
-    let schema = serde_json::from_slice::<Value>(&schema_bytes)?;
+    let schema = parse_unique_json(&schema_bytes)?;
     let alternatives = schema["oneOf"].as_array().ok_or("schema oneOf missing")?;
     assert_eq!(alternatives.len(), 6);
     for definition in [
@@ -1482,7 +1608,7 @@ fn valid_lifecycle_fixtures_are_closed_bound_and_semantically_coherent()
     for (file, kind) in valid {
         let bytes = read_bytes(&format!("fixtures/valid/{file}"))?;
         assert!(bytes.len() <= MAX_FRAME_BYTES, "{file} exceeds frame bound");
-        let value: Value = serde_json::from_slice(&bytes)?;
+        let value = parse_unique_json(&bytes)?;
         validate_frame(&value, kind).map_err(|error| format!("{file}: {error}"))?;
         if kind.ends_with("_request") {
             validate_request_semantics(&value, kind).map_err(|error| format!("{file}: {error}"))?;
