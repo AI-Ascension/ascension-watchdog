@@ -1903,7 +1903,10 @@ impl ServiceInstallPlan {
             .map_err(service_error("OpenSCManager(stop uninstall)"))?;
         let service = match manager.open_service(
             &self.service_name,
-            ServiceAccess::QUERY_CONFIG | ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
+            ServiceAccess::QUERY_CONFIG
+                | ServiceAccess::QUERY_STATUS
+                | ServiceAccess::STOP
+                | ServiceAccess::DELETE,
         ) {
             Ok(service) => service,
             Err(error) if service_missing(&error) => {
@@ -1963,13 +1966,15 @@ impl ServiceInstallPlan {
         }
         Ok(StoppedServiceWitness {
             binding: binding.clone(),
+            service,
         })
     }
 
     /// Delete a concrete bound service only after consuming the opaque native
     /// stop witness. The installed command line and SCM state are re-queried
-    /// immediately before deletion. A missing service is idempotent once the
-    /// witness has been established.
+    /// immediately before deletion on the same held SCM handle used for stop.
+    /// Never reopen by name: a replacement service must not inherit an older
+    /// service object's stop witness.
     pub fn delete_bound_stopped_service(
         &self,
         stopped: StoppedServiceWitness,
@@ -1979,17 +1984,7 @@ impl ServiceInstallPlan {
                 "service name is not the fixed ascension-watchdog name".to_owned(),
             ));
         }
-        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
-            .map_err(service_error("OpenSCManager(delete uninstall)"))?;
-        let service = match manager.open_service(
-            &self.service_name,
-            ServiceAccess::QUERY_CONFIG | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
-        ) {
-            Ok(service) => service,
-            Err(error) if service_missing(&error) => return Ok(()),
-            Err(error) => return Err(service_error("OpenService(delete uninstall)")(error)),
-        };
-        let StoppedServiceWitness { binding } = stopped;
+        let StoppedServiceWitness { binding, service } = stopped;
         let service_config = service
             .query_config()
             .map_err(service_error("QueryServiceConfig(delete uninstall)"))?;
@@ -2035,11 +2030,23 @@ impl ServiceBinding {
 ///
 /// This type has no public constructor or mutable fields. It proves only that
 /// [`ServiceInstallPlan::stop_bound_service`] revalidated this exact binding
-/// and observed SCM `Stopped`; it is not a proof of durable owner-store intent
-/// or reconciliation.
-#[derive(Debug)]
+/// and observed SCM `Stopped`. It retains that service object's handle until
+/// deletion or drop; it is not a proof of durable owner-store intent or
+/// reconciliation. Concurrent reconfiguration still requires the repeated
+/// binding and stopped-state checks performed before deletion.
 pub struct StoppedServiceWitness {
     binding: ServiceBinding,
+    service: Service,
+}
+
+impl std::fmt::Debug for StoppedServiceWitness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoppedServiceWitness")
+            .field("binding", &self.binding)
+            .field("service_handle_held", &true)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StoppedServiceWitness {
