@@ -1,24 +1,26 @@
 //! Linux process authority backed by delegated cgroup v2.
 //!
-//! This module intentionally uses only safe Rust.  A cgroup is created before
-//! a child is spawned, and the child is transferred to that cgroup before the
-//! adapter returns an ownership record.  The cgroup is the authority used for
-//! descendant cleanup; a PID is checked against both `/proc` birth data and the
-//! exact cgroup before it is observed or signalled.  If the current service
-//! does not have a writable delegated cgroup with `cgroup.kill`, construction
-//! fails explicitly with [`AdapterError::Unavailable`].
+//! This module intentionally uses only safe Rust.  A durable cgroup is created
+//! before a trusted helper is spawned; the helper is moved into that cgroup,
+//! verified there, and only then allowed to create the requested target.  The
+//! cgroup is the authority used for descendant cleanup; a PID is checked
+//! against both `/proc` birth data and the exact cgroup before it is observed
+//! or signalled.  If the current service does not have a writable delegated
+//! cgroup with `cgroup.kill`, construction fails explicitly with
+//! [`AdapterError::Unavailable`].
 //!
-//! The standard library has no race-free Linux signal or pre-exec API.  The
-//! adapter therefore uses the exact `Child` handle for launch-failure cleanup,
+//! The adapter uses the exact helper `Child` handle for launch-failure cleanup,
 //! a fixed system `kill` helper for the bounded graceful TERM request, and
 //! cgroup v2 `cgroup.kill` for force cleanup.  The latter is the only operation
-//! that is allowed to terminate descendants.  A future reviewed pidfd/pre-exec
-//! boundary can replace those two narrow seams without changing the contract.
+//! that is allowed to terminate descendants.  The helper barrier is a safe
+//! supervisor seam; a future reviewed pidfd/pre-exec boundary can replace it
+//! without changing the contract.
 
 use super::contract::{
     AdapterError, ComponentKind, ContainmentId, LaunchSpec, Observation, OwnedProcess,
     ProcessAdapter, ProcessCreation, ProcessIdentity, SessionSelector, StopOutcome,
 };
+use super::linux_launcher::TrustedLinuxLauncher;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -49,6 +51,7 @@ pub struct LinuxProcessAdapter {
     children: BTreeMap<String, ManagedProcess>,
     max_children: usize,
     signal_helper: Option<PathBuf>,
+    launcher: TrustedLinuxLauncher,
 }
 
 impl LinuxProcessAdapter {
@@ -76,6 +79,21 @@ impl LinuxProcessAdapter {
         allowlist: BTreeMap<ComponentKind, PathBuf>,
         max_children: usize,
     ) -> Result<Self, AdapterError> {
+        let launcher = TrustedLinuxLauncher::current_executable()?;
+        Self::with_cgroup_root_and_limit_and_launcher(root, allowlist, max_children, launcher)
+    }
+
+    /// Construct an adapter with an explicit helper executable.
+    ///
+    /// This is the seam used by a real watchdog executable and by platform
+    /// tests.  The helper must dispatch [`super::linux_launcher::helper_argument`]
+    /// before normal CLI parsing; no direct-spawn fallback exists.
+    pub fn with_cgroup_root_and_limit_and_launcher(
+        root: impl Into<PathBuf>,
+        allowlist: BTreeMap<ComponentKind, PathBuf>,
+        max_children: usize,
+        launcher: TrustedLinuxLauncher,
+    ) -> Result<Self, AdapterError> {
         if max_children == 0 || max_children > MAX_ACTIVE_CHILDREN {
             return Err(AdapterError::Invalid(
                 "Linux process limit is outside bounds".to_owned(),
@@ -96,6 +114,7 @@ impl LinuxProcessAdapter {
             children: BTreeMap::new(),
             max_children,
             signal_helper: find_signal_helper(),
+            launcher,
         })
     }
 
@@ -109,6 +128,40 @@ impl LinuxProcessAdapter {
     #[must_use]
     pub fn allowlist(&self) -> &BTreeMap<ComponentKind, PathBuf> {
         &self.allowlist
+    }
+
+    /// Return the configured trusted helper launcher.
+    #[must_use]
+    pub fn launcher(&self) -> &TrustedLinuxLauncher {
+        &self.launcher
+    }
+
+    /// Derive the exact containment identity that must be persisted before a
+    /// launch effect is attempted.  The value is deterministic only from the
+    /// complete launch identity, including its fresh nonce.
+    pub fn planned_containment_for(
+        specification: &LaunchSpec,
+    ) -> Result<ContainmentId, AdapterError> {
+        specification.validate()?;
+        let name = make_containment_name(specification);
+        ContainmentId::new(format!("{CGROUP_PREFIX}{name}"))
+    }
+
+    /// Launch using the exact containment identity already recorded in the
+    /// durable launch intent.  A mismatched or malformed value is rejected;
+    /// the adapter never silently substitutes a newly generated cgroup.
+    pub fn launch_with_planned_containment(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: &ContainmentId,
+    ) -> Result<OwnedProcess, AdapterError> {
+        let expected = Self::planned_containment_for(specification)?;
+        if &expected != planned_containment {
+            return Err(AdapterError::IdentityMismatch(
+                "planned Linux containment does not match the launch identity".to_owned(),
+            ));
+        }
+        self.launch_with_containment(specification, Some(planned_containment))
     }
 
     fn maybe_cgroup_for_identity(
@@ -251,13 +304,42 @@ impl ProcessAdapter for LinuxProcessAdapter {
     }
 
     fn launch(&mut self, specification: &LaunchSpec) -> Result<OwnedProcess, AdapterError> {
+        self.launch_with_containment(specification, None)
+    }
+
+    fn inspect(&mut self, process: &OwnedProcess) -> Result<Observation, AdapterError> {
+        LinuxProcessAdapter::inspect(self, process)
+    }
+
+    fn graceful_stop(&mut self, process: &OwnedProcess) -> Result<StopOutcome, AdapterError> {
+        LinuxProcessAdapter::graceful_stop(self, process)
+    }
+
+    fn force_stop(&mut self, process: &OwnedProcess) -> Result<StopOutcome, AdapterError> {
+        LinuxProcessAdapter::force_stop(self, process)
+    }
+}
+
+impl LinuxProcessAdapter {
+    fn launch_with_containment(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: Option<&ContainmentId>,
+    ) -> Result<OwnedProcess, AdapterError> {
         specification.validate()?;
         if self.children.len() >= self.max_children {
             return Err(AdapterError::Unavailable(
                 "Linux process adapter active-child limit reached".to_owned(),
             ));
         }
-        if let SessionSelector::Explicit(_) = specification.session {
+        if specification.component == ComponentKind::HostBroker {
+            return Err(AdapterError::Unsupported(
+                "Linux adapter does not launch graphical HostBroker sessions".to_owned(),
+            ));
+        }
+        if let SessionSelector::Explicit(session) = specification.session
+            && session != 0
+        {
             return Err(AdapterError::Unsupported(
                 "Linux adapter does not select Windows user sessions".to_owned(),
             ));
@@ -271,39 +353,89 @@ impl ProcessAdapter for LinuxProcessAdapter {
         validate_working_directory(specification.working_directory.as_deref())?;
         validate_environment(&specification.environment)?;
 
-        let name = make_containment_name(specification);
+        let containment = match planned_containment {
+            Some(containment) => containment.clone(),
+            None => Self::planned_containment_for(specification)?,
+        };
+        let name = containment_name(containment.as_str())?;
         let cgroup = self.cgroup_root.create(&name)?;
-        let mut child = match spawn_direct(specification, &executable) {
-            Ok(child) => child,
+        let mut pending = match self.launcher.prepare(specification, cgroup.path()) {
+            Ok(pending) => pending,
             Err(error) => {
                 let _ = cgroup.remove();
                 return Err(error);
             }
         };
-        let pid = child.id();
-        let actual = match read_live_process(&self.boot_id, pid) {
-            Ok(actual) => actual,
-            Err(error) => {
-                terminate_failed_child(&mut child);
-                let _ = cgroup.remove();
-                return Err(error);
-            }
-        };
-        if actual.executable != executable
-            || actual.executable_sha256 != specification.executable_sha256
-        {
-            terminate_failed_child(&mut child);
+        let Some(helper_pid) = pending.pid() else {
+            drop(pending);
             let _ = cgroup.remove();
-            return Err(AdapterError::IdentityMismatch(
-                "spawned executable identity does not match the approved launch".to_owned(),
+            return Err(AdapterError::Unavailable(
+                "Linux helper did not expose a PID".to_owned(),
             ));
-        }
-        if let Err(error) = cgroup.add_process(pid) {
-            terminate_failed_child(&mut child);
+        };
+        let launch_timeout = pending.timeout();
+        if let Err(error) = cgroup.add_process(helper_pid) {
+            drop(pending);
             let _ = cgroup.remove();
             return Err(error);
         }
-        let containment = ContainmentId::new(format!("{CGROUP_PREFIX}{name}"))?;
+        let helper_identity = match read_live_process(&self.boot_id, helper_pid) {
+            Ok(identity) => identity,
+            Err(error) => {
+                drop(pending);
+                let _ = cgroup.remove();
+                return Err(error);
+            }
+        };
+        if helper_identity.executable != self.launcher.helper_executable() {
+            drop(pending);
+            let _ = cgroup.remove();
+            return Err(AdapterError::IdentityMismatch(
+                "spawned Linux helper executable identity is unexpected".to_owned(),
+            ));
+        }
+        let helper_is_member = match cgroup.pids() {
+            Ok(pids) => pids.contains(&helper_pid),
+            Err(error) => {
+                drop(pending);
+                let _ = cgroup.remove();
+                return Err(error);
+            }
+        };
+        if !helper_is_member {
+            drop(pending);
+            let _ = cgroup.remove();
+            return Err(AdapterError::Unavailable(
+                "Linux helper could not be observed in its delegated cgroup".to_owned(),
+            ));
+        }
+        if let Err(error) = pending.release_gate() {
+            drop(pending);
+            let _ = cgroup.remove();
+            return Err(error);
+        }
+        let mut child = match pending.into_child() {
+            Ok(child) => child,
+            Err(error) => {
+                cleanup_failed_cgroup_launch(&cgroup, None);
+                return Err(error);
+            }
+        };
+        let (pid, actual) = match wait_for_target_in_cgroup(
+            &self.boot_id,
+            &cgroup,
+            helper_pid,
+            &executable,
+            &specification.executable_sha256,
+            launch_timeout,
+            &mut child,
+        ) {
+            Ok(identity) => identity,
+            Err(error) => {
+                cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
+                return Err(error);
+            }
+        };
         let identity = ProcessIdentity {
             deployment_id: specification.deployment_id.clone(),
             instance_id: specification.instance_id.clone(),
@@ -322,9 +454,15 @@ impl ProcessAdapter for LinuxProcessAdapter {
         let owned = OwnedProcess {
             identity: identity.clone(),
         };
-        if !cgroup.pids()?.contains(&pid) {
-            terminate_failed_child(&mut child);
-            let _ = cgroup.remove();
+        let target_is_member = match cgroup.pids() {
+            Ok(pids) => pids.contains(&pid),
+            Err(error) => {
+                cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
+                return Err(error);
+            }
+        };
+        if !target_is_member {
+            cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
             return Err(AdapterError::Unavailable(
                 "child could not be observed in its delegated cgroup".to_owned(),
             ));
@@ -577,6 +715,10 @@ impl Cgroup {
             })
     }
 
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
     fn pids(&self) -> Result<Vec<u32>, AdapterError> {
         let content = fs::read_to_string(self.path.join("cgroup.procs")).map_err(|error| {
             AdapterError::Unavailable(format!("cannot inspect cgroup {}: {error}", self.name))
@@ -722,29 +864,105 @@ fn validate_environment(environment: &[(String, String)]) -> Result<(), AdapterE
     Ok(())
 }
 
-fn spawn_direct(specification: &LaunchSpec, executable: &Path) -> Result<Child, AdapterError> {
-    let mut command = Command::new(executable);
-    command
-        .args(&specification.arguments)
-        .env_clear()
-        .envs(
-            specification
-                .environment
-                .iter()
-                .map(|(name, value)| (name, value)),
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(path) = specification.working_directory.as_deref() {
-        let canonical = fs::canonicalize(path).map_err(|error| {
-            AdapterError::Invalid(format!("working directory cannot be resolved: {error}"))
-        })?;
-        command.current_dir(canonical);
+fn wait_for_target_in_cgroup(
+    boot_id: &str,
+    cgroup: &Cgroup,
+    helper_pid: u32,
+    executable: &Path,
+    digest: &str,
+    timeout: Duration,
+    child: &mut Child,
+) -> Result<(u32, LiveProcess), AdapterError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            AdapterError::Io(format!("Linux helper status check failed: {error}"))
+        })? {
+            return Err(AdapterError::Io(format!(
+                "Linux helper exited before the approved target appeared: {status}"
+            )));
+        }
+        if !cgroup.pids()?.contains(&helper_pid) {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux helper left its delegated cgroup before target exec".to_owned(),
+            ));
+        }
+        match read_live_process_for_executable(boot_id, helper_pid, executable) {
+            Ok(Some(actual)) if actual.executable_sha256 == digest => {
+                return Ok((helper_pid, actual));
+            }
+            Ok(Some(_) | None) => {}
+            Err(AdapterError::Unavailable(_)) => {}
+            Err(error) => return Err(error),
+        }
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(
+                "Linux helper did not produce the approved target in time".to_owned(),
+            ));
+        }
+        std::thread::sleep(POLL_INTERVAL);
     }
-    command
-        .spawn()
-        .map_err(|error| AdapterError::Io(format!("direct child launch failed: {error}")))
+}
+
+fn read_live_process_for_executable(
+    boot_id: &str,
+    pid: u32,
+    expected_executable: &Path,
+) -> Result<Option<LiveProcess>, AdapterError> {
+    if pid == 0 {
+        return Err(AdapterError::Invalid("cannot inspect pid zero".to_owned()));
+    }
+    let stat_path = format!("/proc/{pid}/stat");
+    let stat = fs::read_to_string(&stat_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AdapterError::Unavailable(format!("process {pid} does not exist"))
+        } else {
+            AdapterError::Io(format!("cannot read process {pid} birth data: {error}"))
+        }
+    })?;
+    let start_ticks = parse_start_ticks(&stat)
+        .ok_or_else(|| AdapterError::Io(format!("process {pid} has malformed /proc stat data")))?;
+    let executable = fs::canonicalize(format!("/proc/{pid}/exe")).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AdapterError::Unavailable(format!("process {pid} executable is gone"))
+        } else {
+            AdapterError::Io(format!("cannot read process {pid} executable: {error}"))
+        }
+    })?;
+    if executable != expected_executable {
+        return Ok(None);
+    }
+    let executable_sha256 = hash_file(&executable)?;
+    Ok(Some(LiveProcess {
+        token: format!("{boot_id}:{start_ticks}"),
+        executable,
+        executable_sha256,
+    }))
+}
+
+fn cleanup_failed_cgroup_launch(cgroup: &Cgroup, mut child: Option<&mut Child>) {
+    // The cgroup is the authority once the helper has been assigned.  Kill it
+    // first so a target that already spawned descendants cannot outlive the
+    // failed launch.  The direct Child handle is retained only to reap the
+    // helper process itself.
+    let _ = cgroup.kill_all();
+    if let Some(child) = child.as_mut() {
+        terminate_failed_child(child);
+    }
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        match cgroup.pids() {
+            Ok(pids) if pids.is_empty() => {
+                let _ = cgroup.remove();
+                return;
+            }
+            Ok(_) => std::thread::sleep(POLL_INTERVAL),
+            Err(_) => return,
+        }
+    }
+    let _ = cgroup.remove();
 }
 
 fn terminate_failed_child(child: &mut Child) {
@@ -984,17 +1202,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a writable delegated cgroup v2 and a real watchdog helper entrypoint"]
     fn native_synthetic_process_authority_is_explicitly_gated()
     -> Result<(), Box<dyn std::error::Error>> {
         let executable = fs::canonicalize("/bin/sh")?;
         let digest = hash_file(&executable)?;
         let mut allowlist = BTreeMap::new();
         allowlist.insert(ComponentKind::Synthetic, executable.clone());
-        let mut adapter = match LinuxProcessAdapter::new(allowlist) {
-            Ok(adapter) => adapter,
-            Err(AdapterError::Unavailable(_)) => return Ok(()),
-            Err(error) => return Err(Box::new(error)),
-        };
+        let mut adapter = LinuxProcessAdapter::new(allowlist)?;
         let specification = LaunchSpec {
             deployment_id: "native-test-deployment".to_owned(),
             instance_id: "native-test-instance".to_owned(),
@@ -1006,7 +1221,7 @@ mod tests {
             arguments: vec!["-c".to_owned(), "sleep 30 & wait".to_owned()],
             working_directory: None,
             environment: Vec::new(),
-            session: SessionSelector::ActiveUser,
+            session: SessionSelector::Explicit(0),
             graceful_timeout: Duration::from_millis(100),
             force_timeout: Duration::from_secs(2),
         };

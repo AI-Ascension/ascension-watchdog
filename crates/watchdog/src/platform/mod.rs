@@ -8,6 +8,8 @@ pub mod contract;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "linux")]
+pub mod linux_launcher;
+#[cfg(target_os = "linux")]
 pub mod linux_process;
 pub mod wsl;
 
@@ -17,6 +19,14 @@ pub use contract::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{NotificationResult, SystemdNotifier};
+#[cfg(target_os = "linux")]
+pub use linux_launcher::{
+    LauncherStreams, LinuxHelperAuthorization, LinuxHelperBootstrap, LinuxHelperRequest,
+    OutputMode, TrustedLinuxLauncher, helper_argument, helper_invocation_requested,
+    protected_config_argument, run_hidden_helper_if_requested,
+    run_hidden_helper_if_requested_with_bootstrap_authorizer, run_hidden_helper_with_authorizer,
+    run_hidden_helper_with_bootstrap_authorizer,
+};
 #[cfg(target_os = "linux")]
 pub use linux_process::LinuxProcessAdapter;
 pub use wsl::{WslInvocation, WslInvocationError};

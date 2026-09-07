@@ -20,7 +20,7 @@ use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use windows_service::service::{
-    ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceErrorControl,
+    Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceErrorControl,
     ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceState, ServiceStatus,
     ServiceType,
 };
@@ -29,17 +29,23 @@ use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER, ERROR_PIPE_CONNECTED,
-    ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME, GetLastError, HANDLE, LocalFree, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME, GENERIC_READ, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Security::{
+    EqualSid, GetSecurityDescriptorOwner, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID,
+    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FlushFileBuffers, GetFileSizeEx, OPEN_EXISTING,
+    PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
     TerminateJobObject,
@@ -55,11 +61,11 @@ use windows_sys::Win32::System::RemoteDesktop::{
 use windows_sys::Win32::System::SystemServices::{JOB_OBJECT_QUERY, JOB_OBJECT_TERMINATE};
 use windows_sys::Win32::System::Threading::{
     CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetProcessId,
-    GetProcessTimes, InitializeProcThreadAttributeList, OpenProcess,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, ResumeThread, STARTUPINFOEXW,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    GetProcessId, GetProcessTimes, InitializeProcThreadAttributeList, OpenProcess,
+    OpenProcessToken, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+    ResumeThread, STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 const MAX_PIPE_FRAME: usize = 8 * 1024;
@@ -68,18 +74,141 @@ const JOB_NAME_PREFIX: &str = r"Local\ascension-watchdog-";
 const PIPE_NAME_PREFIX: &str = r"\\.\pipe\ascension-watchdog-";
 const SERVICE_NAME: &str = "ascension-watchdog";
 const HEALTH_STALE_AFTER: Duration = Duration::from_secs(90);
+const SERVICE_READY_TIMEOUT: Duration = Duration::from_mins(2);
+const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
+const HASH_READ_BYTES: usize = 64 * 1024;
+const SHA256_K: [u32; 64] = [
+    0x428a_2f98,
+    0x7137_4491,
+    0xb5c0_fbcf,
+    0xe9b5_dba5,
+    0x3956_c25b,
+    0x59f1_11f1,
+    0x923f_82a4,
+    0xab1c_5ed5,
+    0xd807_aa98,
+    0x1283_5b01,
+    0x2431_85be,
+    0x550c_7dc3,
+    0x72be_5d74,
+    0x80de_b1fe,
+    0x9bdc_06a7,
+    0xc19b_f174,
+    0xe49b_69c1,
+    0xefbe_4786,
+    0x0fc1_9dc6,
+    0x240c_a1cc,
+    0x2de9_2c6f,
+    0x4a74_84aa,
+    0x5cb0_a9dc,
+    0x76f9_88da,
+    0x983e_5152,
+    0xa831_c66d,
+    0xb003_27c8,
+    0xbf59_7fc7,
+    0xc6e0_0bf3,
+    0xd5a7_9147,
+    0x06ca_6351,
+    0x1429_2967,
+    0x27b7_0a85,
+    0x2e1b_2138,
+    0x4d2c_6dfc,
+    0x5338_0d13,
+    0x650a_7354,
+    0x766a_0abb,
+    0x81c2_c92e,
+    0x9272_2c85,
+    0xa2bf_e8a1,
+    0xa81a_664b,
+    0xc24b_8b70,
+    0xc76c_51a3,
+    0xd192_e819,
+    0xd699_0624,
+    0xf40e_3585,
+    0x106a_a070,
+    0x19a4_c116,
+    0x1e37_6c08,
+    0x2748_774c,
+    0x34b0_bcb5,
+    0x391c_0cb3,
+    0x4ed8_aa4a,
+    0x5b9c_ca4f,
+    0x682e_6ff3,
+    0x748f_82ee,
+    0x78a5_636f,
+    0x84c8_7814,
+    0x8cc7_0208,
+    0x90be_fffa,
+    0xa450_6ceb,
+    0xbef9_a3f7,
+    0xc671_78f2,
+];
 
 type ReconcileCallback = dyn Fn(Arc<Mutex<bool>>) + Send + Sync + 'static;
+type ReadinessCallback = dyn Fn() -> Result<(), PlatformError> + Send + Sync + 'static;
 
 static SERVICE_RECONCILE: OnceLock<Arc<ReconcileCallback>> = OnceLock::new();
+static SERVICE_READINESS: OnceLock<Arc<ReadinessCallback>> = OnceLock::new();
 
 /// A process launched in an ACL-protected named Job Object.
 pub struct JobOwnedProcess {
     identity: ProcessIdentity,
     process: OwnedHandle,
     job: OwnedHandle,
+    integrity: Arc<IntegrityGuards>,
     graceful_timeout: Duration,
     force_timeout: Duration,
+}
+
+/// Handles held for the complete owner lifetime so the approved executable
+/// bytes and its release directory cannot be replaced or modified underneath
+/// a running process.  The directory handle also protects DLL lookup files in
+/// the release directory; no delete/write sharing is granted.
+#[derive(Debug)]
+struct IntegrityGuards {
+    // These handles are retained for their no-share lifetime; the fields are
+    // intentionally not otherwise read after the initial hash.
+    #[allow(dead_code)]
+    executable: OwnedHandle,
+    #[allow(dead_code)]
+    release_directory: OwnedHandle,
+    path: PathBuf,
+    digest: String,
+}
+
+impl IntegrityGuards {
+    fn open(path: &Path) -> Result<Self, PlatformError> {
+        let parent = path.parent().ok_or_else(|| {
+            PlatformError::Invalid("approved executable has no release directory".to_owned())
+        })?;
+        let release_directory = open_immutable_path(
+            parent,
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            "CreateFileW(release directory)",
+        )?;
+        let executable = open_immutable_path(
+            path,
+            GENERIC_READ,
+            FILE_ATTRIBUTE_NORMAL,
+            "CreateFileW(executable)",
+        )?;
+        let digest = hash_immutable_file(&executable)?;
+        Ok(Self {
+            executable,
+            release_directory,
+            path: path.to_owned(),
+            digest,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 impl std::fmt::Debug for JobOwnedProcess {
@@ -210,12 +339,26 @@ impl JobOwnedProcess {
         let wide_name = wide(&name)?;
         let job = unsafe {
             windows_sys::Win32::System::JobObjects::OpenJobObjectW(
-                JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE,
+                JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE | READ_CONTROL,
                 0,
                 wide_name.as_ptr(),
             )
         };
         let job = OwnedHandle::new(job, "OpenJobObjectW")?;
+        verify_job_owner(&job)?;
+        verify_job_limits(&job, max_processes)?;
+        let executable = canonicalize_executable(&identity.executable)?;
+        if normalize_path(&executable) != normalize_path(&identity.executable) {
+            return Err(PlatformError::IdentityMismatch(
+                "persisted executable path no longer resolves to the same release".to_owned(),
+            ));
+        }
+        let integrity = Arc::new(IntegrityGuards::open(&executable)?);
+        if integrity.digest() != identity.executable_sha256 {
+            return Err(PlatformError::IdentityMismatch(
+                "persisted executable digest differs from the immutable release handle".to_owned(),
+            ));
+        }
         let process = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -228,19 +371,22 @@ impl JobOwnedProcess {
             identity,
             process,
             job,
+            integrity,
             graceful_timeout,
             force_timeout,
         };
         owner.verify_identity()?;
-        if owner.active_processes()? > max_processes {
-            return Err(PlatformError::IdentityMismatch(
-                "reopened Job Object exceeds the persisted process limit".to_owned(),
-            ));
-        }
-        if owner.is_running()? && !owner.is_member_running(owner.identity.pid)? {
-            return Err(PlatformError::IdentityMismatch(
-                "reopened process is not a member of its named Job Object".to_owned(),
-            ));
+        if owner.is_running()? {
+            if process_session(owner.identity.pid)? != owner.identity.session_id {
+                return Err(PlatformError::IdentityMismatch(
+                    "reopened process session differs from persisted session".to_owned(),
+                ));
+            }
+            if !owner.is_member_running(owner.identity.pid)? {
+                return Err(PlatformError::IdentityMismatch(
+                    "reopened process is not a member of its named Job Object".to_owned(),
+                ));
+            }
         }
         Ok(owner)
     }
@@ -263,6 +409,34 @@ impl JobOwnedProcess {
             return Err(PlatformError::IdentityMismatch(
                 "process executable differs from recorded identity".to_owned(),
             ));
+        }
+        if self.identity.executable_sha256 != self.integrity.digest() {
+            return Err(PlatformError::IdentityMismatch(
+                "recorded executable digest differs from the immutable release handle".to_owned(),
+            ));
+        }
+        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
+        if process_state == WAIT_TIMEOUT {
+            if process_session(pid)? != self.identity.session_id {
+                return Err(PlatformError::IdentityMismatch(
+                    "process session differs from recorded identity".to_owned(),
+                ));
+            }
+            let mut member = 0;
+            let ok = unsafe { IsProcessInJob(self.process.raw(), self.job.raw(), &raw mut member) };
+            if ok == 0 {
+                return Err(last_error("IsProcessInJob(identity)"));
+            }
+            if member == 0 {
+                return Err(PlatformError::IdentityMismatch(
+                    "process is not a member of its named Job Object".to_owned(),
+                ));
+            }
+        } else if process_state != WAIT_OBJECT_0 {
+            return Err(PlatformError::Win32 {
+                operation: "WaitForSingleObject(identity)".to_owned(),
+                code: process_state,
+            });
         }
         Ok(())
     }
@@ -300,13 +474,23 @@ pub enum StopOutcome {
 #[derive(Debug)]
 pub struct WindowsProcessLauncher {
     config: WindowsPlatformConfig,
+    allowlist_guards: BTreeMap<crate::contract::ComponentKind, Arc<IntegrityGuards>>,
 }
 
 impl WindowsProcessLauncher {
     /// Validate configuration before any SCM, token, or process call.
     pub fn new(config: WindowsPlatformConfig) -> Result<Self, PlatformError> {
         config.validate()?;
-        Ok(Self { config })
+        let mut allowlist_guards = BTreeMap::new();
+        for (component, path) in &config.allowlisted_executables {
+            let executable = canonicalize_executable(path)?;
+            let guard = IntegrityGuards::open(&executable)?;
+            allowlist_guards.insert(*component, Arc::new(guard));
+        }
+        Ok(Self {
+            config,
+            allowlist_guards,
+        })
     }
 
     /// Launch a direct executable with Job Object assignment before resume.
@@ -328,6 +512,17 @@ impl WindowsProcessLauncher {
                 "requested executable is outside the role allowlist".to_owned(),
             ));
         }
+        let integrity = self
+            .allowlist_guards
+            .get(&specification.component)
+            .ok_or_else(|| {
+                PlatformError::Unsupported("component has no integrity guard".to_owned())
+            })?;
+        if normalize_path(integrity.path()) != normalize_path(&executable) {
+            return Err(PlatformError::IdentityMismatch(
+                "integrity guard path differs from requested executable".to_owned(),
+            ));
+        }
         let session_id = match specification.session {
             SessionSelector::ActiveUser => match select_active_session() {
                 ActiveSession::Available(session) => session,
@@ -337,6 +532,9 @@ impl WindowsProcessLauncher {
                     ));
                 }
             },
+            SessionSelector::CurrentService | SessionSelector::Explicit(0) => {
+                current_process_session()?
+            }
             SessionSelector::Explicit(session) => session,
         };
         let job_name = job_name(&specification.launch_nonce)?;
@@ -370,12 +568,14 @@ impl WindowsProcessLauncher {
             creation_time_100ns: creation_time,
             launch_nonce: specification.launch_nonce.clone(),
             executable,
+            executable_sha256: integrity.digest().to_owned(),
             session_id,
         };
         let owner = JobOwnedProcess {
             identity,
             process: process_handle,
             job,
+            integrity: Arc::clone(integrity),
             graceful_timeout: Duration::from_millis(u64::from(specification.graceful_timeout_ms)),
             force_timeout: Duration::from_millis(u64::from(specification.force_timeout_ms)),
         };
@@ -431,7 +631,138 @@ fn create_job(name: &str, max_processes: u32) -> Result<OwnedHandle, PlatformErr
     if ok == 0 {
         return Err(last_error("SetInformationJobObject"));
     }
+    verify_job_owner(&job)?;
+    verify_job_limits(&job, max_processes)?;
     Ok(job)
+}
+
+fn query_job_limits(
+    job: &OwnedHandle,
+) -> Result<JOBOBJECT_EXTENDED_LIMIT_INFORMATION, PlatformError> {
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    let mut returned = 0_u32;
+    let length = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .map_err(|_| PlatformError::Invalid("Job Object limit size overflow".to_owned()))?;
+    let ok = unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectExtendedLimitInformation,
+            (&raw mut limits).cast(),
+            length,
+            &raw mut returned,
+        )
+    };
+    if ok == 0 {
+        return Err(last_error("QueryInformationJobObject(limits)"));
+    }
+    if returned < length {
+        return Err(PlatformError::Unavailable(
+            "Job Object returned a truncated limit descriptor".to_owned(),
+        ));
+    }
+    Ok(limits)
+}
+
+fn verify_job_limits(job: &OwnedHandle, max_processes: u32) -> Result<(), PlatformError> {
+    let limits = query_job_limits(job)?;
+    let flags = limits.BasicLimitInformation.LimitFlags;
+    let required = JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if flags & required != required {
+        return Err(PlatformError::IdentityMismatch(
+            "Job Object lacks the required active-process and kill-on-close limits".to_owned(),
+        ));
+    }
+    if flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) != 0 {
+        return Err(PlatformError::IdentityMismatch(
+            "Job Object permits descendants to break away".to_owned(),
+        ));
+    }
+    if limits.BasicLimitInformation.ActiveProcessLimit != max_processes {
+        return Err(PlatformError::IdentityMismatch(
+            "Job Object active-process limit differs from the persisted configuration".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_job_owner(job: &OwnedHandle) -> Result<(), PlatformError> {
+    let mut owner_sid: PSID = null_mut();
+    let mut group_sid: PSID = null_mut();
+    let mut dacl = null_mut();
+    let mut sacl = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    let result = unsafe {
+        windows_sys::Win32::Security::Authorization::GetSecurityInfo(
+            job.raw(),
+            windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT,
+            windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION,
+            &raw mut owner_sid,
+            &raw mut group_sid,
+            &raw mut dacl,
+            &raw mut sacl,
+            &raw mut descriptor,
+        )
+    };
+    if result != ERROR_SUCCESS {
+        return Err(PlatformError::Win32 {
+            operation: "GetSecurityInfo(Job Object owner)".to_owned(),
+            code: result,
+        });
+    }
+    let descriptor = SecurityDescriptor::from_raw(descriptor, "GetSecurityInfo")?;
+    let mut descriptor_owner: PSID = null_mut();
+    let mut owner_defaulted = 0;
+    let owner_ok = unsafe {
+        GetSecurityDescriptorOwner(
+            descriptor.raw_security_descriptor(),
+            &raw mut descriptor_owner,
+            &raw mut owner_defaulted,
+        )
+    };
+    if owner_ok == 0 || descriptor_owner.is_null() || owner_sid.is_null() {
+        return Err(last_error("GetSecurityDescriptorOwner"));
+    }
+    let mut token_raw = null_mut();
+    let token = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token_raw) };
+    if token == 0 {
+        return Err(last_error("OpenProcessToken(owner)"));
+    }
+    let token = OwnedHandle::new(token_raw, "OpenProcessToken(owner)")?;
+    let mut required = 0_u32;
+    let _ =
+        unsafe { GetTokenInformation(token.raw(), TokenUser, null_mut(), 0, &raw mut required) };
+    if required == 0 {
+        return Err(last_error("GetTokenInformation(owner size)"));
+    }
+    let word_size = size_of::<usize>();
+    let word_count = usize::try_from(required)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(word_size.saturating_sub(1)))
+        .map(|bytes| bytes / word_size)
+        .ok_or_else(|| PlatformError::Invalid("token owner size overflow".to_owned()))?;
+    let mut storage = vec![0_usize; word_count];
+    let storage_bytes = u32::try_from(storage.len().saturating_mul(word_size))
+        .map_err(|_| PlatformError::Invalid("token owner storage size overflow".to_owned()))?;
+    let ok = unsafe {
+        GetTokenInformation(
+            token.raw(),
+            TokenUser,
+            storage.as_mut_ptr().cast(),
+            storage_bytes,
+            &raw mut required,
+        )
+    };
+    if ok == 0 {
+        return Err(last_error("GetTokenInformation(owner)"));
+    }
+    let token_user = unsafe { &*storage.as_ptr().cast::<TOKEN_USER>() };
+    let equal = unsafe { EqualSid(descriptor_owner, token_user.User.Sid) };
+    if equal == 0 {
+        return Err(PlatformError::IdentityMismatch(
+            "named Job Object owner differs from the current service token".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn spawn_suspended_with_job(
@@ -449,6 +780,9 @@ fn spawn_suspended_with_job(
         .transpose()?;
     let executable_wide = wide_path(executable)?;
     let current_directory_wide = current_directory.as_deref().map(wide_path).transpose()?;
+    let desktop = (specification.component == crate::contract::ComponentKind::HostBroker)
+        .then(|| wide("winsta0\\default"))
+        .transpose()?;
     let mut attribute_size = 0_usize;
     let _ = unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &raw mut attribute_size) };
     if attribute_size == 0 {
@@ -481,6 +815,9 @@ fn spawn_suspended_with_job(
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = u32::try_from(size_of::<STARTUPINFOEXW>())
         .map_err(|_| PlatformError::Invalid("STARTUPINFOEXW size overflow".to_owned()))?;
+    startup.StartupInfo.lpDesktop = desktop
+        .as_ref()
+        .map_or(null_mut(), |value| value.as_ptr().cast_mut());
     startup.lpAttributeList = attribute_list;
     let mut information = windows_sys::Win32::System::Threading::PROCESS_INFORMATION::default();
     let flags = CREATE_SUSPENDED
@@ -861,13 +1198,50 @@ impl ScmHealthChecker {
         let service = manager
             .open_service(
                 &self.service_name,
-                ServiceAccess::STOP | ServiceAccess::QUERY_STATUS,
+                ServiceAccess::START | ServiceAccess::STOP | ServiceAccess::QUERY_STATUS,
             )
             .map_err(service_error("OpenService(health checker)"))?;
+        let status = service
+            .query_status()
+            .map_err(service_error("QueryServiceStatus(health checker)"))?;
+        if status.current_state != ServiceState::Running {
+            // Do not turn a deliberate stop or a pending transition into an
+            // implicit start merely because an old heartbeat remains on disk.
+            return Ok(false);
+        }
         service
             .stop()
             .map_err(service_error("ControlService(stop)"))?;
+        wait_for_service_state(&service, ServiceState::Stopped, HEALTH_STALE_AFTER)?;
+        service
+            .start::<&std::ffi::OsStr>(&[])
+            .map_err(service_error("StartService(recovery)"))?;
+        wait_for_service_state(&service, ServiceState::Running, HEALTH_STALE_AFTER)?;
         Ok(true)
+    }
+}
+
+fn wait_for_service_state(
+    service: &Service,
+    expected: ServiceState,
+    timeout: Duration,
+) -> Result<(), PlatformError> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(std::time::Instant::now);
+    loop {
+        let status = service
+            .query_status()
+            .map_err(service_error("QueryServiceStatus(recovery)"))?;
+        if status.current_state == expected {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(PlatformError::Timeout(format!(
+                "SCM service did not reach {expected:?} before the bounded recovery deadline"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -877,12 +1251,35 @@ pub struct ServiceRuntime;
 
 impl ServiceRuntime {
     /// Enter the SCM dispatcher for the fixed service name.
+    ///
+    /// This compatibility entrypoint deliberately refuses to claim `Running`
+    /// because it has no trusted readiness witness.  Call
+    /// [`Self::run_with_readiness`] from the production daemon.
     pub fn run<F>(reconcile: F) -> Result<(), PlatformError>
     where
         F: Fn(Arc<Mutex<bool>>) + Send + Sync + 'static,
     {
+        Self::run_with_readiness(reconcile, || {
+            Err(PlatformError::Unavailable(
+                "service readiness witness was not supplied".to_owned(),
+            ))
+        })
+    }
+
+    /// Enter the SCM dispatcher and publish `Running` only after the caller's
+    /// bounded, real readiness witness succeeds.  The witness should perform
+    /// the same configuration, storage, IPC, and control-loop checks used by
+    /// the daemon; a static boolean or process-alive probe is not sufficient.
+    pub fn run_with_readiness<F, R>(reconcile: F, readiness: R) -> Result<(), PlatformError>
+    where
+        F: Fn(Arc<Mutex<bool>>) + Send + Sync + 'static,
+        R: Fn() -> Result<(), PlatformError> + Send + Sync + 'static,
+    {
         SERVICE_RECONCILE.set(Arc::new(reconcile)).map_err(|_| {
             PlatformError::Unavailable("service runtime was already initialized".to_owned())
+        })?;
+        SERVICE_READINESS.set(Arc::new(readiness)).map_err(|_| {
+            PlatformError::Unavailable("service readiness was already initialized".to_owned())
         })?;
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .map_err(service_error("service dispatcher"))
@@ -892,18 +1289,16 @@ impl ServiceRuntime {
 windows_service::define_windows_service!(ffi_service_main, dispatch_service_main);
 
 fn dispatch_service_main(arguments: Vec<std::ffi::OsString>) {
-    if let Some(reconcile) = SERVICE_RECONCILE.get() {
-        let _ = service_entry(arguments, reconcile);
+    if let (Some(reconcile), Some(readiness)) = (SERVICE_RECONCILE.get(), SERVICE_READINESS.get()) {
+        let _ = service_entry(arguments, reconcile, readiness);
     }
 }
 
-fn service_entry<F>(
+fn service_entry(
     _arguments: Vec<std::ffi::OsString>,
-    reconcile: &Arc<F>,
-) -> Result<(), PlatformError>
-where
-    F: Fn(Arc<Mutex<bool>>) + Send + Sync + 'static + ?Sized,
-{
+    reconcile: &Arc<ReconcileCallback>,
+    readiness: &Arc<ReadinessCallback>,
+) -> Result<(), PlatformError> {
     let stopping = Arc::new(Mutex::new(false));
     let stop_flag = Arc::clone(&stopping);
     let handler = move |control| match control {
@@ -918,6 +1313,30 @@ where
     };
     let status = service_control_handler::register(SERVICE_NAME, handler)
         .map_err(service_error("RegisterServiceCtrlHandler"))?;
+    status
+        .set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::StartPending,
+            controls_accepted: windows_service::service::ServiceControlAccept::STOP
+                | windows_service::service::ServiceControlAccept::PRESHUTDOWN,
+            exit_code: windows_service::service::ServiceExitCode::Win32(ERROR_SUCCESS),
+            checkpoint: 1,
+            wait_hint: SERVICE_READY_TIMEOUT,
+            process_id: None,
+        })
+        .map_err(service_error("SetServiceStatus(StartPending)"))?;
+    if let Err(error) = readiness() {
+        let _ = status.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::Stopped,
+            controls_accepted: windows_service::service::ServiceControlAccept::empty(),
+            exit_code: windows_service::service::ServiceExitCode::ServiceSpecific(1),
+            checkpoint: 0,
+            wait_hint: Duration::default(),
+            process_id: None,
+        });
+        return Err(error);
+    }
     status
         .set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
@@ -945,11 +1364,12 @@ where
     Ok(())
 }
 
+#[derive(Debug)]
 struct OwnedHandle(HANDLE);
 
 impl OwnedHandle {
     fn new(raw: HANDLE, operation: &str) -> Result<Self, PlatformError> {
-        if raw.is_null() {
+        if raw.is_null() || raw == INVALID_HANDLE_VALUE {
             return Err(last_error(operation));
         }
         Ok(Self(raw))
@@ -968,9 +1388,23 @@ impl Drop for OwnedHandle {
     }
 }
 
+// A Windows kernel handle is an OS-managed reference that may be used by any
+// thread in the owning process.  `OwnedHandle` never exposes a borrowed raw
+// handle and closes it exactly once, so transferring the wrapper through the
+// service callback is safe.
+unsafe impl Send for OwnedHandle {}
+unsafe impl Sync for OwnedHandle {}
+
 struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 impl SecurityDescriptor {
+    fn from_raw(raw: PSECURITY_DESCRIPTOR, operation: &str) -> Result<Self, PlatformError> {
+        if raw.is_null() {
+            return Err(last_error(operation));
+        }
+        Ok(Self(raw))
+    }
+
     fn owner_only() -> Result<Self, PlatformError> {
         let descriptor = wide("D:P(A;;GA;;;OW)")?;
         let mut raw = null_mut();
@@ -992,6 +1426,10 @@ impl SecurityDescriptor {
     }
 
     fn raw(&self) -> *mut c_void {
+        self.0
+    }
+
+    fn raw_security_descriptor(&self) -> PSECURITY_DESCRIPTOR {
         self.0
     }
 }
@@ -1110,6 +1548,237 @@ fn query_image_path(handle: HANDLE) -> Result<PathBuf, PlatformError> {
     Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)))
 }
 
+fn open_immutable_path(
+    path: &Path,
+    desired_access: u32,
+    flags_and_attributes: u32,
+    operation: &str,
+) -> Result<OwnedHandle, PlatformError> {
+    let wide_path = wide_path(path)?;
+    // A zero share mask prevents later writers, deleters, or renamers from
+    // opening the approved release object.  Holding the directory handle at
+    // the same boundary prevents the release directory itself from being
+    // removed or renamed while a child is owned.
+    let raw = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            desired_access,
+            0,
+            null(),
+            OPEN_EXISTING,
+            flags_and_attributes,
+            null_mut(),
+        )
+    };
+    OwnedHandle::new(raw, operation)
+}
+
+fn hash_immutable_file(file: &OwnedHandle) -> Result<String, PlatformError> {
+    let mut file_size = 0_i64;
+    let ok = unsafe { GetFileSizeEx(file.raw(), &raw mut file_size) };
+    if ok == 0 {
+        return Err(last_error("GetFileSizeEx(immutable executable)"));
+    }
+    if file_size < 0 {
+        return Err(PlatformError::Unavailable(
+            "immutable executable has a negative file size".to_owned(),
+        ));
+    }
+    let expected_size = u64::try_from(file_size)
+        .map_err(|_| PlatformError::Invalid("immutable executable size overflow".to_owned()))?;
+    if expected_size > MAX_HASH_BYTES {
+        return Err(PlatformError::Invalid(
+            "immutable executable exceeds the hash size bound".to_owned(),
+        ));
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; HASH_READ_BYTES];
+    let mut total = 0_u64;
+    while total < expected_size {
+        let remaining = expected_size.saturating_sub(total);
+        let count = usize::try_from(remaining.min(u64::try_from(buffer.len()).map_err(|_| {
+            PlatformError::Invalid("immutable hash buffer size overflow".to_owned())
+        })?))
+        .map_err(|_| PlatformError::Invalid("immutable hash read size overflow".to_owned()))?;
+        let count = u32::try_from(count).map_err(|_| {
+            PlatformError::Invalid("immutable hash read exceeds Win32 bounds".to_owned())
+        })?;
+        let mut read = 0_u32;
+        let ok = unsafe {
+            ReadFile(
+                file.raw(),
+                buffer.as_mut_ptr().cast(),
+                count,
+                &raw mut read,
+                null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error("ReadFile(immutable executable)"));
+        }
+        if read == 0 || read > count {
+            return Err(PlatformError::Unavailable(
+                "immutable executable changed while it was being hashed".to_owned(),
+            ));
+        }
+        digest.update(
+            &buffer[..usize::try_from(read)
+                .map_err(|_| PlatformError::Invalid("immutable hash count overflow".to_owned()))?],
+        );
+        total = total.saturating_add(u64::from(read));
+    }
+    let mut final_size = 0_i64;
+    let ok = unsafe { GetFileSizeEx(file.raw(), &raw mut final_size) };
+    if ok == 0 {
+        return Err(last_error("GetFileSizeEx(immutable executable final)"));
+    }
+    if final_size < 0 || u64::try_from(final_size).ok() != Some(expected_size) {
+        return Err(PlatformError::IdentityMismatch(
+            "immutable executable changed while it was being hashed".to_owned(),
+        ));
+    }
+    Ok(digest.hex())
+}
+
+#[derive(Clone, Debug)]
+struct Sha256 {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffered: usize,
+    length_bits: u64,
+}
+
+impl Sha256 {
+    fn new() -> Self {
+        Self {
+            state: [
+                0x6a09_e667,
+                0xbb67_ae85,
+                0x3c6e_f372,
+                0xa54f_f53a,
+                0x510e_527f,
+                0x9b05_688c,
+                0x1f83_d9ab,
+                0x5be0_cd19,
+            ],
+            buffer: [0; 64],
+            buffered: 0,
+            length_bits: 0,
+        }
+    }
+
+    fn update(&mut self, mut input: &[u8]) {
+        self.length_bits = self.length_bits.wrapping_add(
+            u64::try_from(input.len())
+                .unwrap_or(u64::MAX)
+                .wrapping_mul(8),
+        );
+        if self.buffered != 0 {
+            let needed = 64 - self.buffered;
+            if input.len() < needed {
+                self.buffer[self.buffered..self.buffered + input.len()].copy_from_slice(input);
+                self.buffered += input.len();
+                return;
+            }
+            self.buffer[self.buffered..].copy_from_slice(&input[..needed]);
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffered = 0;
+            input = &input[needed..];
+        }
+        while input.len() >= 64 {
+            self.compress(&input[..64]);
+            input = &input[64..];
+        }
+        self.buffer[..input.len()].copy_from_slice(input);
+        self.buffered = input.len();
+    }
+
+    fn finalize(mut self) -> [u8; 32] {
+        self.buffer[self.buffered] = 0x80;
+        self.buffered += 1;
+        if self.buffered > 56 {
+            self.buffer[self.buffered..].fill(0);
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffered = 0;
+        }
+        self.buffer[self.buffered..56].fill(0);
+        self.buffer[56..].copy_from_slice(&self.length_bits.to_be_bytes());
+        let block = self.buffer;
+        self.compress(&block);
+        let mut result = [0_u8; 32];
+        for (index, word) in self.state.iter().enumerate() {
+            result[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        result
+    }
+
+    fn compress(&mut self, block: &[u8]) {
+        let mut words = [0_u32; 64];
+        for (index, word) in words.iter_mut().enumerate().take(16) {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                block[offset],
+                block[offset + 1],
+                block[offset + 2],
+                block[offset + 3],
+            ]);
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+        let mut state = self.state;
+        for index in 0..64 {
+            let choice = (state[4] & state[5]) ^ ((!state[4]) & state[6]);
+            let majority = (state[0] & state[1]) ^ (state[0] & state[2]) ^ (state[1] & state[2]);
+            let sigma0 =
+                state[0].rotate_right(2) ^ state[0].rotate_right(13) ^ state[0].rotate_right(22);
+            let sigma1 =
+                state[4].rotate_right(6) ^ state[4].rotate_right(11) ^ state[4].rotate_right(25);
+            let temp1 = state[7]
+                .wrapping_add(sigma1)
+                .wrapping_add(choice)
+                .wrapping_add(SHA256_K[index])
+                .wrapping_add(words[index]);
+            let temp2 = sigma0.wrapping_add(majority);
+            state[7] = state[6];
+            state[6] = state[5];
+            state[5] = state[4];
+            state[4] = state[3].wrapping_add(temp1);
+            state[3] = state[2];
+            state[2] = state[1];
+            state[1] = state[0];
+            state[0] = temp1.wrapping_add(temp2);
+        }
+        for (slot, value) in self.state.iter_mut().zip(state) {
+            *slot = slot.wrapping_add(value);
+        }
+    }
+}
+
+impl Sha256 {
+    fn hex(&self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let digest = self.clone().finalize();
+        let mut result = String::with_capacity(digest.len().saturating_mul(2));
+        for byte in digest {
+            result.push(char::from(HEX[usize::from(byte >> 4)]));
+            result.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        result
+    }
+}
+
 fn canonicalize_executable(path: &Path) -> Result<PathBuf, PlatformError> {
     if !path.is_absolute() {
         return Err(PlatformError::Invalid(
@@ -1206,7 +1875,13 @@ fn command_line(executable: &Path, arguments: &[String]) -> Result<Vec<u16>, Pla
         line.push(' ');
         line.push_str(&quote_windows(argument));
     }
-    wide(&line)
+    let result = wide(&line)?;
+    if result.len().saturating_sub(1) > 32_767 {
+        return Err(PlatformError::Invalid(
+            "Windows command line exceeds the CreateProcessW bound".to_owned(),
+        ));
+    }
+    Ok(result)
 }
 
 fn quote_windows(value: &str) -> String {
@@ -1258,6 +1933,11 @@ fn environment_block(environment: &BTreeMap<String, String>) -> Result<Vec<u16>,
         block.extend_from_slice(&[0, 0]);
     } else {
         block.push(0);
+    }
+    if block.len() > 32_767 {
+        return Err(PlatformError::Invalid(
+            "Windows environment block exceeds the CreateProcessW bound".to_owned(),
+        ));
     }
     Ok(block)
 }
@@ -1311,12 +1991,34 @@ mod tests {
     fn windows_quoting_preserves_backslashes_before_quotes() {
         assert_eq!(quote_windows("plain"), "plain");
         assert_eq!(quote_windows("a b"), "\"a b\"");
-        assert_eq!(quote_windows(r#"a\\\"b"#), r#"\"a\\\\\\\"b\""#);
+        let mut expected = String::from("\"a");
+        expected.extend(std::iter::repeat_n('\\', 7));
+        expected.push('"');
+        expected.push('b');
+        expected.push('"');
+        assert_eq!(quote_windows(r#"a\\\"b"#), expected);
     }
 
     #[test]
     fn invalid_nonce_and_pipe_namespace_are_rejected() {
         assert!(validate_nonce("../old").is_err());
         assert!(validate_pipe_name(r"\\.\pipe\other").is_err());
+    }
+
+    #[test]
+    fn immutable_hash_matches_sha256_reference_vectors() {
+        let mut digest = Sha256::new();
+        digest.update(b"abc");
+        assert_eq!(
+            digest.hex(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+
+        let mut digest = Sha256::new();
+        digest.update(vec![b'a'; 1_000_000].as_slice());
+        assert_eq!(
+            digest.hex(),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        );
     }
 }

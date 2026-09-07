@@ -25,7 +25,7 @@ esac
 [ -x "$release_dir/watchdog" ] || { printf '%s\n' 'release watchdog binary is missing' >&2; exit 66; }
 [ -f "$release_dir/release-manifest.json" ] || { printf '%s\n' 'release manifest is missing' >&2; exit 66; }
 
-if find -L "$release_dir" -type l -print -quit | grep -q .; then
+if find "$release_dir" -type l -print -quit | grep -q .; then
     printf '%s\n' 'release contains a symbolic link' >&2
     exit 65
 fi
@@ -48,11 +48,15 @@ install -o root -g root -m 0644 \
     /etc/systemd/system/ascension-watchdog.service
 
 current=/opt/ascension-watchdog/current
-if [ -e "$current" ] && [ "$(readlink -f -- "$current")" != "$release_dir" ]; then
-    printf '%s\n' 'current release differs; use watchdog release activation before switching it' >&2
+if [ -L "$current" ]; then
+    if [ "$(readlink -f -- "$current")" != "$release_dir" ]; then
+        printf '%s\n' 'current release differs; use watchdog release activation before switching it' >&2
+        exit 73
+    fi
+elif [ -e "$current" ]; then
+    printf '%s\n' 'current path exists but is not the managed release symlink' >&2
     exit 73
-fi
-if [ ! -e "$current" ]; then
+else
     ln -s -- "$release_dir" "$current"
 fi
 
