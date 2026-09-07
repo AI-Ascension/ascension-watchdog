@@ -11,7 +11,7 @@
     "active_reserved_descendants": 9,
     "classification": "requested and accepted; execution model metadata not yet reverified",
     "agents": [
-      {"path":"/root/mcp_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V23"},
+      {"path":"/root/mcp_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"A9"},
       {"path":"/root/job_admission","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"W10"},
       {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V25"},
       {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G5"},
