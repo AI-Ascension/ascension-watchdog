@@ -23,6 +23,10 @@ impl RunningServer {
             "watchdog-runtime-fixture-{}.sqlite",
             Uuid::new_v4()
         ));
+        Self::start_on_database(database)
+    }
+
+    fn start_on_database(database: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let child = Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
             .arg("--db")
             .arg(&database)
@@ -59,6 +63,19 @@ impl RunningServer {
         let _ = self.child.wait();
         remove_database(&self.database);
         Ok(())
+    }
+
+    fn crash_preserving_database(mut self) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        if self.child.try_wait()?.is_none() {
+            self.child.kill()?;
+        }
+        let _ = self.child.wait()?;
+        let database = self.database.clone();
+        // The replacement process needs the durable files. The child has
+        // already been reaped, so forgetting only this test owner avoids its
+        // normal cleanup path until the replacement stops.
+        std::mem::forget(self);
+        Ok(database)
     }
 }
 
@@ -503,8 +520,99 @@ fn http_runtime_rejects_queued_old_lease_after_authority_rotation()
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    assert_eq!(durable, ("ADMITTED".to_owned(), 0));
+    assert_eq!(durable, ("UNKNOWN".to_owned(), 0));
     drop(connection);
     server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn fresh_authority_recovers_historical_session_without_rewriting_old_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start()?;
+    let address = server.address;
+    let database = server.database.clone();
+    let old_lease = bootstrap(&Client::new(address))?;
+    let session_id = "historical-session";
+    let operation_id = "historical-operation";
+
+    let mut state_request = with_lease(envelope("state_request", 0, None, None), &old_lease);
+    state_request["session_id"] = json!(session_id);
+    let state = send_raw(address, &state_request)?;
+    let state_id = state["state_id"].as_str().ok_or("state id")?.to_owned();
+    let mut dispatch = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            Some(&state_id),
+            Some(operation_id),
+        ),
+        &old_lease,
+    );
+    dispatch["session_id"] = json!(session_id);
+    dispatch["action"] = state["legal_actions"][0].clone();
+    assert_eq!(send_raw(address, &dispatch)?["status"], "accepted");
+    let mut wait = with_lease(
+        envelope("wait_request", 0, None, Some(operation_id)),
+        &old_lease,
+    );
+    wait["session_id"] = json!(session_id);
+    wait["wait_for_millis"] = json!(1);
+    assert_eq!(send_raw(address, &wait)?["status"], "settled");
+
+    let connection = rusqlite::Connection::open(&database)?;
+    let old_identity: (String, String, i64) = connection.query_row(
+        "SELECT instance_id,lease_id,lease_epoch FROM runtime_operations WHERE operation_id=?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    drop(connection);
+
+    let database = server.crash_preserving_database()?;
+    let restarted = RunningServer::start_on_database(database.clone())?;
+    let restarted_client = Client::new(restarted.address);
+
+    // A stale lease cannot create a new session or admit a mutation after the
+    // restart; the adapter returns an explicit stale-authority error.
+    let mut stale_dispatch = with_lease(
+        envelope(
+            "dispatch_action_request",
+            1,
+            Some(&state_id),
+            Some("stale-attempt"),
+        ),
+        &old_lease,
+    );
+    stale_dispatch["session_id"] = json!("new-session-after-restart");
+    stale_dispatch["action"] = state["legal_actions"][0].clone();
+    let stale_response = send_raw(restarted.address, &stale_dispatch)?;
+    assert_eq!(stale_response["error"], "STALE_LEASE");
+
+    let new_lease = bootstrap(&restarted_client)?;
+    let mut recover = with_lease(envelope("recover_request", 1, None, None), &new_lease);
+    recover["session_id"] = json!(session_id);
+    recover["recovery"] = json!({"kind":"reconcile","operation_id":operation_id});
+    let recovered = send_raw(restarted.address, &recover)?;
+    assert_eq!(recovered["status"], "settled");
+    assert_eq!(recovered["operation_id"], operation_id);
+    assert_eq!(recovered["lease_id"], new_lease["lease_id"]);
+
+    let connection = rusqlite::Connection::open(&database)?;
+    let retained: (String, String, i64, String) = connection.query_row(
+        "SELECT o.instance_id,o.lease_id,o.lease_epoch,o.status FROM runtime_operations o WHERE o.operation_id=?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        retained,
+        (
+            old_identity.0,
+            old_identity.1,
+            old_identity.2,
+            "SETTLED".to_owned()
+        )
+    );
+    drop(connection);
+    restarted.stop()?;
     Ok(())
 }

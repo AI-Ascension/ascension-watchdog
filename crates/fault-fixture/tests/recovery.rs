@@ -149,6 +149,14 @@ impl ChildWaitTimeout for Child {
 }
 
 fn bootstrap(client: &Client) -> Result<(Value, Value, Value), Box<dyn std::error::Error>> {
+    bootstrap_with_policy(client, 30, 10)
+}
+
+fn bootstrap_with_policy(
+    client: &Client,
+    ttl_seconds: i64,
+    renewal_interval_seconds: i64,
+) -> Result<(Value, Value, Value), Box<dyn std::error::Error>> {
     let boot_response = client.request(&Frame::request(
         "bootstrap_request",
         "bootstrap",
@@ -162,7 +170,7 @@ fn bootstrap(client: &Client) -> Result<(Value, Value, Value), Box<dyn std::erro
                 "profile_digest": digest("profile"),
                 "runtime_v3_schema_digest": RUNTIME_V3_SCHEMA_DIGEST
             },
-            "lease_policy": {"ttl_seconds":30,"renewal_interval_seconds":10}
+            "lease_policy": {"ttl_seconds":ttl_seconds,"renewal_interval_seconds":renewal_interval_seconds}
         }),
     ))?;
     let boot = boot_response.payload["boot"].clone();
@@ -249,7 +257,7 @@ fn response_loss_keeps_effect_witness_and_client_uncertainty()
 -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start(FaultPoint::ResponseLoss)?;
     let (client, database) = (server.client, server.database.clone());
-    let (_boot, fence, lease) = bootstrap(&client)?;
+    let (_boot, _fence, lease) = bootstrap(&client)?;
     let (full, reference) = submit_and_queue(&client, &lease, "response-loss")?;
     let tick = Frame::request(
         "host_tick",
@@ -276,7 +284,6 @@ fn response_loss_keeps_effect_witness_and_client_uncertainty()
     let mut child = server.child;
     let _ = child.wait();
     remove_database(&database);
-    let _ = fence;
     Ok(())
 }
 
@@ -316,17 +323,23 @@ fn stale_queued_fence_is_rejected_without_an_effect() -> Result<(), Box<dyn std:
     let server = RunningServer::start(FaultPoint::None)?;
     let client = server.client;
     let (_boot, _fence, lease) = bootstrap(&client)?;
-    let (full, _reference) = submit_and_queue(&client, &lease, "stale-queued")?;
+    let (full, reference) = submit_and_queue(&client, &lease, "stale-queued")?;
     let (_replacement_boot, _replacement_fence, _replacement_lease) = bootstrap(&client)?;
     let response = client.request(&Frame::request(
         "host_tick",
         "recovery_reconcile",
         json!({"operation_id":full["operation_id"]}),
     ))?;
-    assert_eq!(response.payload["result"]["status"], "STALE_LEASE");
+    assert_eq!(response.payload["result"]["status"], "NOT_FOUND");
     let stats = client.request(&Frame::request("stats", "recovery_read", json!({})))?;
     assert_eq!(stats.payload["effect_count"], 0);
     assert_eq!(stats.payload["queue_count"], 0);
+    let lookup = client.request(&Frame::request(
+        "operation_lookup_request",
+        "recovery_read",
+        json!({"operation":reference,"lookup_scope":"historical_read"}),
+    ))?;
+    assert_eq!(lookup.payload["operation"]["state"], "UNKNOWN");
     RunningServer {
         child: server.child,
         client,
@@ -370,8 +383,7 @@ fn conflicting_expected_boundary_reuse_is_rejected() -> Result<(), Box<dyn std::
 }
 
 #[test]
-fn crash_after_admission_survives_restart_and_executes_the_queued_operation()
--> Result<(), Box<dyn std::error::Error>> {
+fn crash_after_admission_is_quarantined_after_restart() -> Result<(), Box<dyn std::error::Error>> {
     let server = RunningServer::start(FaultPoint::AfterAdmission)?;
     let client = server.client;
     let database = server.database.clone();
@@ -397,14 +409,24 @@ fn crash_after_admission_survives_restart_and_executes_the_queued_operation()
     let restarted = RunningServer::start_on_database(database.clone(), FaultPoint::None)?;
     let client = restarted.client;
     let stats = client.request(&Frame::request("stats", "recovery_read", json!({})))?;
-    assert_eq!(stats.payload["queue_count"], 1);
+    assert_eq!(stats.payload["queue_count"], 0);
     assert_eq!(stats.payload["effect_count"], 0);
+    assert_eq!(stats.payload["unresolved_count"], 1);
+    let lookup = client.request(&Frame::request(
+        "operation_lookup_request",
+        "recovery_read",
+        json!({
+            "operation": reference,
+            "lookup_scope": "historical_read"
+        }),
+    ))?;
+    assert_eq!(lookup.payload["operation"]["state"], "UNKNOWN");
     let tick = client.request(&Frame::request(
         "host_tick",
         "recovery_reconcile",
         json!({"operation_id":full["operation_id"]}),
     ))?;
-    assert_eq!(tick.payload["result"]["status"], "SETTLED");
+    assert_eq!(tick.payload["result"]["status"], "NOT_FOUND");
     RunningServer {
         child: restarted.child,
         client,
@@ -420,7 +442,7 @@ fn crash_after_mutation_retains_witness_without_receipt_or_second_effect()
     let server = RunningServer::start(FaultPoint::AfterMutation)?;
     let client = server.client;
     let database = server.database.clone();
-    let (_boot, fence, lease) = bootstrap(&client)?;
+    let (_boot, _fence, lease) = bootstrap(&client)?;
     let (full, reference) = submit_and_queue(&client, &lease, "crash-after-mutation")?;
     let tick = client.request(&Frame::request(
         "host_tick",
@@ -437,10 +459,11 @@ fn crash_after_mutation_retains_witness_without_receipt_or_second_effect()
     assert_eq!(stats.payload["effect_count"], 1);
     assert_eq!(stats.payload["receipt_count"], 0);
     assert_eq!(stats.payload["unresolved_count"], 1);
+    let (_replacement_boot, replacement_fence, _replacement_lease) = bootstrap(&client)?;
     let reconciled = client.request(&Frame::request(
         "operation_reconcile_request",
         "recovery_reconcile",
-        json!({"operation":reference,"strategy":"receipt_lookup","current_fence":fence}),
+        json!({"operation":reference,"strategy":"receipt_lookup","current_fence":replacement_fence}),
     ))?;
     assert_eq!(reconciled.payload["result"]["status"], "RECONCILED");
     assert_eq!(
@@ -491,5 +514,56 @@ fn receipt_capacity_backpressures_the_sixty_fifth_operation()
         database: server.database,
     }
     .stop()?;
+    Ok(())
+}
+
+#[test]
+fn lease_policy_and_epoch_history_survive_restart() -> Result<(), Box<dyn std::error::Error>> {
+    let server = RunningServer::start(FaultPoint::None)?;
+    let client = server.client;
+    let database = server.database.clone();
+    let (old_boot, _old_fence, first) = bootstrap_with_policy(&client, 12, 4)?;
+    assert_eq!(first["ttl_seconds"], 12);
+    assert_eq!(first["renewal_interval_seconds"], 4);
+    let renewed = client.request(&Frame::request(
+        "lease_renew_request",
+        "lease_renew",
+        json!({"lease":first,"renew_sequence":1}),
+    ))?;
+    assert_eq!(
+        renewed.payload["lease"]["expires_at"],
+        "2026-09-06T00:00:16Z"
+    );
+    let connection = rusqlite::Connection::open(&database)?;
+    let history: (i64, i64, i64, i64) = connection.query_row(
+        "SELECT lease_epoch,ttl_seconds,renewal_interval_seconds,renew_sequence FROM lease_history",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(history, (1, 12, 4, 1));
+    drop(connection);
+
+    let mut crashed = server.child;
+    crashed.kill()?;
+    let _ = crashed.wait()?;
+    let restarted = RunningServer::start_on_database(database.clone(), FaultPoint::None)?;
+    let fenced = restarted.client.request(&Frame::request(
+        "host_fence_request",
+        "host_fence",
+        json!({"boot":old_boot}),
+    ))?;
+    assert_eq!(fenced.payload["result"]["status"], "HOST_NOT_READY");
+    let (_boot, _fence, second) = bootstrap_with_policy(&restarted.client, 20, 5)?;
+    assert_eq!(second["lease_epoch"], 2);
+    assert_eq!(second["ttl_seconds"], 20);
+    let connection = rusqlite::Connection::open(&database)?;
+    let durable: (i64, i64, i64) = connection.query_row(
+        "SELECT COUNT(*),MAX(lease_epoch),MAX(lease_epoch_counter) FROM lease_history CROSS JOIN fence",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(durable, (2, 2, 2));
+    drop(connection);
+    restarted.stop()?;
     Ok(())
 }
