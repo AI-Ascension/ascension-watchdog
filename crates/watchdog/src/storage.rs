@@ -27,6 +27,8 @@ mod storage_admin;
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
 mod storage_queries;
+#[path = "storage_worker_handoff.rs"]
+mod storage_worker_handoff;
 pub use storage_admin::{
     MAX_OPERATOR_COMMANDS, MAX_OPERATOR_COMMANDS_WITH_STOP_RESERVE, MAX_OPERATOR_RESPONSE_BYTES,
     OPERATOR_LEDGER_SCHEMA_VERSION, OperatorCapability, OperatorCommand, OperatorCommandContext,
@@ -34,6 +36,13 @@ pub use storage_admin::{
     RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
 };
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
+pub use storage_worker_handoff::{
+    MAX_WORKER_WIRE_INTEGER, WORKER_HANDOFF_CONTRACT, WORKER_HANDOFF_OPERATION,
+    WORKER_HANDOFF_PAYLOAD_DIGEST, WORKER_HANDOFF_SCHEMA_DIGEST, WORKER_HANDOFF_SCHEMA_VERSION,
+    WorkerAcknowledgment, WorkerBinding, WorkerClaimWitness, WorkerCompletion, WorkerControlMode,
+    WorkerControlWitness, WorkerHandoff, WorkerHandoffState, WorkerHandoffTuple,
+    WorkerTerminalReceipt, WorkerTerminalRecord, WorkerTerminalStatus,
+};
 
 const SCHEMA_VERSION: i64 = 2;
 const PREVIOUS_SCHEMA_VERSION: i64 = 1;
@@ -685,6 +694,7 @@ impl Store {
             "operator_ledger_schema_version",
             &OPERATOR_LEDGER_SCHEMA_VERSION.to_string(),
         )?;
+        storage_worker_handoff::insert_worker_handoff_metadata(&tx)?;
         insert_metadata(&tx, "initialized_at_ms", &now.to_string())?;
         insert_metadata(&tx, "updated_at_ms", &now.to_string())?;
         insert_audit_tx(
@@ -733,13 +743,14 @@ impl Store {
         config.validate()?;
         let path = canonical_owner_path(path.as_ref(), "database")?;
         ensure_owner_lock(&path, owner)?;
-        let store = Self::open_impl(
+        let mut store = Self::open_impl(
             path.clone(),
             config,
             OpenFlags::SQLITE_OPEN_READ_WRITE,
             true,
         )?;
         storage_admin::migrate_operator_ledger_for_owner(&path, owner)?;
+        storage_worker_handoff::migrate_worker_handoff_for_owner(&mut store.conn)?;
         Ok(store)
     }
 
@@ -2231,7 +2242,7 @@ fn connection_pragmas(conn: &Connection) -> Result<DurabilityPragmas> {
     })
 }
 
-fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+pub(crate) fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
     let value: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -2269,7 +2280,11 @@ fn has_any_user_tables(conn: &Connection) -> Result<bool> {
     Ok(count > 0)
 }
 
-fn validate_claim_payload(text: &str, expected_digest: &str, bound: usize) -> Result<Value> {
+pub(crate) fn validate_claim_payload(
+    text: &str,
+    expected_digest: &str,
+    bound: usize,
+) -> Result<Value> {
     if text.len() > bound || hex_digest(text.as_bytes()) != expected_digest {
         return Err(WatchdogError::Conflict(
             "stored job payload exceeds its bound or differs from its admission digest".to_owned(),
@@ -2388,6 +2403,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
         );
         ",
     )?;
+    storage_worker_handoff::create_worker_handoff_schema(conn)?;
     Ok(())
 }
 
@@ -2504,7 +2520,7 @@ fn migrate_launch_intent_schema(conn: &mut Connection) -> Result<()> {
     validate_launch_intent_schema(conn)
 }
 
-fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<String>> {
+pub(crate) fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT value FROM metadata WHERE key=?",
         params![key],
@@ -2543,7 +2559,12 @@ fn upsert_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
-fn insert_audit_tx(tx: &Transaction<'_>, action: &str, detail: &str, now_ms: u64) -> Result<()> {
+pub(crate) fn insert_audit_tx(
+    tx: &Transaction<'_>,
+    action: &str,
+    detail: &str,
+    now_ms: u64,
+) -> Result<()> {
     validate_name(action, "audit action", 128)?;
     validate_detail(detail, "audit detail")?;
     let retained: i64 = tx.query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))?;
@@ -2576,7 +2597,7 @@ fn is_emergency_stop_audit_action(action: &str) -> bool {
     action == "operator_command_stop_accepted"
 }
 
-fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
+pub(crate) fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
     let payload_text: String = row.get(2)?;
     let result_text: Option<String> = row.get(11)?;
     let status: String = row.get(4)?;
@@ -2672,7 +2693,7 @@ fn validate_name_sqlite(value: &str, field: &str, bound: usize) -> rusqlite::Res
     Ok(())
 }
 
-fn to_sqlite_error<E: std::fmt::Display>(error: E) -> rusqlite::Error {
+pub(crate) fn to_sqlite_error<E: std::fmt::Display>(error: E) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         0,
         rusqlite::types::Type::Text,
@@ -2683,7 +2704,7 @@ fn to_sqlite_error<E: std::fmt::Display>(error: E) -> rusqlite::Error {
     )
 }
 
-fn sqlite_u64(value: i64, field: &str) -> rusqlite::Result<u64> {
+pub(crate) fn sqlite_u64(value: i64, field: &str) -> rusqlite::Result<u64> {
     u64::try_from(value).map_err(|_| {
         to_sqlite_error(format!(
             "{field} contains a negative or out-of-range integer"
@@ -2691,7 +2712,7 @@ fn sqlite_u64(value: i64, field: &str) -> rusqlite::Result<u64> {
     })
 }
 
-fn sqlite_u32(value: i64, field: &str) -> rusqlite::Result<u32> {
+pub(crate) fn sqlite_u32(value: i64, field: &str) -> rusqlite::Result<u32> {
     u32::try_from(value).map_err(|_| {
         to_sqlite_error(format!(
             "{field} contains a negative or out-of-range integer"
@@ -2707,7 +2728,7 @@ fn sqlite_optional_u32(value: Option<i64>, field: &str) -> rusqlite::Result<Opti
     value.map(|value| sqlite_u32(value, field)).transpose()
 }
 
-fn validate_name(value: &str, name: &str, max_bytes: usize) -> Result<()> {
+pub(crate) fn validate_name(value: &str, name: &str, max_bytes: usize) -> Result<()> {
     if value.is_empty()
         || value.len() > max_bytes
         || value.as_bytes().contains(&0)
@@ -2739,7 +2760,7 @@ fn validate_metadata_identifier(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn sqlite_timestamp(value: u64) -> Result<i64> {
+pub(crate) fn sqlite_timestamp(value: u64) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         WatchdogError::InvalidInput("timestamp exceeds SQLite integer range".to_string())
     })
@@ -2763,7 +2784,7 @@ fn mode_as_str(mode: DesiredMode) -> &'static str {
     }
 }
 
-fn parse_mode(value: &str) -> Result<DesiredMode> {
+pub(crate) fn parse_mode(value: &str) -> Result<DesiredMode> {
     match value {
         "stopped" => Ok(DesiredMode::Stopped),
         "paused" => Ok(DesiredMode::Paused),
