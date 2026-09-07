@@ -12,6 +12,7 @@ const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 8 * 1024;
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_VALUE_BYTES: usize = 8 * 1024;
+const MAX_LAUNCH_DATA_BYTES: usize = 32 * 1024;
 
 /// The durable operator intent consumed by the reconciler.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -44,7 +45,7 @@ impl DesiredMode {
 
 /// An exact executable allowlist entry.  No wildcard or shell expansion is
 /// performed by the process adapter.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentConfig {
     /// Stable component identifier used in audit and retry state.
@@ -67,6 +68,21 @@ pub struct ComponentConfig {
     /// Whether the reconciler should restart the component after a crash.
     #[serde(default = "default_true")]
     pub restart: bool,
+}
+
+impl std::fmt::Debug for ComponentConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComponentConfig")
+            .field("id", &self.id)
+            .field("executable", &self.executable)
+            .field("argument_count", &self.args.len())
+            .field("cwd", &self.cwd)
+            .field("environment_entry_count", &self.environment.len())
+            .field("executable_sha256", &self.executable_sha256)
+            .field("restart", &self.restart)
+            .finish()
+    }
 }
 
 /// Top-level watchdog configuration.  Unknown fields are rejected so a typo
@@ -308,6 +324,8 @@ impl WatchdogConfig {
             }
             for (key, value) in &component.environment {
                 if key.is_empty()
+                    || key.len() > 128
+                    || key.contains('=')
                     || key.as_bytes().contains(&0)
                     || value.as_bytes().contains(&0)
                     || value.len() > MAX_ENV_VALUE_BYTES
@@ -317,6 +335,22 @@ impl WatchdogConfig {
                         component.id
                     )));
                 }
+            }
+            let launch_bytes = component
+                .args
+                .iter()
+                .map(String::len)
+                .chain(
+                    component
+                        .environment
+                        .iter()
+                        .map(|(key, value)| key.len().saturating_add(value.len())),
+                )
+                .fold(0_usize, usize::saturating_add);
+            if launch_bytes > MAX_LAUNCH_DATA_BYTES {
+                return Err(WatchdogError::InvalidInput(
+                    "component launch data exceeds aggregate byte limit".to_owned(),
+                ));
             }
             if let Some(digest) = &component.executable_sha256 {
                 validate_digest(digest).map_err(|message| {
