@@ -16,8 +16,9 @@ use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -321,6 +322,7 @@ impl Drop for PendingLaunch {
 #[derive(Clone, Debug)]
 pub struct TrustedLinuxLauncher {
     helper_executable: PathBuf,
+    helper_executable_sha256: String,
     helper_argument: String,
     bootstrap: Option<LinuxHelperBootstrap>,
     streams: LauncherStreams,
@@ -347,8 +349,10 @@ impl TrustedLinuxLauncher {
                 "Linux helper executable is not a regular file".to_owned(),
             ));
         }
+        let helper_executable_sha256 = hash_file(&canonical)?;
         Ok(Self {
             helper_executable: canonical,
+            helper_executable_sha256,
             helper_argument: HELPER_ARGUMENT.to_owned(),
             bootstrap: None,
             streams: LauncherStreams::default(),
@@ -442,7 +446,14 @@ impl TrustedLinuxLauncher {
     ) -> Result<PendingLaunch, AdapterError> {
         specification.validate()?;
         let frame = encode_frame(specification, cgroup_path)?;
-        let mut command = Command::new(&self.helper_executable);
+        // Open and hash the helper through one file descriptor immediately
+        // before spawning.  The child is invoked through `/proc/self/fd/N`,
+        // so replacing the canonical path after this point cannot substitute
+        // another helper binary between validation and exec.
+        let (helper_file, helper_fd_path) =
+            open_verified_executable(&self.helper_executable, &self.helper_executable_sha256)?;
+        let mut command = Command::new(&helper_fd_path);
+        command.arg0(&self.helper_executable);
         command.arg(&self.helper_argument);
         if let Some(bootstrap) = &self.bootstrap {
             command
@@ -457,6 +468,7 @@ impl TrustedLinuxLauncher {
         let mut child = command
             .spawn()
             .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
+        drop(helper_file);
         let Some(mut stdin) = child.stdin.take() else {
             let _ = child.kill();
             let _ = child.wait();
@@ -581,7 +593,7 @@ where
     let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
     let authorization = authorize_after_release(&request, &go_rx, started, authorizer)?;
     verify_current_cgroup(&authorization.cgroup_path)?;
-    spawn_authorized_target(&authorization.specification).map(|()| 0)
+    spawn_authorized_target(&authorization).map(|()| 0)
 }
 
 fn authorize_after_release<F>(
@@ -920,7 +932,8 @@ fn authorize_request(
     Ok(())
 }
 
-fn spawn_authorized_target(specification: &LaunchSpec) -> Result<(), AdapterError> {
+fn spawn_authorized_target(authorization: &LinuxHelperAuthorization) -> Result<(), AdapterError> {
+    let specification = &authorization.specification;
     if specification.component == ComponentKind::HostBroker {
         return Err(AdapterError::Unsupported(
             "Linux helper does not launch graphical HostBroker sessions".to_owned(),
@@ -933,15 +946,31 @@ fn spawn_authorized_target(specification: &LaunchSpec) -> Result<(), AdapterErro
             "Linux helper does not select Windows user sessions".to_owned(),
         ));
     }
-    let executable = fs::canonicalize(&specification.executable).map_err(|error| {
+    let approved = fs::canonicalize(
+        authorization
+            .allowlisted_executables
+            .get(&specification.component)
+            .ok_or_else(|| {
+                AdapterError::Unsupported("Linux helper role is not allowlisted".to_owned())
+            })?,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux helper target allowlist is unavailable: {error}"
+        ))
+    })?;
+    let requested = fs::canonicalize(&specification.executable).map_err(|error| {
         AdapterError::Invalid(format!("Linux helper target cannot be resolved: {error}"))
     })?;
-    if hash_file(&executable)? != specification.executable_sha256 {
+    if approved != requested {
         return Err(AdapterError::IdentityMismatch(
-            "Linux helper target digest changed before launch".to_owned(),
+            "Linux helper target differs from the authorized role path".to_owned(),
         ));
     }
-    let mut command = Command::new(&executable);
+    let (executable_file, executable_fd_path) =
+        open_verified_executable(&approved, &specification.executable_sha256)?;
+    let mut command = Command::new(&executable_fd_path);
+    command.arg0(&specification.executable);
     command.args(&specification.arguments).env_clear().envs(
         specification
             .environment
@@ -957,6 +986,7 @@ fn spawn_authorized_target(specification: &LaunchSpec) -> Result<(), AdapterErro
         command.current_dir(canonical);
     }
     let error = command.exec();
+    drop(executable_file);
     Err(AdapterError::Io(format!(
         "Linux target exec failed: {error}"
     )))
@@ -1042,6 +1072,59 @@ fn unescape_mountinfo(value: &str) -> String {
         .replace("\\134", "\\")
 }
 
+/// Open an approved executable once, hash the opened bytes, and return the
+/// `/proc/self/fd` path for descriptor-bound exec.  The path is used only to
+/// invoke the already-open file; a later rename or symlink replacement cannot
+/// redirect the exec to a different inode.
+fn open_verified_executable(
+    path: &Path,
+    expected_digest: &str,
+) -> Result<(File, PathBuf), AdapterError> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Invalid(format!("Linux executable cannot be resolved: {error}"))
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux executable metadata failed: {error}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux executable is not a regular file".to_owned(),
+        ));
+    }
+    if metadata.len() > MAX_HASH_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux executable exceeds the hash size bound".to_owned(),
+        ));
+    }
+    let file = File::open(&canonical).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux executable cannot be opened: {error}"))
+    })?;
+    let digest = hash_reader(&file)?;
+    if digest != expected_digest {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux executable bytes changed before descriptor-bound exec".to_owned(),
+        ));
+    }
+    let fd = file.as_raw_fd();
+    if fd < 0 {
+        return Err(AdapterError::Io(
+            "Linux executable descriptor has an invalid number".to_owned(),
+        ));
+    }
+    let fd_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let opened_path = fs::canonicalize(&fd_path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux executable descriptor cannot be resolved: {error}"
+        ))
+    })?;
+    if opened_path != canonical {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux executable descriptor resolved to an unexpected file".to_owned(),
+        ));
+    }
+    Ok((file, fd_path))
+}
+
 fn hash_file(path: &Path) -> Result<String, AdapterError> {
     let metadata = fs::metadata(path).map_err(|error| {
         AdapterError::Unavailable(format!("cannot inspect Linux executable bytes: {error}"))
@@ -1056,9 +1139,13 @@ fn hash_file(path: &Path) -> Result<String, AdapterError> {
             "Linux executable exceeds the hash size bound".to_owned(),
         ));
     }
-    let mut reader = fs::File::open(path).map_err(|error| {
+    let reader = fs::File::open(path).map_err(|error| {
         AdapterError::Unavailable(format!("cannot open Linux executable bytes: {error}"))
     })?;
+    hash_reader(&reader)
+}
+
+fn hash_reader(mut reader: impl Read) -> Result<String, AdapterError> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
@@ -1215,7 +1302,9 @@ fn read_u32(reader: &mut impl Read) -> Result<u32, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::Duration;
+    use tempfile::tempdir;
 
     fn specification() -> LaunchSpec {
         LaunchSpec {
@@ -1311,6 +1400,38 @@ mod tests {
         let result = TrustedLinuxLauncher::new("/bin/true")
             .and_then(|launcher| launcher.with_timeout(Duration::from_secs(16)));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn descriptor_bound_exec_is_not_redirected_by_path_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let digest = hash_file(&path)?;
+        let (file, fd_path) = open_verified_executable(&path, &digest)?;
+
+        let moved = directory.path().join("approved-target.original");
+        fs::rename(&path, &moved)?;
+        fs::copy("/bin/false", &path)?;
+        let status = Command::new(&fd_path).status()?;
+
+        assert!(
+            status.success(),
+            "descriptor exec followed the replaced path"
+        );
+        drop(file);
+        Ok(())
+    }
+
+    #[test]
+    fn descriptor_bound_exec_rejects_changed_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let result = open_verified_executable(&path, &"0".repeat(64));
+        assert!(matches!(result, Err(AdapterError::IdentityMismatch(_))));
+        Ok(())
     }
 
     #[test]

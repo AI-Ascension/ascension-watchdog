@@ -10,23 +10,24 @@
 //! [`AdapterError::Unavailable`].
 //!
 //! The adapter uses the exact helper `Child` handle for launch-failure cleanup,
-//! a fixed system `kill` helper for the bounded graceful TERM request, and
-//! cgroup v2 `cgroup.kill` for force cleanup.  The latter is the only operation
-//! that is allowed to terminate descendants.  The helper barrier is a safe
-//! supervisor seam; a future reviewed pidfd/pre-exec boundary can replace it
-//! without changing the contract.
+//! a Linux pidfd for the bounded graceful TERM request, and cgroup v2
+//! `cgroup.kill` for force cleanup.  The latter is the only operation that is
+//! allowed to terminate descendants.  The helper barrier is a safe supervisor
+//! seam; the target executable is handed off through a verified file
+//! descriptor by the launcher.
 
 use super::contract::{
     AdapterError, ComponentKind, ContainmentId, LaunchSpec, Observation, OwnedProcess,
     ProcessAdapter, ProcessCreation, ProcessIdentity, SessionSelector, StopOutcome,
 };
 use super::linux_launcher::TrustedLinuxLauncher;
+use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CGROUP_PREFIX: &str = "cgroup-v2:";
@@ -37,6 +38,21 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_BOOT_ID_BYTES: usize = 128;
 const DEFAULT_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_FORCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stable marker for the runtime integration: an adapter launch error carries
+/// retained containment authority and must not clean the durable launch intent
+/// or admit a replacement until exact cgroup reconciliation succeeds.
+pub const CLEANUP_UNCERTAIN_MARKER: &str = "linux-launch-cleanup-uncertain";
+
+/// Return whether a Linux launch error retains a planned cgroup authority.
+/// Runtime code can use this without parsing the full diagnostic string.
+#[must_use]
+pub fn is_cleanup_uncertain(error: &AdapterError) -> bool {
+    matches!(
+        error,
+        AdapterError::Unavailable(message) if message.contains(CLEANUP_UNCERTAIN_MARKER)
+    )
+}
 
 /// A Linux adapter that owns one delegated cgroup per launched component.
 ///
@@ -49,8 +65,11 @@ pub struct LinuxProcessAdapter {
     boot_id: String,
     allowlist: BTreeMap<ComponentKind, PathBuf>,
     children: BTreeMap<String, ManagedProcess>,
+    /// Containments whose launch failed while cleanup could not prove that
+    /// the cgroup was removed.  Keeping this authority in the adapter makes
+    /// a retry fail closed until the exact planned containment is reconciled.
+    uncertain_containments: BTreeMap<String, Cgroup>,
     max_children: usize,
-    signal_helper: Option<PathBuf>,
     launcher: TrustedLinuxLauncher,
 }
 
@@ -112,8 +131,8 @@ impl LinuxProcessAdapter {
             boot_id,
             allowlist,
             children: BTreeMap::new(),
+            uncertain_containments: BTreeMap::new(),
             max_children,
-            signal_helper: find_signal_helper(),
             launcher,
         })
     }
@@ -134,6 +153,42 @@ impl LinuxProcessAdapter {
     #[must_use]
     pub fn launcher(&self) -> &TrustedLinuxLauncher {
         &self.launcher
+    }
+
+    /// Return whether a planned containment remains retained after an
+    /// unproven launch cleanup.  The runtime must keep the corresponding
+    /// durable launch intent unsettled while this is true.
+    #[must_use]
+    pub fn has_uncertain_containment(&self, containment: &ContainmentId) -> bool {
+        containment_name(containment.as_str())
+            .ok()
+            .is_some_and(|name| self.uncertain_containments.contains_key(&name))
+    }
+
+    /// Reconcile one exact planned containment without requiring a process
+    /// identity.  This is the recovery path for a launch that never produced
+    /// an `OwnedProcess` but whose cgroup authority could not be proven clean.
+    /// A new launch using the same containment is rejected until this method
+    /// returns [`StopOutcome::AlreadyExited`] or [`StopOutcome::Exited`].
+    pub fn force_cleanup_planned_containment(
+        &mut self,
+        containment: &ContainmentId,
+    ) -> Result<StopOutcome, AdapterError> {
+        let name = containment_name(containment.as_str())?;
+        let Some(cgroup) = self.cgroup_root.maybe_existing(&name)? else {
+            self.uncertain_containments.remove(&name);
+            return Ok(StopOutcome::AlreadyExited);
+        };
+        self.uncertain_containments
+            .insert(name.clone(), cgroup.clone());
+        cgroup.kill_all()?;
+        if self.wait_for_empty_by_containment(&name, &cgroup, DEFAULT_FORCE_TIMEOUT)? {
+            self.uncertain_containments.remove(&name);
+            Ok(StopOutcome::Exited)
+        } else {
+            self.uncertain_containments.insert(name, cgroup);
+            Ok(StopOutcome::TimedOut)
+        }
     }
 
     /// Derive the exact containment identity that must be persisted before a
@@ -170,6 +225,28 @@ impl LinuxProcessAdapter {
     ) -> Result<Option<Cgroup>, AdapterError> {
         let name = containment_name(identity.containment.as_str())?;
         self.cgroup_root.maybe_existing(&name)
+    }
+
+    fn wait_for_empty_by_containment(
+        &mut self,
+        name: &str,
+        cgroup: &Cgroup,
+        timeout: Duration,
+    ) -> Result<bool, AdapterError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        loop {
+            if cgroup.pids()?.is_empty() {
+                cgroup.remove()?;
+                self.uncertain_containments.remove(name);
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
     }
 
     fn observe_identity(
@@ -249,19 +326,26 @@ impl LinuxProcessAdapter {
         identity: &ProcessIdentity,
         cgroup: &Cgroup,
     ) -> Result<(), AdapterError> {
-        let Some(helper) = &self.signal_helper else {
-            return Err(AdapterError::Unavailable(
-                "no fixed /bin/kill or /usr/bin/kill helper is available".to_owned(),
-            ));
-        };
-        // Re-read both birth identity and cgroup membership immediately before
-        // the helper call.  cgroup.kill remains the only descendant authority.
+        // Open a pidfd before the final identity check.  The fd binds the
+        // kernel operation to this process incarnation; sending a signal to
+        // the numeric PID after a `/proc` check would still permit a PID reuse
+        // race.  cgroup.kill remains the only descendant authority.
         let pids = cgroup.pids()?;
         if !pids.contains(&identity.creation.pid) {
             return Err(AdapterError::IdentityMismatch(
                 "recorded leader is not in its cgroup".to_owned(),
             ));
         }
+        let raw_pid = i32::try_from(identity.creation.pid).map_err(|_| {
+            AdapterError::Invalid("recorded Linux PID exceeds the pidfd range".to_owned())
+        })?;
+        let pid = Pid::from_raw(raw_pid)
+            .ok_or_else(|| AdapterError::Invalid("recorded Linux PID is zero".to_owned()))?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty()).map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux pidfd_open could not bind the graceful-stop target: {error}"
+            ))
+        })?;
         match read_live_process(&self.boot_id, identity.creation.pid) {
             Ok(actual) if identities_match(identity, &actual) => {}
             Ok(_) => {
@@ -271,22 +355,19 @@ impl LinuxProcessAdapter {
             }
             Err(error) => return Err(error),
         }
-        let status = Command::new(helper)
-            .arg("-TERM")
-            .arg(identity.creation.pid.to_string())
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| AdapterError::Io(format!("graceful TERM helper: {error}")))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(AdapterError::Io(format!(
-                "graceful TERM helper exited with {status}"
-            )))
+        // Re-check membership after pidfd_open.  If the process exits and its
+        // PID is reused, the pidfd still refers to the original process and
+        // the creation-token check above rejects the replacement.
+        if !cgroup.pids()?.contains(&identity.creation.pid) {
+            return Err(AdapterError::IdentityMismatch(
+                "recorded leader left its cgroup before graceful stop".to_owned(),
+            ));
         }
+        pidfd_send_signal(&pidfd, Signal::TERM).map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux pidfd_send_signal could not deliver graceful TERM: {error}"
+            ))
+        })
     }
 }
 
@@ -358,67 +439,73 @@ impl LinuxProcessAdapter {
             None => Self::planned_containment_for(specification)?,
         };
         let name = containment_name(containment.as_str())?;
+        if self.uncertain_containments.contains_key(&name) {
+            return Err(AdapterError::Unavailable(format!(
+                "{CLEANUP_UNCERTAIN_MARKER}: planned Linux containment {CGROUP_PREFIX}{name} remains retained; reconcile it before relaunch"
+            )));
+        }
         let cgroup = self.cgroup_root.create(&name)?;
         let mut pending = match self.launcher.prepare(specification, cgroup.path()) {
             Ok(pending) => pending,
             Err(error) => {
-                let _ = cgroup.remove();
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
             }
         };
         let Some(helper_pid) = pending.pid() else {
             drop(pending);
-            let _ = cgroup.remove();
-            return Err(AdapterError::Unavailable(
-                "Linux helper did not expose a PID".to_owned(),
+            return Err(self.launch_error_after_cleanup(
+                &cgroup,
+                None,
+                AdapterError::Unavailable("Linux helper did not expose a PID".to_owned()),
             ));
         };
         let launch_timeout = pending.timeout();
         if let Err(error) = cgroup.add_process(helper_pid) {
             drop(pending);
-            let _ = cgroup.remove();
-            return Err(error);
+            return Err(self.launch_error_after_cleanup(&cgroup, None, error));
         }
         let helper_identity = match read_live_process(&self.boot_id, helper_pid) {
             Ok(identity) => identity,
             Err(error) => {
                 drop(pending);
-                let _ = cgroup.remove();
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
             }
         };
         if helper_identity.executable != self.launcher.helper_executable() {
             drop(pending);
-            let _ = cgroup.remove();
-            return Err(AdapterError::IdentityMismatch(
-                "spawned Linux helper executable identity is unexpected".to_owned(),
+            return Err(self.launch_error_after_cleanup(
+                &cgroup,
+                None,
+                AdapterError::IdentityMismatch(
+                    "spawned Linux helper executable identity is unexpected".to_owned(),
+                ),
             ));
         }
         let helper_is_member = match cgroup.pids() {
             Ok(pids) => pids.contains(&helper_pid),
             Err(error) => {
                 drop(pending);
-                let _ = cgroup.remove();
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
             }
         };
         if !helper_is_member {
             drop(pending);
-            let _ = cgroup.remove();
-            return Err(AdapterError::Unavailable(
-                "Linux helper could not be observed in its delegated cgroup".to_owned(),
+            return Err(self.launch_error_after_cleanup(
+                &cgroup,
+                None,
+                AdapterError::Unavailable(
+                    "Linux helper could not be observed in its delegated cgroup".to_owned(),
+                ),
             ));
         }
         if let Err(error) = pending.release_gate() {
             drop(pending);
-            let _ = cgroup.remove();
-            return Err(error);
+            return Err(self.launch_error_after_cleanup(&cgroup, None, error));
         }
         let mut child = match pending.into_child() {
             Ok(child) => child,
             Err(error) => {
-                cleanup_failed_cgroup_launch(&cgroup, None);
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
             }
         };
         let (pid, actual) = match wait_for_target_in_cgroup(
@@ -432,8 +519,7 @@ impl LinuxProcessAdapter {
         ) {
             Ok(identity) => identity,
             Err(error) => {
-                cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, Some(&mut child), error));
             }
         };
         let identity = ProcessIdentity {
@@ -457,14 +543,16 @@ impl LinuxProcessAdapter {
         let target_is_member = match cgroup.pids() {
             Ok(pids) => pids.contains(&pid),
             Err(error) => {
-                cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
-                return Err(error);
+                return Err(self.launch_error_after_cleanup(&cgroup, Some(&mut child), error));
             }
         };
         if !target_is_member {
-            cleanup_failed_cgroup_launch(&cgroup, Some(&mut child));
-            return Err(AdapterError::Unavailable(
-                "child could not be observed in its delegated cgroup".to_owned(),
+            return Err(self.launch_error_after_cleanup(
+                &cgroup,
+                Some(&mut child),
+                AdapterError::Unavailable(
+                    "child could not be observed in its delegated cgroup".to_owned(),
+                ),
             ));
         }
         self.children.insert(
@@ -476,6 +564,31 @@ impl LinuxProcessAdapter {
             },
         );
         Ok(owned)
+    }
+
+    fn launch_error_after_cleanup(
+        &mut self,
+        cgroup: &Cgroup,
+        child: Option<&mut Child>,
+        launch_error: AdapterError,
+    ) -> AdapterError {
+        match cleanup_failed_cgroup_launch(cgroup, child) {
+            Ok(()) => launch_error,
+            Err(failure) => {
+                if failure.containment_retained {
+                    self.uncertain_containments
+                        .insert(cgroup.name.clone(), cgroup.clone());
+                    return AdapterError::Unavailable(format!(
+                        "{CLEANUP_UNCERTAIN_MARKER}: launch failed ({launch_error}); planned containment {CGROUP_PREFIX}{} cleanup could not be proven: {}",
+                        cgroup.name, failure.error
+                    ));
+                }
+                AdapterError::Unavailable(format!(
+                    "launch failed ({launch_error}); planned containment {CGROUP_PREFIX}{} cleanup reported an error after removal was proven: {}",
+                    cgroup.name, failure.error
+                ))
+            }
+        }
     }
 
     fn inspect(&mut self, process: &OwnedProcess) -> Result<Observation, AdapterError> {
@@ -625,19 +738,21 @@ impl CgroupRoot {
         validate_cgroup_name(name)?;
         let path = self.path.join(name);
         if fs::symlink_metadata(&path).is_ok() {
-            return Err(AdapterError::Unavailable(
-                "requested cgroup containment already exists".to_owned(),
-            ));
+            return Err(AdapterError::Unavailable(format!(
+                "{CLEANUP_UNCERTAIN_MARKER}: requested cgroup containment {name} already exists; exact planned authority must be reconciled"
+            )));
         }
         fs::create_dir(&path).map_err(|error| {
             AdapterError::Unavailable(format!("delegated cgroup creation failed: {error}"))
         })?;
         match Cgroup::existing(self, name) {
             Ok(cgroup) => Ok(cgroup),
-            Err(error) => {
-                let _ = fs::remove_dir(&path);
-                Err(error)
-            }
+            Err(error) => match fs::remove_dir(&path) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(AdapterError::Unavailable(format!(
+                    "{CLEANUP_UNCERTAIN_MARKER}: cgroup {name} verification failed ({error}); planned containment remains retained because removal failed: {cleanup_error}"
+                ))),
+            },
         }
     }
 
@@ -942,32 +1057,98 @@ fn read_live_process_for_executable(
     }))
 }
 
-fn cleanup_failed_cgroup_launch(cgroup: &Cgroup, mut child: Option<&mut Child>) {
-    // The cgroup is the authority once the helper has been assigned.  Kill it
-    // first so a target that already spawned descendants cannot outlive the
-    // failed launch.  The direct Child handle is retained only to reap the
-    // helper process itself.
-    let _ = cgroup.kill_all();
-    if let Some(child) = child.as_mut() {
-        terminate_failed_child(child);
-    }
-    let deadline = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < deadline {
-        match cgroup.pids() {
-            Ok(pids) if pids.is_empty() => {
-                let _ = cgroup.remove();
-                return;
-            }
-            Ok(_) => std::thread::sleep(POLL_INTERVAL),
-            Err(_) => return,
-        }
-    }
-    let _ = cgroup.remove();
+#[derive(Debug)]
+struct CleanupFailure {
+    error: AdapterError,
+    containment_retained: bool,
 }
 
-fn terminate_failed_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+/// Kill and reap a failed launch, then prove that its planned cgroup is empty
+/// and removed.  Every failure is returned to the caller; when the proof is
+/// incomplete the containment remains a live authority and callers must retain
+/// the launch intent rather than report a clean failure and relaunch.
+fn cleanup_failed_cgroup_launch(
+    cgroup: &Cgroup,
+    child: Option<&mut Child>,
+) -> Result<(), CleanupFailure> {
+    let mut first_error = None;
+    if let Err(error) = cgroup.kill_all() {
+        first_error = Some(error);
+    }
+    if let Some(child) = child {
+        if let Err(error) = terminate_failed_child(child) {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(500))
+        .unwrap_or_else(Instant::now);
+    loop {
+        match cgroup.pids() {
+            Ok(pids) if pids.is_empty() => break,
+            Ok(_) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
+            Ok(_) => {
+                return Err(CleanupFailure {
+                    error: AdapterError::Timeout(format!(
+                        "planned containment {} still has members after failed launch cleanup",
+                        cgroup.name
+                    )),
+                    containment_retained: true,
+                });
+            }
+            Err(error) => {
+                return Err(CleanupFailure {
+                    error,
+                    containment_retained: true,
+                });
+            }
+        }
+    }
+
+    if let Err(error) = cgroup.remove() {
+        return Err(CleanupFailure {
+            error,
+            containment_retained: true,
+        });
+    }
+    if let Some(error) = first_error {
+        // The final empty-and-removed proof means no process authority was
+        // retained.  Preserve the cleanup diagnostic without falsely blocking
+        // a future launch on a cgroup that is demonstrably gone.
+        return Err(CleanupFailure {
+            error,
+            containment_retained: false,
+        });
+    }
+    Ok(())
+}
+
+fn terminate_failed_child(child: &mut Child) -> Result<(), AdapterError> {
+    if child
+        .try_wait()
+        .map_err(|error| AdapterError::Io(format!("failed launch child status: {error}")))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let kill_error = child
+        .kill()
+        .err()
+        .map(|error| AdapterError::Io(format!("failed launch child kill: {error}")));
+    let wait_result = child
+        .wait()
+        .map_err(|error| AdapterError::Io(format!("failed launch child reap: {error}")));
+    match (kill_error, wait_result) {
+        (None, Ok(_)) => Ok(()),
+        (Some(error), Ok(_)) => Err(error),
+        (kill, Err(wait_error)) => Err(AdapterError::Io(format!(
+            "failed launch child cleanup ({:?}): {wait_error}",
+            kill.map(|error| error.to_string())
+        ))),
+    }
 }
 
 fn identities_match(expected: &ProcessIdentity, actual: &LiveProcess) -> bool {
@@ -1101,16 +1282,6 @@ fn validate_cgroup_name(name: &str) -> Result<(), AdapterError> {
     Ok(())
 }
 
-fn find_signal_helper() -> Option<PathBuf> {
-    [Path::new("/bin/kill"), Path::new("/usr/bin/kill")]
-        .iter()
-        .find_map(|path| {
-            let canonical = fs::canonicalize(path).ok()?;
-            let metadata = fs::metadata(&canonical).ok()?;
-            metadata.is_file().then_some(canonical)
-        })
-}
-
 fn discover_delegated_cgroup() -> Result<PathBuf, AdapterError> {
     let mountpoint = fs::read_to_string("/proc/self/mountinfo")
         .map_err(|error| {
@@ -1168,6 +1339,8 @@ fn unescape_mountinfo(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_linux_start_time_after_comm_field() {
@@ -1199,6 +1372,49 @@ mod tests {
     fn adapter_reports_unavailable_for_non_cgroup_root() {
         let result = LinuxProcessAdapter::with_cgroup_root(PathBuf::from("/tmp"), BTreeMap::new());
         assert!(matches!(result, Err(AdapterError::Unavailable(_))));
+    }
+
+    #[test]
+    fn cleanup_uncertainty_is_distinguishable_from_ordinary_launch_failure() {
+        let uncertain =
+            AdapterError::Unavailable(format!("{CLEANUP_UNCERTAIN_MARKER}: cgroup-v2:planned"));
+        let ordinary = AdapterError::Unavailable("helper did not start".to_owned());
+        assert!(is_cleanup_uncertain(&uncertain));
+        assert!(!is_cleanup_uncertain(&ordinary));
+    }
+
+    #[test]
+    fn pidfd_identity_input_rejects_zero_and_overflow() {
+        assert!(Pid::from_raw(0).is_none());
+        assert!(i32::try_from(u32::MAX).is_err());
+        assert!(Pid::from_raw(1).is_some());
+    }
+
+    fn fake_cgroup(procs: &str) -> Result<(tempfile::TempDir, Cgroup), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let root_path = directory.path().join("root");
+        let cgroup_path = root_path.join("failed-launch");
+        fs::create_dir_all(&cgroup_path)?;
+        for file in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            fs::write(
+                cgroup_path.join(file),
+                if file == "cgroup.procs" { procs } else { "" },
+            )?;
+        }
+        let root = CgroupRoot { path: root_path };
+        let cgroup = Cgroup::existing(&root, "failed-launch")?;
+        Ok((directory, cgroup))
+    }
+
+    #[test]
+    fn failed_launch_cleanup_retains_authority_when_membership_read_faults()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_directory, cgroup) = fake_cgroup("not-a-pid\n")?;
+        let failure = cleanup_failed_cgroup_launch(&cgroup, None).unwrap_err();
+        assert!(failure.containment_retained);
+        assert!(matches!(failure.error, AdapterError::Unavailable(_)));
+        assert!(cgroup.path().exists());
+        Ok(())
     }
 
     #[test]
