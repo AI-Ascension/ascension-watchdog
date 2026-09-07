@@ -17,7 +17,7 @@ use ascension_platform_windows::{PlatformError, ServiceInstallPlan, ServiceRunti
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const SERVICE_NAME: &str = "ascension-watchdog";
 pub const DEFAULT_SERVICE_CONFIG: &str = r"C:\ProgramData\Ascension\Watchdog\watchdog.json";
@@ -27,6 +27,9 @@ const SERVICE_COMMAND: &str = "daemon";
 const SERVICE_SWITCH: &str = "--service";
 const CONFIG_SWITCH: &str = "--config";
 const MAX_SERVICE_CONFIG_BYTES: usize = 512;
+// Leave a small margin below the native SCM stop wait hint so a failed
+// reconciliation can report a failure status before SCM's outer deadline.
+const SERVICE_STOP_RETRY_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Dispatch the native SCM entrypoint when the fixed service marker is
 /// present. `None` means this is an ordinary foreground/CLI invocation.
@@ -89,11 +92,19 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
                     args[0]
                 )));
             }
+            // The owner store is the durable stop authority. A running service
+            // holds the singleton lock, so this safely refuses to race its
+            // reconciliation; after SCM has stopped it, this command commits
+            // Stopped before asking the native boundary to delete the service.
+            let config = WatchdogConfig::from_file(global_config)?;
+            let mut supervisor = Supervisor::open(config)?;
+            supervisor.request_stop(now_unix_ms())?;
             let plan = ServiceInstallPlan {
                 service_name: SERVICE_NAME.to_owned(),
                 executable: std::env::current_exe()?,
             };
-            plan.uninstall().map_err(|error| platform_error(&error))?;
+            plan.uninstall_after_durable_stop()
+                .map_err(|error| platform_error(&error))?;
             Ok(Some(
                 json!({
                     "uninstalled": true,
@@ -139,23 +150,36 @@ fn run_service(config_path: &Path) -> Result<()> {
     };
 
     let reconcile_state = Arc::clone(&state);
-    let reconcile = move |stop| {
+    let reconcile = move |stop| -> std::result::Result<(), PlatformError> {
         let service = reconcile_state.lock().ok().and_then(|mut slot| slot.take());
         let Some(mut service) = service else {
-            eprintln!("ascension-watchdog service loop was unavailable after readiness");
-            return;
+            return Err(PlatformError::Unavailable(
+                "ascension-watchdog service loop was unavailable after readiness".to_owned(),
+            ));
         };
+        let mut stop_deadline = None;
         loop {
             match service.run_until_stopped_with_scm_stop(&stop) {
-                Ok(()) => break,
+                Ok(()) => return Ok(()),
                 Err(error) => {
-                    // Do not return to the platform runner after a failed
-                    // stop/reconcile: its callback contract would otherwise
-                    // publish Stopped while durable cleanup is uncertain.
-                    // Retry on the same owner and let SCM's bounded stop
-                    // deadline remain the outer safety limit.
-                    eprintln!("ascension-watchdog service loop failed: {error}");
-                    std::thread::sleep(Duration::from_millis(250));
+                    let stopping = stop.lock().map(|value| *value).unwrap_or(true);
+                    if !stopping {
+                        // Before an SCM stop, keep the same owner alive and
+                        // retry ordinary transient reconciliation failures.
+                        eprintln!("ascension-watchdog service loop failed: {error}");
+                        std::thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                    let deadline = *stop_deadline
+                        .get_or_insert_with(|| Instant::now() + SERVICE_STOP_RETRY_TIMEOUT);
+                    if Instant::now() >= deadline {
+                        return Err(PlatformError::Timeout(format!(
+                            "SCM stop reconciliation remained uncertain after {SERVICE_STOP_RETRY_TIMEOUT:?}: {error}"
+                        )));
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    eprintln!("ascension-watchdog stop reconciliation failed: {error}");
+                    std::thread::sleep(remaining.min(Duration::from_millis(250)));
                 }
             }
         }

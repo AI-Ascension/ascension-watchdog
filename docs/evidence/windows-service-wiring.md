@@ -14,8 +14,12 @@ cleanup.
 
 `watchdog service install` delegates to `ServiceInstallPlan`, while the Windows
 PowerShell wrappers remain thin packaging helpers. Installation does not start
-the service. Uninstallation preserves state and releases by default; data
-removal requires an explicit switch and exact path.
+the service. The install wrapper requires a separate protected release verifier
+and runs `release inspect --manifest ... --root ...` successfully before any SCM
+mutation; a manifest's presence alone is not validation. Uninstallation first
+requires the configured owner-local store, persists `Stopped` intent, and then
+removes the SCM definition. It has no data-removal switch: state, credentials,
+and releases are preserved for separately audited lifecycle work.
 
 Validation from the isolated service-wiring worktree:
 

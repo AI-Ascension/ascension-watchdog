@@ -3,9 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
 
-    [switch]$DeleteData,
-
-    [string]$DataPath
+    [Parameter(Mandatory = $true)]
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,23 +15,18 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "watchdog executable is missing: $ExecutablePath"
 }
 
-if ($DeleteData -and [string]::IsNullOrWhiteSpace($DataPath)) {
-    throw '-DeleteData requires an exact -DataPath; data is preserved by default.'
+$config = (Resolve-Path -LiteralPath $ConfigPath).Path
+if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
+    throw "watchdog configuration is missing: $ConfigPath"
 }
 
-& $executable service uninstall
+# The command authenticates and persists the owner-local Stopped intent before
+# it asks SCM to remove the service. There is deliberately no data-deletion
+# switch here: state, credentials, and release bytes remain for explicit,
+# separately audited lifecycle work.
+& $executable service uninstall --config $config
 if ($LASTEXITCODE -ne 0) {
     throw "watchdog service removal failed with exit code $LASTEXITCODE"
 }
 
-if ($DeleteData) {
-    $data = (Resolve-Path -LiteralPath $DataPath -ErrorAction Stop).Path
-    $root = [IO.Path]::GetPathRoot($data)
-    if ($data -eq $root) {
-        throw 'refusing to remove a filesystem root as service data'
-    }
-    Remove-Item -LiteralPath $data -Recurse -Force
-    Write-Output "explicit service data removal completed: $data"
-} else {
-    Write-Output 'ascension-watchdog service definition removed; state and releases were preserved.'
-}
+Write-Output 'ascension-watchdog service definition removed; state and releases were preserved.'

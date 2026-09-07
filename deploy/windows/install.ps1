@@ -6,6 +6,12 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ConfigPath,
 
+    # This must be an independently protected verifier from the release stage,
+    # not the candidate watchdog.exe being installed. It is used before any
+    # SCM mutation so a manifest's mere presence never counts as validation.
+    [Parameter(Mandatory = $true)]
+    [string]$VerifierPath,
+
     [string]$ServiceAccount = 'NT SERVICE\ascension-watchdog'
 )
 
@@ -14,17 +20,29 @@ Set-StrictMode -Version Latest
 
 $release = (Resolve-Path -LiteralPath $ReleasePath).Path
 $config = (Resolve-Path -LiteralPath $ConfigPath).Path
+$verifier = (Resolve-Path -LiteralPath $VerifierPath).Path
 $executable = Join-Path $release 'watchdog.exe'
 $manifest = Join-Path $release 'release-manifest.json'
 
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "validated release is missing watchdog.exe: $release"
+    throw "release is missing watchdog.exe: $release"
 }
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
-    throw "validated release is missing release-manifest.json: $release"
+    throw "release is missing release-manifest.json: $release"
 }
 if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
     throw "configuration file is missing: $config"
+}
+if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
+    throw "trusted release verifier is missing: $VerifierPath"
+}
+if ([StringComparer]::OrdinalIgnoreCase.Equals($verifier, (Resolve-Path -LiteralPath $executable).Path)) {
+    throw 'trusted release verifier must be separate from the candidate watchdog.exe'
+}
+
+$inspection = & $verifier release inspect --manifest $manifest --root $release 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "trusted release verification failed before SCM mutation: $($inspection -join ' ')"
 }
 
 # The Rust command validates the closed configuration and registers the

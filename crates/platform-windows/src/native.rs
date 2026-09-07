@@ -35,8 +35,9 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND,
     ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND,
     ERROR_OPERATION_ABORTED, ERROR_PATH_NOT_FOUND, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING,
-    ERROR_PIPE_NOT_CONNECTED, ERROR_SERVICE_EXISTS, ERROR_SUCCESS, FILETIME, GENERIC_READ,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_PIPE_NOT_CONNECTED, ERROR_SERVICE_EXISTS, ERROR_SERVICE_NOT_ACTIVE, ERROR_SUCCESS,
+    FILETIME, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::{
@@ -156,7 +157,8 @@ const SHA256_K: [u32; 64] = [
     0xc671_78f2,
 ];
 
-type ReconcileCallback = dyn Fn(Arc<Mutex<bool>>) + Send + Sync + 'static;
+type ReconcileCallback =
+    dyn Fn(Arc<Mutex<bool>>) -> Result<(), PlatformError> + Send + Sync + 'static;
 type ReadinessCallback = dyn Fn() -> Result<(), PlatformError> + Send + Sync + 'static;
 
 static SERVICE_RECONCILE: OnceLock<Arc<ReconcileCallback>> = OnceLock::new();
@@ -1838,10 +1840,20 @@ impl ServiceInstallPlan {
         Ok(())
     }
 
-    /// Stop the fixed service if present, wait for SCM's stopped state, and
-    /// mark it for deletion. State and releases are intentionally outside this
-    /// operation and remain on disk for a later explicit data-removal step.
+    /// Refuse to remove the service without a durable owner-local stop witness.
+    /// The platform boundary cannot authenticate or persist watchdog state, so
+    /// callers must use [`Self::uninstall_after_durable_stop`] after committing
+    /// `Stopped` through the owner store.
     pub fn uninstall(&self) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported(
+            "Windows service uninstall requires a durable owner-local Stopped intent".to_owned(),
+        ))
+    }
+
+    /// Stop the fixed service if present, wait for SCM's stopped state, and
+    /// mark it for deletion after the caller has committed a durable owner-local
+    /// `Stopped` intent. State and releases remain on disk.
+    pub fn uninstall_after_durable_stop(&self) -> Result<(), PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
                 "service name is not the fixed ascension-watchdog name".to_owned(),
@@ -1862,10 +1874,24 @@ impl ServiceInstallPlan {
             .map_err(service_error("QueryServiceStatus(uninstall)"))?;
         if status.current_state != ServiceState::Stopped
             && status.current_state != ServiceState::StopPending
+            && let Err(error) = service.stop()
         {
-            service
-                .stop()
-                .map_err(service_error("ControlService(stop uninstall)"))?;
+            if !service_not_active(&error) {
+                return Err(service_error("ControlService(stop uninstall)")(error));
+            }
+            // The service may have reached Stopped between the query and
+            // ControlService. Re-query the authoritative SCM state before
+            // deciding whether deletion is safe.
+            let refreshed = service
+                .query_status()
+                .map_err(service_error("QueryServiceStatus(uninstall race)"))?;
+            if refreshed.current_state != ServiceState::Stopped
+                && refreshed.current_state != ServiceState::StopPending
+            {
+                return Err(PlatformError::Unavailable(
+                    "SCM reported service-not-active but the service was not stopped".to_owned(),
+                ));
+            }
         }
         if status.current_state != ServiceState::Stopped {
             wait_for_service_state(&service, ServiceState::Stopped, SERVICE_STOP_TIMEOUT)?;
@@ -2008,7 +2034,7 @@ impl ServiceRuntime {
     /// [`Self::run_with_readiness`] from the production daemon.
     pub fn run<F>(reconcile: F) -> Result<(), PlatformError>
     where
-        F: Fn(Arc<Mutex<bool>>) + Send + Sync + 'static,
+        F: Fn(Arc<Mutex<bool>>) -> Result<(), PlatformError> + Send + Sync + 'static,
     {
         Self::run_with_readiness(reconcile, || {
             Err(PlatformError::Unavailable(
@@ -2023,7 +2049,7 @@ impl ServiceRuntime {
     /// the daemon; a static boolean or process-alive probe is not sufficient.
     pub fn run_with_readiness<F, R>(reconcile: F, readiness: R) -> Result<(), PlatformError>
     where
-        F: Fn(Arc<Mutex<bool>>) + Send + Sync + 'static,
+        F: Fn(Arc<Mutex<bool>>) -> Result<(), PlatformError> + Send + Sync + 'static,
         R: Fn() -> Result<(), PlatformError> + Send + Sync + 'static,
     {
         SERVICE_RECONCILE.set(Arc::new(reconcile)).map_err(|_| {
@@ -2137,18 +2163,28 @@ fn service_entry(
             process_id: None,
         })
         .map_err(service_error("SetServiceStatus(Running)"))?;
-    reconcile(stopping);
+    let reconcile_error = reconcile(stopping).err();
     status
         .set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Stopped,
             controls_accepted: windows_service::service::ServiceControlAccept::empty(),
-            exit_code: windows_service::service::ServiceExitCode::Win32(ERROR_SUCCESS),
+            // A failed/uncertain reconciliation is explicitly not a clean
+            // stop. SCM receives a service-specific failure status, while the
+            // durable stop intent prevents child relaunch on any recovery.
+            exit_code: if reconcile_error.is_some() {
+                windows_service::service::ServiceExitCode::ServiceSpecific(1)
+            } else {
+                windows_service::service::ServiceExitCode::Win32(ERROR_SUCCESS)
+            },
             checkpoint: 0,
             wait_hint: Duration::default(),
             process_id: None,
         })
         .map_err(service_error("SetServiceStatus(Stopped)"))?;
+    if let Some(error) = reconcile_error {
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -2948,6 +2984,14 @@ fn service_missing(error: &windows_service::Error) -> bool {
             if error.raw_os_error() == Some(
                 windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST.cast_signed(),
             )
+    )
+}
+
+fn service_not_active(error: &windows_service::Error) -> bool {
+    matches!(
+        error,
+        windows_service::Error::Winapi(error)
+            if error.raw_os_error() == Some(ERROR_SERVICE_NOT_ACTIVE.cast_signed())
     )
 }
 

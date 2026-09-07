@@ -62,9 +62,13 @@ absolute `--config` path. Credentials are never command-line arguments.
 
 `watchdog service install` calls the native `ServiceInstallPlan` API, registers
 automatic start and bounded failure actions, and does not start or initialize
-the service. `deploy/windows/uninstall.ps1` removes only the SCM definition by
-default; state and releases remain unless an operator supplies the explicit
-data-removal switch and exact path.
+the service. `deploy/windows/install.ps1` requires a separately protected
+release verifier and finishes `release inspect --manifest ... --root ...` before
+it mutates SCM; a manifest's presence is not release validation.
+`deploy/windows/uninstall.ps1` requires the owner-local config, persists
+`Stopped` intent before removing the SCM definition, and has no data-removal
+switch. State, credentials, and releases remain for separately audited
+lifecycle work.
 
 The Windows service must be registered with SCM automatic start and bounded
 failure actions. The graphical host broker must select an explicitly approved
