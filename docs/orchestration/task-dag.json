@@ -4,6 +4,17 @@
   "maximum_descendant_depth": 3,
   "model": "gpt-5.6-luna",
   "reasoning_effort": "max",
+  "reconciliation_note": "Legacy task entries below are historical. The resumed_wave overrides handle ownership and reservations; absent old handles were not treated as live workers.",
+  "resumed_wave": [
+    {"id":"G7R","agent":"/root/gateway_catalog_resumed","status":"active","reserved_threads":1,"depends_on":["G1"],"acceptance":"exact retained catalog bytes and original-context checks"},
+    {"id":"G8","agent":"/root/managed_catalog_finish","status":"active","reserved_threads":1,"depends_on":["G6"],"acceptance":"retained host catalogs and executable managed fencing regressions"},
+    {"id":"H7R","agent":"/root/harness_recovery_audit","status":"active-read-only","reserved_threads":1,"depends_on":["H1"],"acceptance":"actual executable checkpoint, accounting and reconstruction audit"},
+    {"id":"P10R","agent":"/root/windows_cleanup_resumed","status":"candidate-e2fc6c0-review-pending","reserved_threads":1,"depends_on":["P9"],"acceptance":"exact Job cleanup and typed uncertainty propagation"},
+    {"id":"V26R","agent":"/root/intent_review_resumed","status":"complete-two-blockers-root-repair-active","reserved_threads":1,"depends_on":["W10"],"acceptance":"native session and configured backend binding"},
+    {"id":"W10R","agent":"/root","status":"active","reserved_threads":0,"depends_on":["V26R"],"acceptance":"Linux None session only for Explicit(0), no proof-selected synthetic bypass"},
+    {"id":"F28","agent":"/root/fixture_review_resumed","status":"active-author-following-V27R-review","reserved_threads":1,"depends_on":["A7"],"acceptance":"original-context binding on lookup/reconcile and one runtime session per game instance"},
+    {"id":"A13","agent":"/root/lease_contract_review","status":"active-author-following-A12-no-go","reserved_threads":1,"depends_on":["A9"],"acceptance":"eight semantic/schema findings resolved with stateful tests; independent final review required"}
+  ],
   "tasks": [
     {"id":"A1","workstream":"architecture","status":"contract-committed-integration-pending","reserved_threads":0,"depends_on":[]},
     {"id":"V1","workstream":"independent-verification","status":"full-release-review-pending","reserved_threads":0,"depends_on":[]},
