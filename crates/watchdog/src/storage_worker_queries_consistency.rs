@@ -5,7 +5,7 @@ use super::storage_worker_queries_handoff::RawHandoff;
 use super::storage_worker_queries_jobs::RawAttempt;
 use super::storage_worker_queries_terminal::empty_parameters;
 use super::storage_worker_schema::WORKER_HANDOFF_OPERATION;
-use super::storage_worker_types::WorkerHandoffState;
+use super::storage_worker_types::{WorkerHandoffState, WorkerTerminalStatus};
 use crate::config::hex_digest;
 use crate::error::{Result, WatchdogError};
 use serde_json::Value;
@@ -42,10 +42,18 @@ pub(super) fn validate_handoff_job(
             "worker handoff job identity or payload differs from durable tuple".to_owned(),
         ));
     }
-    match raw.state {
-        WorkerHandoffState::Prepared
-        | WorkerHandoffState::MayHaveBeenDispatched
-        | WorkerHandoffState::Admitted => {
+    // Acknowledgment records delivery, not success. Preserve the authenticated
+    // terminal outcome when checking the job and attempt projections.
+    match (
+        raw.state,
+        raw.terminal.as_ref().map(|receipt| receipt.status),
+    ) {
+        (
+            WorkerHandoffState::Prepared
+            | WorkerHandoffState::MayHaveBeenDispatched
+            | WorkerHandoffState::Admitted,
+            _,
+        ) => {
             if !matches!(job.status, JobStatus::Running | JobStatus::Quarantined)
                 || job.result.is_some()
                 || completion_digest.is_some()
@@ -60,7 +68,8 @@ pub(super) fn validate_handoff_job(
                 ));
             }
         }
-        WorkerHandoffState::Completed | WorkerHandoffState::Acknowledged => {
+        (WorkerHandoffState::Completed, _)
+        | (WorkerHandoffState::Acknowledged, Some(WorkerTerminalStatus::Completed)) => {
             let Some(result_text) = raw.terminal_result.as_deref() else {
                 return Err(WatchdogError::Conflict(
                     "completed worker handoff is missing result".to_owned(),
@@ -92,7 +101,8 @@ pub(super) fn validate_handoff_job(
                 ));
             }
         }
-        WorkerHandoffState::Failed => {
+        (WorkerHandoffState::Failed, _)
+        | (WorkerHandoffState::Acknowledged, Some(WorkerTerminalStatus::Failed)) => {
             let Some(result_text) = raw.terminal_result.as_deref() else {
                 return Err(WatchdogError::Conflict(
                     "failed worker handoff is missing result".to_owned(),
@@ -130,7 +140,12 @@ pub(super) fn validate_handoff_job(
                 ));
             }
         }
-        WorkerHandoffState::Rejected => {}
+        (WorkerHandoffState::Acknowledged, None) => {
+            return Err(WatchdogError::Conflict(
+                "acknowledged worker handoff is missing its terminal outcome".to_owned(),
+            ));
+        }
+        (WorkerHandoffState::Rejected, _) => {}
     }
     Ok(())
 }
