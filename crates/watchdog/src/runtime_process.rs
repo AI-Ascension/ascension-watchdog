@@ -1536,6 +1536,8 @@ mod tests {
             deployment_id: "deployment".to_owned(),
             component_id: "gateway".to_owned(),
             launch_nonce: "nonce".to_owned(),
+            expected_incarnation: Some("incarnation".to_owned()),
+            expected_launch_spec_digest: Some("a".repeat(64)),
             planned_containment_id: Some("synthetic-child:nonce".to_owned()),
             state: LaunchIntentState::Active,
             ownership_proof_json: Some(
