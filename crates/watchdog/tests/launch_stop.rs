@@ -17,7 +17,14 @@ fn nonrunning_intent_blocks_prepare_and_activation_across_reopen() {
         };
         let mut store = Store::initialize(&config.database, &config).unwrap();
         let intent = store
-            .prepare_launch_intent("gateway", "nonce", Some("container"), 1)
+            .prepare_launch_intent(
+                "gateway",
+                "nonce",
+                "watchdog-generation-1",
+                &"a".repeat(64),
+                Some("container"),
+                1,
+            )
             .unwrap();
         store.set_desired_mode_at(mode, 2).unwrap();
         // A stop must not erase evidence of a child created before the stop.
@@ -29,7 +36,14 @@ fn nonrunning_intent_blocks_prepare_and_activation_across_reopen() {
         assert!(store.activate_launch_intent(&intent.id, 4).is_err());
         assert!(
             store
-                .prepare_launch_intent("harness", "second", Some("other"), 5)
+                .prepare_launch_intent(
+                    "harness",
+                    "second",
+                    "watchdog-generation-1",
+                    &"a".repeat(64),
+                    Some("other"),
+                    5,
+                )
                 .is_err()
         );
         let retained = store.launch_intent(&intent.id).unwrap().unwrap();
@@ -58,13 +72,27 @@ fn failed_admission_leaves_no_intent_and_explicit_resume_permits_it() {
     let mut store = Store::initialize(&config.database, &config).unwrap();
     assert!(
         store
-            .prepare_launch_intent("gateway", "nonce", Some("container"), 1)
+            .prepare_launch_intent(
+                "gateway",
+                "nonce",
+                "watchdog-generation-1",
+                &"a".repeat(64),
+                Some("container"),
+                1,
+            )
             .is_err()
     );
     assert!(store.unsettled_launch_intents().unwrap().is_empty());
     store.set_desired_mode_at(DesiredMode::Running, 2).unwrap();
     let intent = store
-        .prepare_launch_intent("gateway", "nonce", Some("container"), 3)
+        .prepare_launch_intent(
+            "gateway",
+            "nonce",
+            "watchdog-generation-1",
+            &"a".repeat(64),
+            Some("container"),
+            3,
+        )
         .unwrap();
     store
         .record_launch_proof(&intent.id, &json!({"opaque":"retained"}), 4)
