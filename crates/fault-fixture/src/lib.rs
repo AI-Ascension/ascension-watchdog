@@ -2300,7 +2300,7 @@ impl DurableHost {
                 || (kind == "recover_request"
                     && matches!(
                         request["recovery"]["kind"].as_str(),
-                        Some("release_lease" | "stop_episode")
+                        Some("release_lease" | "stop_episode" | "reconcile")
                     )))
         {
             return Ok(runtime_error_response(
@@ -2582,6 +2582,14 @@ impl DurableHost {
                 }
             }
             "release_lease" | "stop_episode" => {
+                if recovery_kind == "release_lease" {
+                    self.connection
+                        .execute(
+                            "UPDATE lease SET revoked=1 WHERE lease_id=?1 AND lease_epoch=?2",
+                            params![state.lease_id, state.lease_epoch],
+                        )
+                        .map_err(FixtureError::Sql)?;
+                }
                 // Once a dispatch has been admitted, stopping cannot claim it
                 // never reached the host.  Retain an unresolved journal row;
                 // no later request may dispatch it under a new lease.
