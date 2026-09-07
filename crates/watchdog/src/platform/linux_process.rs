@@ -14,18 +14,20 @@
 //! `cgroup.kill` for force cleanup.  The latter is the only operation that is
 //! allowed to terminate descendants.  The helper barrier is a safe supervisor
 //! seam; the target executable is handed off through a verified file
-//! descriptor by the launcher.
+//! sealed executable snapshot by the launcher.
 
 use super::contract::{
     AdapterError, ComponentKind, ContainmentId, LaunchSpec, Observation, OwnedProcess,
     ProcessAdapter, ProcessCreation, ProcessIdentity, SessionSelector, StopOutcome,
 };
 use super::linux_launcher::TrustedLinuxLauncher;
+use rustix::fs::{SealFlags, fcntl_get_seals};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -80,6 +82,23 @@ impl LinuxProcessAdapter {
     pub fn new(allowlist: BTreeMap<ComponentKind, PathBuf>) -> Result<Self, AdapterError> {
         let root = discover_delegated_cgroup()?;
         Self::with_cgroup_root(root, allowlist)
+    }
+
+    /// Discover the current delegated cgroup and construct an adapter with a
+    /// caller-supplied trusted helper executable.  This is the native service
+    /// test seam; production callers should use [`Self::new`] after the
+    /// watchdog executable has wired its hidden helper entrypoint.
+    pub fn new_with_launcher(
+        allowlist: BTreeMap<ComponentKind, PathBuf>,
+        launcher: TrustedLinuxLauncher,
+    ) -> Result<Self, AdapterError> {
+        let root = discover_delegated_cgroup()?;
+        Self::with_cgroup_root_and_limit_and_launcher(
+            root,
+            allowlist,
+            MAX_ACTIVE_CHILDREN,
+            launcher,
+        )
     }
 
     /// Construct an adapter against an explicit cgroup root.  This is useful
@@ -472,7 +491,11 @@ impl LinuxProcessAdapter {
                 return Err(self.launch_error_after_cleanup(&cgroup, None, error));
             }
         };
-        if helper_identity.executable != self.launcher.helper_executable() {
+        if !live_process_matches_executable(
+            &helper_identity,
+            self.launcher.helper_executable(),
+            self.launcher.helper_executable_sha256(),
+        ) {
             drop(pending);
             return Err(self.launch_error_after_cleanup(
                 &cgroup,
@@ -892,6 +915,7 @@ struct LiveProcess {
     token: String,
     executable: PathBuf,
     executable_sha256: String,
+    executable_sealed: bool,
 }
 
 fn validate_allowlist(
@@ -926,14 +950,6 @@ fn canonical_approved_executable(
     if approved != requested {
         return Err(AdapterError::IdentityMismatch(
             "requested executable is outside the role allowlist".to_owned(),
-        ));
-    }
-    let metadata = fs::metadata(&requested).map_err(|error| {
-        AdapterError::Unavailable(format!("approved executable metadata failed: {error}"))
-    })?;
-    if !metadata.is_file() {
-        return Err(AdapterError::Invalid(
-            "approved executable is not a regular file".to_owned(),
         ));
     }
     let digest = hash_file(&requested)?;
@@ -1047,14 +1063,22 @@ fn read_live_process_for_executable(
             AdapterError::Io(format!("cannot read process {pid} executable: {error}"))
         }
     })?;
+    let executable_sealed = is_sealed_memfd(&executable);
     if executable != expected_executable {
-        return Ok(None);
+        if !executable_sealed || !executable_fd_is_sealed(pid)? {
+            return Ok(None);
+        }
     }
-    let executable_sha256 = hash_file(&executable)?;
+    let executable_sha256 = hash_live_executable(pid)?;
     Ok(Some(LiveProcess {
         token: format!("{boot_id}:{start_ticks}"),
-        executable,
+        executable: if executable == expected_executable {
+            executable
+        } else {
+            expected_executable.to_owned()
+        },
         executable_sha256,
+        executable_sealed,
     }))
 }
 
@@ -1109,12 +1133,14 @@ fn cleanup_failed_cgroup_launch_with(
                     // not prove that the exact Child handle was reaped.  Keep
                     // the cgroup as the durable recovery authority until the
                     // next reconciliation pass proves both facts.
+                    let error = match first_error {
+                        Some(error) => error,
+                        None => AdapterError::Timeout(
+                            "child cleanup failed without a diagnostic".to_owned(),
+                        ),
+                    };
                     return Err(CleanupFailure {
-                        error: first_error.unwrap_or_else(|| {
-                            AdapterError::Unavailable(
-                                "failed launch child cleanup was not proven".to_owned(),
-                            )
-                        }),
+                        error,
                         containment_retained: true,
                     });
                 }
@@ -1209,8 +1235,22 @@ fn terminate_failed_child_with(
 
 fn identities_match(expected: &ProcessIdentity, actual: &LiveProcess) -> bool {
     expected.creation.token == actual.token
-        && expected.executable == actual.executable
         && expected.executable_sha256 == actual.executable_sha256
+        && live_process_matches_executable(
+            actual,
+            &expected.executable,
+            &expected.executable_sha256,
+        )
+}
+
+fn live_process_matches_executable(
+    actual: &LiveProcess,
+    expected_executable: &Path,
+    expected_digest: &str,
+) -> bool {
+    (actual.executable == expected_executable
+        || (actual.executable_sealed && is_sealed_memfd(&actual.executable)))
+        && actual.executable_sha256 == expected_digest
 }
 
 fn read_live_process(boot_id: &str, pid: u32) -> Result<LiveProcess, AdapterError> {
@@ -1234,12 +1274,44 @@ fn read_live_process(boot_id: &str, pid: u32) -> Result<LiveProcess, AdapterErro
             AdapterError::Io(format!("cannot read process {pid} executable: {error}"))
         }
     })?;
-    let executable_sha256 = hash_file(&executable)?;
+    let executable_sha256 = hash_live_executable(pid)?;
+    let executable_sealed = is_sealed_memfd(&executable) && executable_fd_is_sealed(pid)?;
     Ok(LiveProcess {
         token: format!("{boot_id}:{start_ticks}"),
         executable,
         executable_sha256,
+        executable_sealed,
     })
+}
+
+fn is_sealed_memfd(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|value| value.starts_with("/memfd:"))
+}
+
+fn executable_fd_is_sealed(pid: u32) -> Result<bool, AdapterError> {
+    let path = format!("/proc/{pid}/exe");
+    let flags = rustix::fs::OFlags::NONBLOCK
+        .bits()
+        .try_into()
+        .map_err(|_| AdapterError::Invalid("Linux nonblocking flag is out of range".to_owned()))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "cannot open live executable for seal check: {error}"
+            ))
+        })?;
+    let seals = fcntl_get_seals(&file).map_err(|error| {
+        AdapterError::Unavailable(format!("cannot inspect live executable seals: {error}"))
+    })?;
+    Ok(seals.contains(SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL))
+}
+
+fn hash_live_executable(pid: u32) -> Result<String, AdapterError> {
+    hash_file(Path::new(&format!("/proc/{pid}/exe")))
 }
 
 fn parse_start_ticks(stat: &str) -> Option<u64> {
@@ -1265,26 +1337,52 @@ fn read_boot_id() -> Result<String, AdapterError> {
 }
 
 fn hash_file(path: &Path) -> Result<String, AdapterError> {
-    let metadata = fs::metadata(path).map_err(|error| {
+    let flags = rustix::fs::OFlags::NONBLOCK
+        .bits()
+        .try_into()
+        .map_err(|_| AdapterError::Invalid("Linux nonblocking flag is out of range".to_owned()))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("cannot open executable bytes: {error}"))
+        })?;
+    let metadata = file.metadata().map_err(|error| {
         AdapterError::Unavailable(format!("cannot inspect executable bytes: {error}"))
     })?;
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "executable is not a regular file".to_owned(),
+        ));
+    }
     if metadata.len() > MAX_HASH_BYTES {
         return Err(AdapterError::Invalid(
             "executable exceeds the hash size bound".to_owned(),
         ));
     }
-    let file = File::open(path).map_err(|error| {
-        AdapterError::Unavailable(format!("cannot open executable bytes: {error}"))
-    })?;
     let mut reader = file;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total_read = 0_u64;
     loop {
         let read = reader
             .read(&mut buffer)
             .map_err(|error| AdapterError::Io(format!("cannot hash executable: {error}")))?;
         if read == 0 {
             break;
+        }
+        total_read = total_read
+            .checked_add(u64::try_from(read).map_err(|_| {
+                AdapterError::Invalid("executable read size exceeds bounds".to_owned())
+            })?)
+            .ok_or_else(|| {
+                AdapterError::Invalid("executable exceeds the hash size bound".to_owned())
+            })?;
+        if total_read > MAX_HASH_BYTES {
+            return Err(AdapterError::Invalid(
+                "executable exceeds the hash size bound".to_owned(),
+            ));
         }
         hasher.update(&buffer[..read]);
     }
@@ -1396,8 +1494,34 @@ fn unescape_mountinfo(value: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::process::Command;
+    use std::process::{Child, Command};
     use tempfile::tempdir;
+
+    struct ChildGuard(Option<Child>);
+
+    impl ChildGuard {
+        fn sleep() -> Result<Self, std::io::Error> {
+            Ok(Self(Some(Command::new("/bin/sleep").arg("30").spawn()?)))
+        }
+
+        fn as_mut(&mut self) -> &mut Child {
+            self.0.as_mut().expect("test child guard owns a child")
+        }
+
+        fn reap(&mut self) -> Result<(), std::io::Error> {
+            if let Some(mut child) = self.0.take() {
+                child.kill()?;
+                child.wait()?;
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.reap();
+        }
+    }
 
     #[test]
     fn parses_linux_start_time_after_comm_field() {
@@ -1477,9 +1601,9 @@ mod tests {
     #[test]
     fn synthetic_child_termination_fault_is_deadline_bound()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut child = Command::new("/bin/sleep").arg("30").spawn()?;
+        let mut child = ChildGuard::sleep()?;
         let started = Instant::now();
-        let result = terminate_failed_child_with(&mut child, Instant::now(), |_| {
+        let result = terminate_failed_child_with(child.as_mut(), Instant::now(), |_| {
             Err(std::io::Error::other("synthetic kill failure"))
         });
         assert!(matches!(result, Err(AdapterError::Timeout(_))));
@@ -1488,8 +1612,7 @@ mod tests {
             "synthetic termination fault exceeded deadline: {:?}",
             started.elapsed()
         );
-        child.kill()?;
-        child.wait()?;
+        child.reap()?;
         Ok(())
     }
 
@@ -1497,8 +1620,8 @@ mod tests {
     fn synthetic_unproven_reap_retains_empty_containment() -> Result<(), Box<dyn std::error::Error>>
     {
         let (_directory, cgroup) = fake_cgroup("")?;
-        let mut child = Command::new("/bin/sleep").arg("30").spawn()?;
-        let failure = cleanup_failed_cgroup_launch_with(&cgroup, Some(&mut child), |_, _| {
+        let mut child = ChildGuard::sleep()?;
+        let failure = cleanup_failed_cgroup_launch_with(&cgroup, Some(child.as_mut()), |_, _| {
             Err(AdapterError::Timeout(
                 "synthetic child reap timeout".to_owned(),
             ))
@@ -1507,8 +1630,7 @@ mod tests {
         assert!(failure.containment_retained);
         assert!(matches!(failure.error, AdapterError::Timeout(_)));
         assert!(cgroup.path().exists());
-        child.kill()?;
-        child.wait()?;
+        child.reap()?;
         Ok(())
     }
 
