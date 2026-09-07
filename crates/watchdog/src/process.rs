@@ -21,9 +21,17 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[cfg(unix)]
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{
+    Pid, Signal, WaitId, WaitIdOptions, kill_process_group, test_kill_process_group, waitid,
+};
 
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+#[cfg(unix)]
+const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[cfg(all(test, unix))]
+static PROCESS_GROUP_SIGNAL_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// Immutable launch identity.  It is persisted alongside the component state
 /// and is intentionally richer than a PID.
@@ -61,9 +69,100 @@ pub struct OwnedChild {
     child: Child,
     identity: ProcessIdentity,
     #[cfg(unix)]
-    process_group: Pid,
+    process_group: ProcessGroupAuthority,
     output: Arc<Mutex<BoundedOutput>>,
     readers: Vec<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct ProcessGroupAuthority {
+    /// The process-group identifier is usable only while the exact direct
+    /// child remains unreaped. Once the leader is reaped, the numeric group
+    /// identifier is retained as diagnostic state but can never be signalled.
+    pgid: Pid,
+    leader_reaped: bool,
+}
+
+#[cfg(unix)]
+impl ProcessGroupAuthority {
+    fn new(pgid: Pid) -> Self {
+        Self {
+            pgid,
+            leader_reaped: false,
+        }
+    }
+
+    fn is_armed(&self) -> bool {
+        !self.leader_reaped
+    }
+
+    fn disarm_after_reap(&mut self) {
+        self.leader_reaped = true;
+    }
+
+    /// Signal the exact group only while its direct leader is still an
+    /// unreaped child of this process. A PID/PGID is not a reusable authority
+    /// after reap, so callers must treat this guard as a hard lifetime rule.
+    fn kill(&self) -> Result<()> {
+        if !self.is_armed() {
+            return Err(WatchdogError::Conflict(
+                "owned child process-group authority was already disarmed".to_owned(),
+            ));
+        }
+        match signal_process_group(self.pgid) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error.raw_os_error()
+                    == std::io::Error::from(rustix::io::Errno::SRCH).raw_os_error() =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(WatchdogError::Io(error)),
+        }
+    }
+
+    /// Prove, within a bounded interval, that no descendant remains in the
+    /// exact group while the leader is still an unreaped zombie.  Linux's
+    /// process-group `kill` status alone includes that zombie, so inspect
+    /// `/proc` to distinguish the leader from remaining group members.
+    fn cleanup_before_reap(&self, leader_pid: u32, deadline: Instant) -> Result<()> {
+        loop {
+            self.kill()?;
+            if !group_has_other_members(self.pgid, leader_pid)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(WatchdogError::Timeout(format!(
+                    "owned process group {} did not become empty before leader reap",
+                    self.pgid.as_raw_pid()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// After the direct child is reaped, never signal the numeric PGID again.
+    /// A final status proof is read-only; if the group remains present or
+    /// becomes ambiguous, return an error so the caller retains/quarantines
+    /// the ownership record instead of claiming cleanup succeeded.
+    fn wait_gone_after_reap(&self, deadline: Instant) -> Result<()> {
+        loop {
+            match test_kill_process_group(self.pgid) {
+                Ok(()) => {
+                    if Instant::now() >= deadline {
+                        return Err(WatchdogError::Timeout(format!(
+                            "owned process group {} remained after leader reap",
+                            self.pgid.as_raw_pid()
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) if error == rustix::io::Errno::SRCH => return Ok(()),
+                Err(error) => return Err(WatchdogError::Io(std::io::Error::from(error))),
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for OwnedChild {
@@ -135,10 +234,10 @@ impl OwnedChild {
         let pid = child.id();
         #[cfg(unix)]
         // `process_group(0)` asks the kernel to create a fresh group whose
-        // identifier is this exact child.  The group identifier is retained
-        // as the containment authority: while descendants remain, POSIX
-        // cannot reuse that group identifier for an unrelated group.
-        let process_group = Pid::from_child(&child);
+        // identifier is this exact child. The authority remains armed while
+        // the direct child is unreaped; after final reap it is permanently
+        // disarmed so a recycled numeric PGID can never be signalled.
+        let mut process_group = ProcessGroupAuthority::new(Pid::from_child(&child));
         let identity = ProcessIdentity {
             pid,
             launch_nonce: Uuid::new_v4().to_string(),
@@ -151,12 +250,23 @@ impl OwnedChild {
         // process immediately catches a surprising platform adapter result
         // early. A very short-lived child may already have exited; that is a
         // normal observation for the reconciler, not an identity mismatch.
-        let still_running = match child.try_wait() {
+        // Unix must use a non-reaping observation here: reaping before the
+        // group is cleaned would make the numeric PGID recyclable.
+        let still_running = match observe_child_exit(&mut child) {
             Ok(status) => status.is_none(),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(WatchdogError::Io(error));
+                #[cfg(unix)]
+                let _ = abort_spawned_child(
+                    &mut child,
+                    &mut process_group,
+                    Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT,
+                );
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                return Err(error);
             }
         };
         if still_running && let Err(error) = ensure_identity(&identity) {
@@ -165,9 +275,16 @@ impl OwnedChild {
             // for that handle.  Cleanup does not fall back to a PID/name
             // lookup.
             #[cfg(unix)]
-            let _ = kill_process_group(process_group, Signal::KILL);
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = abort_spawned_child(
+                &mut child,
+                &mut process_group,
+                Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT,
+            );
+            #[cfg(not(unix))]
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             return Err(error);
         }
         let output = Arc::new(Mutex::new(BoundedOutput::default()));
@@ -196,7 +313,7 @@ impl OwnedChild {
 
     /// Check whether the exact child is still running.
     pub fn is_running(&mut self) -> Result<bool> {
-        if self.child.try_wait()?.is_some() {
+        if observe_child_exit(&mut self.child)?.is_some() {
             return Ok(false);
         }
         ensure_identity(&self.identity)?;
@@ -205,21 +322,46 @@ impl OwnedChild {
 
     /// Non-blocking wait for the exact child.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        let status = self.child.try_wait()?;
-        if status.is_none() {
-            ensure_identity(&self.identity)?;
+        #[cfg(unix)]
+        {
+            if observe_child_exit(&mut self.child)?.is_none() {
+                ensure_identity(&self.identity)?;
+                return Ok(None);
+            }
+            self.reap_after_group_cleanup(Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT)
+                .map(Some)
         }
-        Ok(status)
+        #[cfg(not(unix))]
+        {
+            let status = self.child.try_wait()?;
+            if status.is_none() {
+                ensure_identity(&self.identity)?;
+            }
+            Ok(status)
+        }
     }
 
     /// Wait for an exact child to exit.
     pub fn wait(&mut self) -> Result<ExitStatus> {
-        if self.child.try_wait()?.is_none() {
-            ensure_identity(&self.identity)?;
+        #[cfg(unix)]
+        {
+            if observe_child_exit(&mut self.child)?.is_none() {
+                ensure_identity(&self.identity)?;
+                while observe_child_exit(&mut self.child)?.is_none() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            self.reap_after_group_cleanup(Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT)
         }
-        let status = self.child.wait()?;
-        self.join_readers_bounded(Duration::from_millis(250));
-        Ok(status)
+        #[cfg(not(unix))]
+        {
+            if self.child.try_wait()?.is_none() {
+                ensure_identity(&self.identity)?;
+            }
+            let status = self.child.wait()?;
+            self.join_readers_bounded(Duration::from_millis(250));
+            Ok(status)
+        }
     }
 
     /// Stop the exact owned containment, with a bounded cleanup wait. Unix
@@ -228,45 +370,65 @@ impl OwnedChild {
     /// authority. Other platforms retain direct-child cleanup semantics until
     /// their native Job/cgroup adapter is selected.
     pub fn terminate(&mut self, timeout: Duration) -> Result<ExitStatus> {
-        if let Some(status) = self.child.try_wait()? {
-            #[cfg(unix)]
-            self.kill_process_group()?;
-            self.join_readers_bounded(Duration::from_millis(250));
-            return Ok(status);
-        }
-        ensure_identity(&self.identity)?;
-        self.kill_process_group()?;
         let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.child.try_wait()? {
+        #[cfg(unix)]
+        {
+            if observe_child_exit(&mut self.child)?.is_none() {
+                ensure_identity(&self.identity)?;
+                self.kill_process_group()?;
+            }
+            while observe_child_exit(&mut self.child)?.is_none() {
+                if Instant::now() >= deadline {
+                    return Err(WatchdogError::Timeout(format!(
+                        "owned child {} did not terminate",
+                        self.identity.pid
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            self.reap_after_group_cleanup(deadline)
+        }
+        #[cfg(not(unix))]
+        {
+            if self.child.try_wait()?.is_some() {
                 self.join_readers_bounded(Duration::from_millis(250));
-                return Ok(status);
+                return Ok(self.child.wait()?);
             }
-            if Instant::now() >= deadline {
-                return Err(WatchdogError::Timeout(format!(
-                    "owned child {} did not terminate",
-                    self.identity.pid
-                )));
+            ensure_identity(&self.identity)?;
+            self.child.kill()?;
+            loop {
+                if let Some(status) = self.child.try_wait()? {
+                    self.join_readers_bounded(Duration::from_millis(250));
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    return Err(WatchdogError::Timeout(format!(
+                        "owned child {} did not terminate",
+                        self.identity.pid
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
     #[cfg(unix)]
     fn kill_process_group(&mut self) -> Result<()> {
-        // This is one kernel process-group operation against the group created
-        // for the owned Child. It is not a process-name or PID enumeration;
-        // ESRCH is safe because the exact group has already disappeared.
-        match kill_process_group(self.process_group, Signal::KILL) {
-            Ok(()) => Ok(()),
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(()),
-            Err(error) => Err(WatchdogError::Io(std::io::Error::from(error))),
-        }
+        self.process_group.kill()
     }
 
-    #[cfg(not(unix))]
-    fn kill_process_group(&mut self) -> Result<()> {
-        self.child.kill().map_err(WatchdogError::from)
+    #[cfg(unix)]
+    fn reap_after_group_cleanup(&mut self, deadline: Instant) -> Result<ExitStatus> {
+        self.process_group
+            .cleanup_before_reap(self.identity.pid, deadline)?;
+        let status = self.child.wait()?;
+        // From this point onward the numeric PGID is never used for a signal.
+        // It is retained only so a failed post-reap proof can be diagnosed by
+        // the caller rather than silently treated as clean.
+        self.process_group.disarm_after_reap();
+        self.join_readers_bounded(Duration::from_millis(250));
+        self.process_group.wait_gone_after_reap(deadline)?;
+        Ok(status)
     }
 
     /// Snapshot bounded output without using it as a health signal.
@@ -310,22 +472,182 @@ impl Drop for OwnedChild {
         // native cgroup/Job containment remains responsible for production
         // descendants.
         let deadline = Instant::now() + Duration::from_secs(5);
-        let _ = self.kill_process_group();
-        match self.child.try_wait() {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                let _ = self.child.kill();
-                while Instant::now() < deadline {
-                    match self.child.try_wait() {
-                        Ok(Some(_)) | Err(_) => break,
-                        Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-                    }
+        #[cfg(unix)]
+        {
+            // Signal while the exact leader is still an unreaped child. The
+            // helper may have exited naturally, but waitid/WNOWAIT keeps its
+            // PID and PGID reserved until the cleanup proof completes.
+            if self.process_group.is_armed() {
+                let _ = self.process_group.kill();
+                if wait_for_child_exit(&mut self.child, deadline).is_ok() {
+                    let _ = self
+                        .process_group
+                        .cleanup_before_reap(self.identity.pid, deadline);
+                }
+                if self.child.wait().is_ok() {
+                    self.process_group.disarm_after_reap();
+                    let _ = self.process_group.wait_gone_after_reap(deadline);
                 }
             }
-            Err(_) => {}
+        }
+        #[cfg(not(unix))]
+        {
+            match self.child.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    let _ = self.child.kill();
+                    while Instant::now() < deadline {
+                        match self.child.try_wait() {
+                            Ok(Some(_)) | Err(_) => break,
+                            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
         }
         self.join_readers_bounded(Duration::from_millis(50));
     }
+}
+
+#[cfg(unix)]
+fn observe_child_exit(child: &mut Child) -> Result<Option<()>> {
+    let status = waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )
+    .map_err(|error| WatchdogError::Io(std::io::Error::from(error)))?;
+    Ok(status.map(|_| ()))
+}
+
+#[cfg(unix)]
+fn signal_process_group(pgid: Pid) -> std::io::Result<()> {
+    #[cfg(test)]
+    PROCESS_GROUP_SIGNAL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    kill_process_group(pgid, Signal::KILL).map_err(std::io::Error::from)
+}
+
+#[cfg(not(unix))]
+fn observe_child_exit(child: &mut Child) -> Result<Option<ExitStatus>> {
+    child.try_wait().map_err(WatchdogError::from)
+}
+
+#[cfg(unix)]
+fn wait_for_child_exit(child: &mut Child, deadline: Instant) -> Result<()> {
+    loop {
+        if observe_child_exit(child)?.is_some() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(WatchdogError::Timeout(
+                "owned child did not exit before cleanup deadline".to_owned(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+fn cleanup_spawned_child(
+    child: &mut Child,
+    process_group: &mut ProcessGroupAuthority,
+    deadline: Instant,
+) -> Result<()> {
+    process_group.kill()?;
+    wait_for_child_exit(child, deadline)?;
+    process_group.cleanup_before_reap(child.id(), deadline)?;
+    child.wait()?;
+    process_group.disarm_after_reap();
+    process_group.wait_gone_after_reap(deadline)
+}
+
+#[cfg(unix)]
+fn abort_spawned_child(
+    child: &mut Child,
+    process_group: &mut ProcessGroupAuthority,
+    deadline: Instant,
+) -> Result<()> {
+    match cleanup_spawned_child(child, process_group, deadline) {
+        Ok(()) => Ok(()),
+        Err(cleanup_error) => {
+            // Keep the exact group signal before final reap. If the proof
+            // failed, this is still safe because the direct leader has not
+            // been reaped; do not ever signal the group after the fallback
+            // Child::wait below.
+            if process_group.is_armed() {
+                let _ = process_group.kill();
+            }
+            let _ = child.kill();
+            if child.wait().is_ok() {
+                process_group.disarm_after_reap();
+            }
+            Err(cleanup_error)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn group_has_other_members(pgid: Pid, leader_pid: u32) -> Result<bool> {
+    match test_kill_process_group(pgid) {
+        Ok(()) => {}
+        Err(error) if error == rustix::io::Errno::SRCH => return Ok(false),
+        Err(error) => return Err(WatchdogError::Io(std::io::Error::from(error))),
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let entries = std::fs::read_dir("/proc")?;
+        for entry in entries {
+            let entry = entry?;
+            let Some(member_pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if member_pid == leader_pid {
+                continue;
+            }
+            let stat_path = entry.path().join("stat");
+            let stat = match std::fs::read_to_string(stat_path) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(WatchdogError::Io(error)),
+            };
+            let Some((_, process_group)) = parse_proc_stat_identity(&stat) else {
+                return Err(WatchdogError::Conflict(format!(
+                    "cannot prove process-group membership for pid {member_pid}"
+                )));
+            };
+            if process_group == pgid.as_raw_pid() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = leader_pid;
+        Err(WatchdogError::Unsupported(
+            "exact synthetic process-group membership proof is unavailable on this Unix target"
+                .to_owned(),
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_stat_identity(stat: &str) -> Option<(u32, i32)> {
+    let closing_paren = stat.rfind(')')?;
+    let mut fields = stat.get(closing_paren + 1..)?.split_whitespace();
+    let _state = fields.next()?;
+    let _parent = fields.next()?;
+    let process_group = fields.next()?.parse::<i32>().ok()?;
+    let pid = stat
+        .split_once(' ')
+        .and_then(|(pid, _)| pid.parse::<u32>().ok())?;
+    Some((pid, process_group))
 }
 
 /// Verify an exact process identity before observation or termination.
@@ -539,6 +861,45 @@ fn hash_file(path: &Path) -> Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn immediate_component() -> ComponentConfig {
+        ComponentConfig {
+            id: "process-group-lifetime".to_owned(),
+            executable: PathBuf::from("/bin/sh"),
+            args: vec!["-c".to_owned(), "exit 0".to_owned()],
+            cwd: None,
+            environment: BTreeMap::new(),
+            executable_sha256: None,
+            restart: false,
+        }
+    }
+
+    #[test]
+    fn repeated_cleanup_after_reap_never_reuses_numeric_group_authority() {
+        PROCESS_GROUP_SIGNAL_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut child = OwnedChild::spawn(&immediate_component(), 1_000).expect("spawn");
+        child.wait().expect("wait and clean exact group");
+        let after_reap = PROCESS_GROUP_SIGNAL_COUNT.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(after_reap > 0, "cleanup must signal the original group");
+
+        let repeated = child.terminate(Duration::from_millis(100));
+        assert!(
+            repeated.is_err(),
+            "a reaped child cannot be terminated again"
+        );
+        drop(child);
+        assert_eq!(
+            PROCESS_GROUP_SIGNAL_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            after_reap,
+            "terminate/Drop must not signal a recycled numeric PGID"
+        );
+    }
 }
 
 #[allow(dead_code)]
