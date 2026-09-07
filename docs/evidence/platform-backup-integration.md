@@ -23,3 +23,17 @@ cross-build is not native execution evidence.
 No services were installed, releases activated, hosts rebooted, or game/provider
 processes launched by these checks. The newer fault-fixture branch is not yet
 part of this tested source; its integration requires a separate rerun.
+
+## Full fixture and lease-contract integration
+
+Root repeated all three commands above against `bab3dcb` after adding the
+reviewed fault-fixture chain through `8339513` and host-lease reference contract
+through `217da28`. All three commands exited zero. The integrated fixture source,
+artifacts, conformance inputs, schemas, and runtime/recovery/schema tests match
+the reviewed fixture revision exactly; the host-lease test is an additional file.
+
+The fixture suites passed: 8 library, 8 host-lease reference, 13 recovery,
+17 runtime transport, and 3 schema tests (49 total). The entire workspace test
+command passed as well. The native-service exclusions above remain unchanged.
+This is synthetic integration evidence, not production host-lease consumer or
+live crash/reboot evidence. Linux distinct-user broker isolation remains open.
