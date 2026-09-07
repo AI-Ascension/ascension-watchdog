@@ -17,7 +17,7 @@ use crate::platform::{
 use crate::platform::{
     ComponentKind as PlatformComponentKind, LaunchSpec, SessionSelector as PlatformSessionSelector,
 };
-use crate::process::{OutputSnapshot, OwnedChild, ProcessIdentity};
+use crate::process::{OutputSnapshot, OwnedChild, ProcessIdentity, ProcessSpawnError};
 #[cfg(target_os = "linux")]
 use crate::storage::Store;
 use crate::storage::{LaunchIntent, LaunchIntentState};
@@ -174,8 +174,8 @@ impl RuntimeProcessManager {
         now_ms: u64,
     ) -> std::result::Result<RuntimeChild, RuntimeLaunchError> {
         if self.synthetic {
-            let child =
-                OwnedChild::spawn(component, now_ms).map_err(RuntimeLaunchError::Ordinary)?;
+            let child = OwnedChild::spawn_with_cleanup_status(component, now_ms)
+                .map_err(RuntimeLaunchError::from)?;
             let mut portable_identity = child.identity().clone();
             portable_identity
                 .launch_nonce
@@ -380,6 +380,15 @@ pub(crate) enum RuntimeStopOutcome {
 pub(crate) enum RuntimeLaunchError {
     Ordinary(WatchdogError),
     CleanupUncertain(WatchdogError),
+}
+
+impl From<ProcessSpawnError> for RuntimeLaunchError {
+    fn from(error: ProcessSpawnError) -> Self {
+        match error {
+            ProcessSpawnError::Ordinary(error) => Self::Ordinary(error),
+            ProcessSpawnError::CleanupUncertain(error) => Self::CleanupUncertain(error),
+        }
+    }
 }
 
 impl std::fmt::Display for RuntimeLaunchError {
@@ -1304,6 +1313,20 @@ fn watchdog_to_adapter_error(error: WatchdogError) -> AdapterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_cleanup_uncertainty_survives_runtime_admission_mapping() {
+        let error = WatchdogError::Conflict("unproven synthetic containment".to_owned());
+        assert!(matches!(
+            RuntimeLaunchError::from(ProcessSpawnError::CleanupUncertain(error)),
+            RuntimeLaunchError::CleanupUncertain(_)
+        ));
+        let error = WatchdogError::InvalidInput("rejected before spawn".to_owned());
+        assert!(matches!(
+            RuntimeLaunchError::from(ProcessSpawnError::Ordinary(error)),
+            RuntimeLaunchError::Ordinary(_)
+        ));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
