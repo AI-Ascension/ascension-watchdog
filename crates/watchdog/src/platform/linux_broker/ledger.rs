@@ -68,6 +68,16 @@ impl LaunchIdentity {
 pub struct BrokerLedger {
     path: Option<PathBuf>,
     records: BTreeMap<BrokerRequest, LedgerRecord>,
+    poisoned: bool,
+    #[cfg(test)]
+    append_failure: Option<AppendFailure>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppendFailure {
+    PartialWrite,
+    Sync,
 }
 
 impl BrokerLedger {
@@ -75,6 +85,9 @@ impl BrokerLedger {
         Self {
             path: None,
             records: BTreeMap::new(),
+            poisoned: false,
+            #[cfg(test)]
+            append_failure: None,
         }
     }
 
@@ -84,6 +97,9 @@ impl BrokerLedger {
         let mut ledger = Self {
             path: Some(path.clone()),
             records: BTreeMap::new(),
+            poisoned: false,
+            #[cfg(test)]
+            append_failure: None,
         };
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => Some(metadata),
@@ -95,7 +111,10 @@ impl BrokerLedger {
                 "broker ledger is missing; initialize it explicitly before opening".to_owned(),
             ));
         };
-        if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o077 != 0 {
+        if !metadata.is_file()
+            || !is_protected_owner(metadata.uid())
+            || metadata.mode() & 0o077 != 0
+        {
             return Err(BrokerError::Invalid(
                 "broker ledger must be a root-owned mode-0600 regular file".to_owned(),
             ));
@@ -127,7 +146,10 @@ impl BrokerLedger {
         options.create_new(true).write(true).mode(0o600);
         let file = options.open(&path).map_err(io_error)?;
         let metadata = file.metadata().map_err(io_error)?;
-        if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o077 != 0 {
+        if !metadata.is_file()
+            || !is_protected_owner(metadata.uid())
+            || metadata.mode() & 0o077 != 0
+        {
             return Err(BrokerError::Unauthorized(
                 "broker ledger initialization produced unsafe ownership or mode".to_owned(),
             ));
@@ -141,12 +163,36 @@ impl BrokerLedger {
         self.records.contains_key(request)
     }
 
+    pub(super) fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    pub(super) fn ensure_healthy(&self) -> BrokerResult<()> {
+        if self.poisoned {
+            return Err(BrokerError::Unavailable(
+                "broker ledger is poisoned; reopen it from verified durable state".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_partial_write_failure(&mut self) {
+        self.append_failure = Some(AppendFailure::PartialWrite);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_sync_failure(&mut self) {
+        self.append_failure = Some(AppendFailure::Sync);
+    }
+
     pub(super) fn reserve(
         &mut self,
         request: &BrokerRequest,
         unit: &str,
         policy: &LaunchPolicy,
     ) -> BrokerResult<bool> {
+        self.ensure_healthy()?;
         let identity = LaunchIdentity::from_policy(policy);
         if let Some(record) = self.records.get(request) {
             if record.unit != unit || !record.identity.matches_policy(policy) {
@@ -178,6 +224,7 @@ impl BrokerLedger {
         request: &BrokerRequest,
         receipt: &LaunchReceipt,
     ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
         let Some(previous) = self.records.get(request) else {
             return Err(BrokerError::Conflict(
                 "broker launch has no durable reservation".to_owned(),
@@ -189,6 +236,16 @@ impl BrokerLedger {
             ));
         }
         if previous.state == LedgerState::Committed {
+            let Some(previous_receipt) = previous.receipt.as_ref() else {
+                return Err(BrokerError::Conflict(
+                    "broker committed record has no persisted receipt".to_owned(),
+                ));
+            };
+            if !same_process_binding(previous_receipt, receipt) {
+                return Err(BrokerError::Conflict(
+                    "broker duplicate receipt has a different process identity".to_owned(),
+                ));
+            }
             return Ok(());
         }
         let record = LedgerRecord {
@@ -203,8 +260,8 @@ impl BrokerLedger {
         Ok(())
     }
 
-    fn append(&self, record: &LedgerRecord) -> BrokerResult<()> {
-        let Some(path) = &self.path else {
+    fn append(&mut self, record: &LedgerRecord) -> BrokerResult<()> {
+        let Some(path) = self.path.clone() else {
             return Ok(());
         };
         let parent = path
@@ -215,7 +272,10 @@ impl BrokerLedger {
         options.append(true).write(true).mode(0o600);
         let mut file = options.open(path).map_err(io_error)?;
         let metadata = file.metadata().map_err(io_error)?;
-        if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o077 != 0 {
+        if !metadata.is_file()
+            || !is_protected_owner(metadata.uid())
+            || metadata.mode() & 0o077 != 0
+        {
             return Err(BrokerError::Unauthorized(
                 "broker ledger ownership or mode is unsafe".to_owned(),
             ));
@@ -227,10 +287,60 @@ impl BrokerLedger {
                 "broker ledger record exceeds size bound".to_owned(),
             ));
         }
-        file.write_all(&bytes).map_err(io_error)?;
-        file.write_all(b"\n").map_err(io_error)?;
-        file.sync_all().map_err(io_error)
+
+        #[cfg(test)]
+        let append_failure = self.append_failure.take();
+
+        #[cfg(test)]
+        if append_failure == Some(AppendFailure::PartialWrite) {
+            let partial_len = (bytes.len() / 2).max(1);
+            if let Err(error) = file.write_all(&bytes[..partial_len]) {
+                self.poisoned = true;
+                return Err(io_error(error));
+            }
+            self.poisoned = true;
+            return Err(BrokerError::Io(
+                "injected partial broker ledger append failure".to_owned(),
+            ));
+        }
+
+        if let Err(error) = file.write_all(&bytes) {
+            self.poisoned = true;
+            return Err(io_error(error));
+        }
+        if let Err(error) = file.write_all(b"\n") {
+            self.poisoned = true;
+            return Err(io_error(error));
+        }
+
+        #[cfg(test)]
+        if append_failure == Some(AppendFailure::Sync) {
+            self.poisoned = true;
+            return Err(BrokerError::Io(
+                "injected broker ledger sync failure".to_owned(),
+            ));
+        }
+
+        if let Err(error) = file.sync_all() {
+            self.poisoned = true;
+            return Err(io_error(error));
+        }
+        Ok(())
     }
+}
+
+fn same_process_binding(previous: &LaunchReceipt, current: &LaunchReceipt) -> bool {
+    previous.request == current.request
+        && previous.unit == current.unit
+        && previous.pid == current.pid
+        && previous.creation_token == current.creation_token
+        && previous.executable == current.executable
+        && previous.executable_sha256 == current.executable_sha256
+        && previous.uid == current.uid
+        && previous.gid == current.gid
+        && previous.capability_bounding_set == current.capability_bounding_set
+        && previous.ambient_capabilities == current.ambient_capabilities
+        && previous.control_group == current.control_group
 }
 
 fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRecord>> {
@@ -332,7 +442,7 @@ fn validate_protected_ledger_path(path: &Path) -> BrokerResult<()> {
         Ok(metadata) if !metadata.is_file() => Err(BrokerError::Invalid(
             "broker ledger must be a regular file".to_owned(),
         )),
-        Ok(metadata) if metadata.uid() != 0 || metadata.mode() & 0o077 != 0 => Err(
+        Ok(metadata) if !is_protected_owner(metadata.uid()) || metadata.mode() & 0o077 != 0 => Err(
             BrokerError::Invalid("broker ledger must be root-owned and mode 0600".to_owned()),
         ),
         Ok(_) => Ok(()),

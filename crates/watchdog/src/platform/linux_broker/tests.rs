@@ -1,7 +1,10 @@
 use super::*;
+use tempfile::tempdir_in;
 
 struct FakeBackend {
     starts: usize,
+    inspects: usize,
+    stops: usize,
     units: BTreeMap<String, UnitObservation>,
 }
 
@@ -9,6 +12,8 @@ impl FakeBackend {
     fn new() -> Self {
         Self {
             starts: 0,
+            inspects: 0,
+            stops: 0,
             units: BTreeMap::new(),
         }
     }
@@ -46,10 +51,12 @@ impl SystemdBackend for FakeBackend {
         _policy: &LaunchPolicy,
         _deadline: Instant,
     ) -> BrokerResult<Option<UnitObservation>> {
+        self.inspects += 1;
         Ok(self.units.get(unit).cloned())
     }
 
     fn stop(&mut self, unit: &str, _deadline: Instant) -> BrokerResult<()> {
+        self.stops += 1;
         self.units.remove(unit);
         Ok(())
     }
@@ -133,6 +140,12 @@ fn observation(policy: &LaunchPolicy, unit: &str) -> UnitObservation {
     }
 }
 
+fn protected_tempdir() -> tempfile::TempDir {
+    let runtime_directory =
+        PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()));
+    tempdir_in(runtime_directory).expect("protected test directory")
+}
+
 #[test]
 fn fixed_policy_has_distinct_target_identity_and_no_capabilities() {
     let policy = policy();
@@ -186,6 +199,146 @@ fn duplicate_nonce_does_not_start_a_second_unit() {
     assert!(!first.duplicate);
     assert!(second.duplicate);
     assert_eq!(broker.backend.starts, 1);
+}
+
+#[test]
+fn committed_duplicate_must_match_the_persisted_process_binding() {
+    let policy = policy();
+    let request = request("replacement");
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
+    let (peer, mut child) = credentials(&policy);
+    let first = broker.handle(peer, request.clone()).expect("first launch");
+    let unit = first.unit.clone();
+    let replacement = broker.backend.units.get_mut(&unit).expect("launched unit");
+    replacement.pid = 43;
+    replacement.creation_token = "replacement-start-token".to_owned();
+    broker.active_units.remove(&unit);
+
+    let error = broker
+        .handle(peer, request.clone())
+        .expect_err("replacement process must not satisfy an old nonce");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert!(!broker.active_units.contains(&unit));
+    assert_eq!(broker.receipts.get(&request), Some(&first));
+    assert_eq!(broker.backend.starts, 1);
+}
+
+#[test]
+fn partial_ledger_append_poisons_state_and_blocks_effects() {
+    let policy = policy();
+    let directory = protected_tempdir();
+    let path = directory.path().join("broker-ledger");
+    let mut ledger = BrokerLedger::init(&path).expect("initialize ledger");
+    ledger.inject_partial_write_failure();
+    let partial_request = request("partial");
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+
+    let error = ledger
+        .reserve(
+            &partial_request,
+            &unit_name(&partial_request),
+            launch_policy,
+        )
+        .expect_err("injected partial write must fail");
+    assert!(matches!(error, BrokerError::Io(_)));
+    assert!(ledger.is_poisoned());
+    assert!(!ledger.contains(&partial_request));
+    assert!(BrokerLedger::open(&path).is_err());
+    assert!(
+        ledger
+            .reserve(
+                &request("second"),
+                &unit_name(&request("second")),
+                launch_policy
+            )
+            .is_err()
+    );
+
+    let mut broker =
+        LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), ledger);
+    let (peer, mut child) = credentials(&policy);
+    let error = broker
+        .handle(peer, request("effect-blocked"))
+        .expect_err("poisoned ledger must block backend effects");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Unavailable(_)));
+    assert_eq!(broker.backend.starts, 0);
+    assert_eq!(broker.backend.inspects, 0);
+    assert_eq!(broker.backend.stops, 0);
+}
+
+#[test]
+fn sync_failure_poisons_ledger_without_inserting_uncommitted_state() {
+    let policy = policy();
+    let directory = protected_tempdir();
+    let path = directory.path().join("broker-ledger");
+    let mut ledger = BrokerLedger::init(&path).expect("initialize ledger");
+    let sync_request = request("sync");
+    let unit = unit_name(&sync_request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    ledger.inject_sync_failure();
+
+    let error = ledger
+        .reserve(&sync_request, &unit, launch_policy)
+        .expect_err("injected sync failure must fail");
+    assert!(matches!(error, BrokerError::Io(_)));
+    assert!(ledger.is_poisoned());
+    assert!(!ledger.contains(&sync_request));
+
+    let mut reopened = BrokerLedger::open(&path).expect("fresh owner may inspect synced record");
+    assert!(!reopened.is_poisoned());
+    assert!(reopened.contains(&sync_request));
+    assert!(
+        reopened
+            .reserve(
+                &request("new-after-reopen"),
+                &unit_name(&request("new-after-reopen")),
+                launch_policy,
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn committed_duplicate_survives_owner_reopen_with_exact_observation() {
+    let policy = policy();
+    let directory = protected_tempdir();
+    let path = directory.path().join("broker-ledger");
+    let ledger = BrokerLedger::init(&path).expect("initialize ledger");
+    let request = request("reopen");
+    let (peer, mut child) = credentials(&policy);
+    let mut first_broker =
+        LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), ledger);
+    let first = first_broker
+        .handle(peer, request.clone())
+        .expect("first launch");
+    let exact_observation = first_broker
+        .backend
+        .units
+        .get(&first.unit)
+        .cloned()
+        .expect("exact launched observation");
+    drop(first_broker);
+
+    let reopened = BrokerLedger::open(&path).expect("reopen durable ledger");
+    let mut backend = FakeBackend::new();
+    backend.units.insert(first.unit.clone(), exact_observation);
+    let mut replacement = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, reopened);
+    let duplicate = replacement
+        .handle(peer, request)
+        .expect("exact duplicate after reopen");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(duplicate.duplicate);
+    assert_eq!(replacement.backend.starts, 0);
+    assert_eq!(replacement.backend.inspects, 1);
 }
 
 #[test]

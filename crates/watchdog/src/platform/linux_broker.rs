@@ -568,7 +568,7 @@ fn validate_sha256(value: &str) -> BrokerResult<()> {
 fn validate_protected_file(path: &Path, label: &str) -> BrokerResult<()> {
     validate_protected_ancestors(path, label)?;
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+    if !metadata.is_file() || !is_protected_owner(metadata.uid()) || metadata.mode() & 0o022 != 0 {
         return Err(BrokerError::Invalid(format!(
             "{label} must be a root-owned non-writable regular file"
         )));
@@ -579,7 +579,7 @@ fn validate_protected_file(path: &Path, label: &str) -> BrokerResult<()> {
 fn validate_protected_directory(path: &Path, label: &str) -> BrokerResult<()> {
     validate_protected_ancestors(path, label)?;
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+    if !metadata.is_dir() || !is_protected_owner(metadata.uid()) || metadata.mode() & 0o022 != 0 {
         return Err(BrokerError::Invalid(format!(
             "{label} must be a root-owned non-writable directory"
         )));
@@ -616,7 +616,8 @@ fn validate_protected_ancestors(path: &Path, label: &str) -> BrokerResult<()> {
         };
         current.push(part);
         let metadata = fs::symlink_metadata(&current).map_err(io_error)?;
-        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        if !metadata.is_dir() || !is_protected_owner(metadata.uid()) || metadata.mode() & 0o022 != 0
+        {
             // The final object is validated separately, but all components
             // before it must be directories with no non-root write access.
             if current != path {
@@ -632,6 +633,19 @@ fn validate_protected_ancestors(path: &Path, label: &str) -> BrokerResult<()> {
         }
     }
     Ok(())
+}
+
+fn is_protected_owner(uid: u32) -> bool {
+    #[cfg(test)]
+    {
+        // Tests use a mode-0700 per-user runtime fixture because they cannot
+        // create root-owned files.  Release builds retain the root-only rule.
+        uid == 0 || uid == rustix::process::getuid().as_raw()
+    }
+    #[cfg(not(test))]
+    {
+        uid == 0
+    }
 }
 
 fn hash_file(path: &Path) -> BrokerResult<String> {
@@ -872,6 +886,7 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         request.validate()?;
         authenticate_peer(credentials, &self.policy.peer)?;
         let policy = self.policy.component(request.component)?;
+        self.ledger.ensure_healthy()?;
         let unit = unit_name(&request);
         if self.active_units.len() >= MAX_ACTIVE_PROCESSES {
             return Err(BrokerError::Unavailable(
@@ -897,9 +912,9 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         if !newly_reserved {
             if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
                 observation.verify(&unit, policy)?;
-                self.active_units.insert(unit.clone());
                 let receipt = receipt_from(&request, &observation, true);
                 self.ledger.commit(&request, &receipt)?;
+                self.active_units.insert(unit.clone());
                 self.cache_receipt(&request, &receipt);
                 return Ok(receipt);
             }
@@ -919,6 +934,14 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         }
         let receipt = receipt_from(&request, &observation, false);
         if let Err(error) = self.ledger.commit(&request, &receipt) {
+            if self.ledger.is_poisoned() {
+                // The pending reservation and the exact unit remain for a
+                // fresh broker owner to reconcile.  Stopping after an
+                // uncertain ledger append would create a second unknown
+                // effect and is therefore forbidden while this ledger is
+                // poisoned.
+                return Err(error);
+            }
             let cleanup = self.cleanup_unit(&unit);
             return Err(cleanup_error(error, cleanup));
         }
