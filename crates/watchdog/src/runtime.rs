@@ -405,6 +405,7 @@ impl Supervisor {
                 &specification,
                 planned_containment,
                 proof_value,
+                expected_runtime_backend(self.config.allow_synthetic_children),
             ) {
                 self.quarantine_component(
                     &component,
@@ -580,6 +581,7 @@ impl Supervisor {
                                 &specification,
                                 planned_containment,
                                 &proof,
+                                expected_runtime_backend(self.config.allow_synthetic_children),
                             ) {
                                 self.retain_quarantined_child(
                                     &component,
@@ -1317,9 +1319,13 @@ impl Supervisor {
                     .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
             }
         };
-        if let Err(error) =
-            validate_persisted_launch_binding(&intent, &specification, &planned_containment, &proof)
-        {
+        if let Err(error) = validate_persisted_launch_binding(
+            &intent,
+            &specification,
+            &planned_containment,
+            &proof,
+            expected_runtime_backend(self.config.allow_synthetic_children),
+        ) {
             return self
                 .abort_launched_child(component, &intent.id, child, attempts, now_ms, error);
         }
@@ -1803,11 +1809,24 @@ fn launch_spec_binding_digest(
     Ok(hex_digest(&serde_json::to_vec(&binding)?))
 }
 
+fn expected_runtime_backend(synthetic: bool) -> &'static str {
+    if synthetic {
+        "synthetic"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(windows) {
+        "windows"
+    } else {
+        "unsupported"
+    }
+}
+
 fn validate_persisted_launch_binding(
     intent: &LaunchIntent,
     specification: &crate::platform::LaunchSpec,
     planned_containment_id: &str,
     proof_value: &Value,
+    expected_backend: &str,
 ) -> Result<()> {
     let Some(expected_incarnation) = intent.expected_incarnation.as_deref() else {
         return Err(WatchdogError::Conflict(format!(
@@ -1838,14 +1857,29 @@ fn validate_persisted_launch_binding(
                 "launch ownership proof has an invalid shape".to_owned(),
             )
         })?;
-    let session_matches = match specification.session {
+    // Select the backend from trusted runtime configuration, never from a
+    // persisted proof: relabeling a native proof must not opt out of checks.
+    if proof.backend != expected_backend
+        || !matches!(expected_backend, "synthetic" | "linux" | "windows")
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "launch proof backend differs from configured process authority".to_owned(),
+        ));
+    }
+    let session_matches = match (expected_backend, specification.session) {
+        // Linux has no Windows session ID. Its adapter only accepts the
+        // service selector Explicit(0), and persists that as None.
+        ("linux", crate::platform::SessionSelector::Explicit(0)) => proof.session_id.is_none(),
+        ("linux", _) => false,
         // ActiveUser is a selector, not a proof value.  The platform resolves
         // it during launch, so recovery must require a concrete non-service
         // session rather than comparing against `None`.
-        crate::platform::SessionSelector::ActiveUser => {
+        (_, crate::platform::SessionSelector::ActiveUser) => {
             proof.session_id.is_some_and(|session| session != 0)
         }
-        crate::platform::SessionSelector::Explicit(expected) => proof.session_id == Some(expected),
+        (_, crate::platform::SessionSelector::Explicit(expected)) => {
+            proof.session_id == Some(expected)
+        }
     };
     let executable_matches = proof.executable == specification.executable
         || std::fs::canonicalize(&proof.executable)
@@ -2014,20 +2048,153 @@ mod tests {
     }
 
     #[test]
+    fn linux_service_session_requires_absent_platform_session() {
+        let mut specification = session_spec(SessionSelector::Explicit(0));
+        specification.component = ComponentKind::Gateway;
+        let containment = "linux-cgroup:nonce-1";
+        let intent = bound_intent(&specification, containment);
+        let mut proof = windows_proof(&intent, &specification, containment, None);
+        proof["backend"] = json!("linux");
+        assert!(
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &proof,
+                "linux"
+            )
+            .is_ok()
+        );
+        for invalid_session in [Some(0), Some(7)] {
+            proof["session_id"] = json!(invalid_session);
+            assert!(
+                validate_persisted_launch_binding(
+                    &intent,
+                    &specification,
+                    containment,
+                    &proof,
+                    "linux"
+                )
+                .is_err()
+            );
+        }
+        proof["session_id"] = Value::Null;
+        for invalid_selector in [SessionSelector::Explicit(7), SessionSelector::ActiveUser] {
+            specification.session = invalid_selector;
+            specification.component = ComponentKind::HostBroker;
+            let intent = bound_intent(&specification, containment);
+            assert!(
+                validate_persisted_launch_binding(
+                    &intent,
+                    &specification,
+                    containment,
+                    &proof,
+                    "linux"
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_proof_cannot_select_synthetic_or_foreign_backend() {
+        let mut specification = session_spec(SessionSelector::Explicit(0));
+        specification.component = ComponentKind::Gateway;
+        let containment = "containment:nonce-1";
+        let intent = bound_intent(&specification, containment);
+        for expected in ["linux", "windows"] {
+            let mut proof = windows_proof(&intent, &specification, containment, None);
+            proof["backend"] = json!("synthetic");
+            proof["executable_sha256"] = json!("unverified-synthetic");
+            assert!(matches!(
+                validate_persisted_launch_binding(
+                    &intent,
+                    &specification,
+                    containment,
+                    &proof,
+                    expected
+                ),
+                Err(WatchdogError::IdentityMismatch(_))
+            ));
+            // Native proof relabeling cannot cross the platform boundary either.
+            proof["backend"] = json!(if expected == "linux" {
+                "windows"
+            } else {
+                "linux"
+            });
+            assert!(
+                validate_persisted_launch_binding(
+                    &intent,
+                    &specification,
+                    containment,
+                    &proof,
+                    expected
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn synthetic_proof_requires_explicit_synthetic_configuration() {
+        let mut specification = session_spec(SessionSelector::Explicit(0));
+        specification.component = ComponentKind::Synthetic;
+        let containment = "synthetic:nonce-1";
+        let intent = bound_intent(&specification, containment);
+        let mut proof = windows_proof(&intent, &specification, containment, None);
+        proof["backend"] = json!("synthetic");
+        proof["executable_sha256"] = json!("unverified-synthetic");
+        assert_eq!(expected_runtime_backend(true), "synthetic");
+        assert_ne!(expected_runtime_backend(false), "synthetic");
+        assert!(
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &proof,
+                expected_runtime_backend(true)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &proof,
+                expected_runtime_backend(false)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn active_user_windows_proof_requires_resolved_nonzero_session() {
         let specification = session_spec(SessionSelector::ActiveUser);
         let containment = "windows-job:nonce-1";
         let intent = bound_intent(&specification, containment);
         let valid = windows_proof(&intent, &specification, containment, Some(7));
         assert!(
-            validate_persisted_launch_binding(&intent, &specification, containment, &valid,)
-                .is_ok()
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &valid,
+                "windows"
+            )
+            .is_ok()
         );
 
         for unresolved in [None, Some(0)] {
             let proof = windows_proof(&intent, &specification, containment, unresolved);
             assert!(matches!(
-                validate_persisted_launch_binding(&intent, &specification, containment, &proof,),
+                validate_persisted_launch_binding(
+                    &intent,
+                    &specification,
+                    containment,
+                    &proof,
+                    "windows"
+                ),
                 Err(WatchdogError::IdentityMismatch(_))
             ));
         }
@@ -2040,12 +2207,24 @@ mod tests {
         let intent = bound_intent(&specification, containment);
         let matching = windows_proof(&intent, &specification, containment, Some(7));
         assert!(
-            validate_persisted_launch_binding(&intent, &specification, containment, &matching,)
-                .is_ok()
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &matching,
+                "windows"
+            )
+            .is_ok()
         );
         let mismatched = windows_proof(&intent, &specification, containment, Some(8));
         assert!(matches!(
-            validate_persisted_launch_binding(&intent, &specification, containment, &mismatched,),
+            validate_persisted_launch_binding(
+                &intent,
+                &specification,
+                containment,
+                &mismatched,
+                "windows"
+            ),
             Err(WatchdogError::IdentityMismatch(_))
         ));
     }
