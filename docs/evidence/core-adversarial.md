@@ -53,11 +53,18 @@ now fixes the post-spawn persistence-failure leak. The separate
 after its PID row commits, and verifies that the spawned process has exited.
 That test passes. Strict workspace Clippy passes.
 
-Current adversarial suite: **2 passed, 6 failed, 0 ignored**. Remaining failures
-are metadata corruption defaulting, wall-clock restart-budget reset, stale
-health, restore admission, read-only open/path replacement, and background
-descendant cleanup. They remain active release blockers, not expected-green
-exceptions. Store/policy and native-containment repairs are pending integration.
+After storage integration and the heartbeat fix, the adversarial suite is
+**7 passed, 1 failed, 0 ignored**. Background descendant cleanup remains an
+active release blocker, not an expected-green exception. The real reconciler
+now records a live process without a fresh heartbeat as suspect and retains its
+owned handle, rather than claiming progress or launching a duplicate. Four
+health-policy tests, including a real child process, pass. Phase-specific
+authenticated child-health and native containment integration remain required.
+
+Store initialization/opening in `Supervisor` now explicitly requires the held
+owner lock, and CLI status/doctor use the true read-only connection path. The
+existing restore fixture now supplies a fresh deployment ID; accepted restores
+remain stopped and do not rekey game authority.
 
 The drop-based persisted-child test now passes because ordinary controller
 destruction cleans its child. This is **not** proof of abrupt owner-death

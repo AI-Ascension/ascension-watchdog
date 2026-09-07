@@ -140,6 +140,7 @@ fn backup_restore_reestablishes_wal_full_and_rekeys_generation() {
     let restored_path = temp.path().join("restored.sqlite3");
     let mut restored_config = config.clone();
     restored_config.database = restored_path.clone();
+    restored_config.deployment_id = "restored-test-deployment".to_owned();
     let restored = Store::restore_from(&backup, &restored_path, &restored_config).expect("restore");
     assert!(restored.durability().expect("pragmas").is_wal_full());
     assert!(restored.status().expect("status").restart_generation > 1);

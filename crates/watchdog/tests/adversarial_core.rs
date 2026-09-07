@@ -4,15 +4,20 @@
 //! are expected to fail on the pre-repair baseline; a failure is evidence of a
 //! safety regression, not a reason to weaken an assertion or ignore the test.
 
-use ascension_watchdog::config::{ComponentConfig, DesiredMode, WatchdogConfig};
+#[cfg(unix)]
+use ascension_watchdog::config::ComponentConfig;
+use ascension_watchdog::config::{DesiredMode, WatchdogConfig};
 use ascension_watchdog::policy::{
     ComponentObservation, ComponentState, ReconcileAction, SupervisorPolicy,
 };
+#[cfg(unix)]
 use ascension_watchdog::process::OwnedChild;
+#[cfg(unix)]
 use ascension_watchdog::runtime::Supervisor;
 use ascension_watchdog::storage::Store;
 use rusqlite::Connection;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
 use tempfile::TempDir;
 

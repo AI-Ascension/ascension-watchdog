@@ -221,12 +221,20 @@ impl SupervisorPolicy {
 
         match observation.state {
             ComponentState::Running => {
-                if observation.consecutive_misses >= self.suspect_threshold {
+                let heartbeat_limit = self
+                    .probe_interval_ms
+                    .saturating_mul(u64::from(self.suspect_threshold));
+                if observation.consecutive_misses >= self.suspect_threshold
+                    || observation
+                        .heartbeat_age_ms
+                        .is_none_or(|age| age > heartbeat_limit)
+                {
                     ReconcileDecision {
                         component_id: id,
                         action: ReconcileAction::MarkSuspect,
                         resulting_state: ComponentState::Suspect,
-                        reason: "consecutive health misses crossed suspect threshold".to_string(),
+                        reason: "missing or stale control-loop heartbeat; process liveness is insufficient"
+                            .to_string(),
                         retry_at_ms: None,
                     }
                 } else {

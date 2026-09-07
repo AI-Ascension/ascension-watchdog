@@ -61,7 +61,7 @@ impl Supervisor {
         // cannot race schema/bootstrap work and then both believe it owns the
         // deployment.
         let lock = SingletonLock::acquire(&config.database)?;
-        let store = Store::initialize(&config.database, &config)?;
+        let store = Store::initialize_for_owner(&config.database, &config, &lock)?;
         let mut supervisor = Self::from_store(store, config);
         lock.write_owner_hint(&format!("worker_id={}", supervisor.worker_id))?;
         supervisor.lock = Some(lock);
@@ -71,8 +71,12 @@ impl Supervisor {
     /// Open existing state.  It never creates a missing database.
     pub fn open(config: WatchdogConfig) -> Result<Self> {
         config.validate()?;
-        let store = Store::open(&config.database, &config)?;
-        Ok(Self::from_store(store, config))
+        let lock = SingletonLock::acquire(&config.database)?;
+        let store = Store::open_for_owner(&config.database, &config, &lock)?;
+        let mut supervisor = Self::from_store(store, config);
+        lock.write_owner_hint(&format!("worker_id={}", supervisor.worker_id))?;
+        supervisor.lock = Some(lock);
+        Ok(supervisor)
     }
 
     fn from_store(store: Store, config: WatchdogConfig) -> Self {
@@ -358,7 +362,7 @@ impl Supervisor {
             now_ms,
             self.config.restart_budget_window_secs.saturating_mul(1_000),
         )?;
-        let decision = self.policy.decide(
+        let mut decision = self.policy.decide(
             desired_mode,
             component.restart,
             &observation,
@@ -366,6 +370,16 @@ impl Supervisor {
             restart_count,
             prior.as_ref().and_then(|record| record.last_restart_at_ms),
         );
+        if is_running && decision.action == ReconcileAction::Start {
+            // Never overwrite a still-owned child with a replacement merely
+            // because a deadline or health observation became suspect.
+            // Authority-aware drain/cleanup must complete before relaunch.
+            decision.action = ReconcileAction::MarkSuspect;
+            decision.resulting_state = ComponentState::Suspect;
+            "owned process retained pending authority-aware recovery; duplicate launch blocked"
+                .clone_into(&mut decision.reason);
+            decision.retry_at_ms = None;
+        }
         match decision.action {
             ReconcileAction::Stop => {
                 self.stop_component(component, now_ms, report)?;
@@ -407,6 +421,8 @@ impl Supervisor {
                     ComponentState::Paused
                 } else if desired_mode.stops_children() {
                     ComponentState::Stopped
+                } else if decision.action == ReconcileAction::MarkSuspect {
+                    ComponentState::Suspect
                 } else if is_running {
                     ComponentState::Running
                 } else {

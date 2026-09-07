@@ -32,20 +32,22 @@ fn completed_paused_loop_advances_health_without_starting_children()
 }
 
 #[test]
-fn failed_controller_ownership_never_reports_ready() -> Result<(), Box<dyn std::error::Error>> {
+fn competing_controller_is_rejected_before_readiness() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let config = WatchdogConfig {
         database: directory.path().join("state.sqlite"),
         ..WatchdogConfig::default()
     };
-    let _owner = Supervisor::initialize(config.clone())?;
-    let competing = Supervisor::open(config)?;
-    let mut service = ServiceLoop::new(competing, Duration::from_millis(20))?;
-    assert!(service.reconcile(1_000).is_err());
+    let owner = Supervisor::initialize(config.clone())?;
+    let service = ServiceLoop::new(owner, Duration::from_millis(20))?;
+    assert!(matches!(
+        Supervisor::open(config),
+        Err(ascension_watchdog::WatchdogError::Busy(_))
+    ));
     let health = service.health().snapshot();
     assert!(!health.ready);
     assert_eq!(health.heartbeat_seq, 0);
-    assert_eq!(health.phase, MainLoopPhase::Blocked);
+    assert_eq!(health.phase, MainLoopPhase::Starting);
     Ok(())
 }
 

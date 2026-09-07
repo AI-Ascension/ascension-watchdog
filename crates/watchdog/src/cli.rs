@@ -188,7 +188,7 @@ fn preflight_bytes(args: &mut Vec<String>, option: &str, default: u64) -> Result
 
 fn doctor_command(config_path: &Path) -> Result<Option<String>> {
     let config = WatchdogConfig::from_file(config_path)?;
-    let store = Store::open(&config.database, &config)?;
+    let store = Store::open_read_only(&config.database, &config)?;
     let integrity_ok = store.integrity_check()?;
     let status = store.status()?;
     Ok(Some(
@@ -206,7 +206,7 @@ fn doctor_command(config_path: &Path) -> Result<Option<String>> {
 
 fn status_command(config_path: &Path) -> Result<Option<String>> {
     let config = WatchdogConfig::from_file(config_path)?;
-    let store = Store::open(&config.database, &config)?;
+    let store = Store::open_read_only(&config.database, &config)?;
     Ok(Some(serde_json::to_string(&store.status()?)?))
 }
 
