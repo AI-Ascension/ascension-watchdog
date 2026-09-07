@@ -227,6 +227,45 @@ fn with_lease(mut request: Value, lease: &Value) -> Value {
 }
 
 #[test]
+fn released_lease_cannot_authorize_a_new_runtime_session() -> Result<(), Box<dyn std::error::Error>>
+{
+    let server = RunningServer::start()?;
+    let lease = bootstrap(&Client::new(server.address))?;
+    let state = send_raw(
+        server.address,
+        &with_lease(envelope("state_request", 0, None, None), &lease),
+    )?;
+    let mut release = with_lease(envelope("recover_request", 0, None, None), &lease);
+    release["recovery"] = json!({"kind":"release_lease","operation_id":null});
+    assert_eq!(send_raw(server.address, &release)?["status"], "cancelled");
+    let connection = rusqlite::Connection::open(&server.database)?;
+    let revoked: i64 = connection.query_row("SELECT revoked FROM lease", [], |row| row.get(0))?;
+    assert_eq!(revoked, 1);
+    let mut dispatch = with_lease(
+        envelope(
+            "dispatch_action_request",
+            0,
+            state["state_id"].as_str(),
+            Some("after-release"),
+        ),
+        &lease,
+    );
+    dispatch["session_id"] = json!("replacement-session");
+    dispatch["action"] = state["legal_actions"][0].clone();
+    let rejected = send_raw(server.address, &dispatch)?;
+    assert_ne!(rejected["status"], "accepted");
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_operations WHERE operation_id='after-release'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 0);
+    drop(connection);
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
 fn newline_runtime_queue_guard_and_recovery_are_schema_valid()
 -> Result<(), Box<dyn std::error::Error>> {
     let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
