@@ -2270,8 +2270,13 @@ impl DurableHost {
         let lease_epoch = field_i64(request, "lease_epoch")?;
         let request_generation = field_i64(request, "generation")?;
         let _correlation_id = field_string(request, "correlation_id")?;
+        let authority_current =
+            self.runtime_authority_current(&instance_id, &lease_id, lease_epoch)?;
         let mut state = self.runtime_session(&session_id)?;
         if state.is_none() {
+            if !authority_current {
+                return Err(FixtureError::Stale("lease"));
+            }
             state = Some(self.create_runtime_session(
                 &instance_id,
                 &session_id,
@@ -2282,6 +2287,30 @@ impl DurableHost {
             )?);
         }
         let mut state = state.ok_or(FixtureError::HostNotReady)?;
+        if !authority_current && kind == "dispatch_action_request" {
+            return runtime_rejected_response(
+                request,
+                &state,
+                &field_string(request, "operation_id")?,
+                "stale_lease",
+            );
+        }
+        if !authority_current
+            && (kind == "wait_request"
+                || (kind == "recover_request"
+                    && matches!(
+                        request["recovery"]["kind"].as_str(),
+                        Some("release_lease" | "stop_episode")
+                    )))
+        {
+            return Ok(runtime_error_response(
+                request,
+                &kind,
+                "stale_lease",
+                state.generation,
+                &state,
+            ));
+        }
         if state.instance_id != instance_id
             || state.lease_id != lease_id
             || state.lease_epoch != lease_epoch
@@ -2333,6 +2362,37 @@ impl DurableHost {
                 "unsupported runtime-v3 kind".to_owned(),
             )),
         }
+    }
+
+    fn runtime_authority_current(
+        &self,
+        instance_id: &str,
+        lease_id: &str,
+        lease_epoch: i64,
+    ) -> Result<bool, FixtureError> {
+        // Both transports hold the single DurableHost mutex across this check
+        // and admission/execution. Runtime session identifiers are correlation,
+        // not an independent source of mutation authority.
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM lease l JOIN fence f
+                 ON l.deployment_id=f.deployment_id AND l.instance_id=f.instance_id
+                 AND l.boot_id=f.boot_id AND l.instance_incarnation=f.instance_incarnation
+                 AND l.host_fence_id=f.host_fence_id
+                 WHERE l.singleton=1 AND f.singleton=1 AND l.instance_id=?1
+                 AND l.lease_id=?2 AND l.lease_epoch=?3 AND l.revoked=0
+                 AND l.expires_tick>?4 AND f.authority_generation BETWEEN 1 AND ?5
+                 AND f.fence_generation=f.authority_generation)",
+                params![
+                    instance_id,
+                    lease_id,
+                    lease_epoch,
+                    current_tick(&self.connection)?,
+                    MAX_RUNTIME_INTEGER
+                ],
+                |row| row.get(0),
+            )
+            .map_err(FixtureError::Sql)
     }
 
     fn v3_dispatch_value(
@@ -2845,6 +2905,22 @@ impl DurableHost {
     ) -> Result<Value, FixtureError> {
         if operation.status != "ADMITTED" {
             return self.runtime_operation_response(request, state, operation);
+        }
+        // Revalidate the operation's original durable authority at execution,
+        // not merely the caller's session at admission. A fence rotation never
+        // authorizes draining queued work from its predecessor.
+        if !self.runtime_authority_current(
+            &operation.instance_id,
+            &operation.lease_id,
+            operation.lease_epoch,
+        )? {
+            return Ok(runtime_error_response(
+                request,
+                "wait_request",
+                "stale_lease",
+                state.generation,
+                state,
+            ));
         }
         if operation.pre_state_id != state.state_id || operation.pre_generation != state.generation
         {
