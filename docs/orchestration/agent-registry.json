@@ -8,13 +8,14 @@
   "nested_status": "unmet: native spawning not exposed to descendants",
   "resumed_wave": {
     "previous_handles": "absent from native list_agents before replacement assignments",
-    "active_reserved_descendants": 4,
+    "active_reserved_descendants": 5,
     "classification": "requested and accepted; execution model metadata not yet reverified",
     "agents": [
       {"path":"/root/mcp_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"H6R"},
       {"path":"/root/job_admission","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"W9"},
       {"path":"/root/platform_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V13"},
-      {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G4R"}
+      {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G4R"},
+      {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P5R"}
     ]
   },
   "platform_nested_reservation": {

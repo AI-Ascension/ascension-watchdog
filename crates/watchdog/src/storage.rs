@@ -847,6 +847,8 @@ impl Store {
 
     /// Create a consistent SQLite backup without deleting or truncating an
     /// existing destination.
+    /// A failure after exclusive creation can leave a partial destination;
+    /// retain it for diagnosis and use a new path for a subsequent attempt.
     pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<()> {
         let destination = canonical_owner_path(destination.as_ref(), "backup")?;
         if destination.exists() {
@@ -866,15 +868,33 @@ impl Store {
                 "backup destination changed while preparing copy".to_string(),
             ));
         }
+        // Reserve an empty destination exclusively before SQLite writes private
+        // job/provider state. VACUUM INTO accepts an existing empty file. Keep
+        // the handle through flush; never truncate a competing operator file.
+        let mut options = OpenOptions::new();
+        options.create_new(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Inherit the protected destination directory ACL, but disallow
+            // delete/rename while SQLite opens and writes the reserved file.
+            options.share_mode(0x0000_0001 | 0x0000_0002);
+        }
+        let file = options.open(&destination)?;
         self.conn.execute(
             "VACUUM INTO ?",
             params![destination.to_string_lossy().as_ref()],
         )?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(destination)?;
         file.sync_all()?;
+        #[cfg(unix)]
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 
