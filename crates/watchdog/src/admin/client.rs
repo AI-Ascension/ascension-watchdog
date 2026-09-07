@@ -24,12 +24,21 @@ pub struct AdminClientConfig {
 
 impl std::fmt::Debug for AdminClientConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AdminClientConfig")
+        let mut builder = f.debug_struct("AdminClientConfig");
+        builder
             .field("endpoint", &"<protected-endpoint>")
             .field("token_path", &"<protected-reference>")
             .field("capability", &self.capability)
-            .field("timeout", &self.timeout)
-            .finish()
+            .field("timeout", &self.timeout);
+        #[cfg(windows)]
+        builder.field(
+            "expected_server_executable",
+            &self
+                .expected_server_executable
+                .as_ref()
+                .map(|_| "<configured>"),
+        );
+        builder.finish()
     }
 }
 
