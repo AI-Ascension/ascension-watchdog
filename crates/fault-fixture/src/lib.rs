@@ -1207,6 +1207,11 @@ fn migrate_columns(connection: &Connection) -> Result<(), FixtureError> {
             "instance_id",
             "TEXT NOT NULL DEFAULT '00000000-0000-4000-8000-000000000000'",
         ),
+        (
+            "operations",
+            "ticket_expires_tick",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("operations", "reconcile_strategy", "TEXT"),
         ("runtime_sessions", "last_operation_id", "TEXT"),
         ("runtime_sessions", "last_action_id", "TEXT"),
@@ -1409,6 +1414,7 @@ impl DurableHost {
                     expected_boundary_json TEXT NOT NULL,
                     original_context_json TEXT NOT NULL,
                     ticket_json TEXT,
+                    ticket_expires_tick INTEGER NOT NULL DEFAULT 0,
                     witness_json TEXT,
                     receipt_json TEXT,
                     reconcile_strategy TEXT,
@@ -2238,12 +2244,12 @@ impl DurableHost {
         if let Some(action) = faults.at(FaultPoint::BeforeAdmission) {
             return self.operation_response_with_action(frame, "UNKNOWN", &id, action);
         }
-        let ticket = self.issue_ticket(&id, &digest_value, lease)?;
+        let (ticket, ticket_expires_tick) = self.issue_ticket(&id, &digest_value, lease)?;
         let transaction = self.connection.transaction().map_err(FixtureError::Sql)?;
         transaction
             .execute(
-                "UPDATE operations SET state='MAY_HAVE_BEEN_DISPATCHED',ticket_json=?2,updated_at=?3 WHERE operation_id=?1",
-                params![id, ticket.to_string(), FIXTURE_TIMESTAMP],
+                "UPDATE operations SET state='MAY_HAVE_BEEN_DISPATCHED',ticket_json=?2,ticket_expires_tick=?3,updated_at=?4 WHERE operation_id=?1",
+                params![id, ticket.to_string(), ticket_expires_tick, FIXTURE_TIMESTAMP],
             )
             .map_err(FixtureError::Sql)?;
         transaction
@@ -2269,24 +2275,27 @@ impl DurableHost {
         operation_id: &str,
         digest_value: &str,
         lease: &Value,
-    ) -> Result<Value, FixtureError> {
+    ) -> Result<(Value, i64), FixtureError> {
         validate_lease_context(lease)?;
         let fence_id = self.current_fence_id()?;
-        let expires_at: String = self
+        let (expires_at, expires_tick): (String, i64) = self
             .connection
             .query_row(
-                "SELECT expires_at FROM lease WHERE singleton=1",
+                "SELECT expires_at,expires_tick FROM lease WHERE singleton=1",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(FixtureError::Sql)?;
         let ticket_id = Uuid::new_v4().to_string();
-        Ok(json!({
-            "ticket_id": ticket_id, "operation_id": operation_id, "payload_digest": digest_value,
-            "boot_id": lease["boot_id"], "instance_incarnation": lease["instance_incarnation"],
-            "lease_epoch": lease["lease_epoch"], "host_fence_id": fence_id,
-            "state": "ISSUED", "issued_at": FIXTURE_TIMESTAMP, "expires_at": expires_at
-        }))
+        Ok((
+            json!({
+                "ticket_id": ticket_id, "operation_id": operation_id, "payload_digest": digest_value,
+                "boot_id": lease["boot_id"], "instance_incarnation": lease["instance_incarnation"],
+                "lease_epoch": lease["lease_epoch"], "host_fence_id": fence_id,
+                "state": "ISSUED", "issued_at": FIXTURE_TIMESTAMP, "expires_at": expires_at
+            }),
+            expires_tick,
+        ))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2317,16 +2326,18 @@ impl DurableHost {
             return self.operation_response(frame, "NOT_FOUND", &id);
         };
         let ticket: Value = parse_value_no_duplicates(ticket_json.as_bytes())?;
-        let operation_row: Option<(String, String, String, Option<String>)> = self
+        let operation_row: Option<(String, String, String, Option<String>, i64)> = self
             .connection
             .query_row(
-                "SELECT payload_digest,state,original_context_json,witness_json FROM operations WHERE operation_id=?1",
+                "SELECT payload_digest,state,original_context_json,witness_json,ticket_expires_tick FROM operations WHERE operation_id=?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()
             .map_err(FixtureError::Sql)?;
-        let Some((payload_digest, state, context_json, witness_json)) = operation_row else {
+        let Some((payload_digest, state, context_json, witness_json, ticket_expires_tick)) =
+            operation_row
+        else {
             return self.operation_response(frame, "NOT_FOUND", &id);
         };
         if state == "SETTLED" || state == "RECONCILED" {
@@ -2348,17 +2359,19 @@ impl DurableHost {
         if state != "MAY_HAVE_BEEN_DISPATCHED" {
             return self.operation_response(frame, "REJECTED", &id);
         }
+        // The admission ticket carries an immutable deadline. Lease renewal
+        // extends only the current lease; it must never extend an already
+        // admitted operation's execution window.
+        if current_tick(&self.connection)? >= ticket_expires_tick {
+            self.quarantine_queued_operation(&id)?;
+            return self.operation_response(frame, "LEASE_EXPIRED", &id);
+        }
         validate_ticket(&ticket, &id, &payload_digest, &context_json)?;
         if let Err(error) = self.validate_ticket_authority(&ticket) {
-            self.connection
-                .execute("DELETE FROM queue WHERE operation_id=?1", params![id])
-                .map_err(FixtureError::Sql)?;
-            self.connection
-                .execute(
-                    "UPDATE operations SET state='REJECTED',uncertainty_reason=NULL,updated_at=?2 WHERE operation_id=?1",
-                    params![id, FIXTURE_TIMESTAMP],
-                )
-                .map_err(FixtureError::Sql)?;
+            // A queued ticket crossed an authority boundary. Preserve the
+            // attempt as UNKNOWN before removing its executable queue entry;
+            // it may never be represented as a clean rejection.
+            self.quarantine_queued_operation(&id)?;
             return self.operation_response(frame, error.status(), &id);
         }
         if let Some(action) = faults.at(FaultPoint::BeforeMutation) {
@@ -2592,6 +2605,7 @@ impl DurableHost {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn v3_handle_value(&mut self, request: &Value) -> Result<Value, FixtureError> {
         let kind = field_string(request, "kind")?;
         let instance_id = field_string(request, "instance_id")?;
@@ -2618,12 +2632,21 @@ impl DurableHost {
         }
         let mut state = state.ok_or(FixtureError::HostNotReady)?;
         if !authority_current && kind == "dispatch_action_request" {
-            return runtime_rejected_response(
-                request,
-                &state,
-                &field_string(request, "operation_id")?,
-                "stale_lease",
-            );
+            let operation_id = field_string(request, "operation_id")?;
+            let existing = self.runtime_operation(&operation_id)?;
+            if existing.as_ref().is_some_and(|operation| {
+                matches!(operation.status.as_str(), "ADMITTED" | "EXECUTING")
+            }) {
+                self.mark_runtime_operation_unknown(&operation_id)?;
+                return Ok(runtime_error_response(
+                    request,
+                    &kind,
+                    "stale_lease",
+                    state.generation,
+                    &state,
+                ));
+            }
+            return runtime_rejected_response(request, &state, &operation_id, "stale_lease");
         }
         // A replacement authority may finish recovery for a historical
         // session, but it must not rewrite that session's lease identity or
@@ -2647,6 +2670,11 @@ impl DurableHost {
                         Some("release_lease" | "stop_episode" | "reconcile")
                     )))
         {
+            if kind == "wait_request" {
+                self.mark_runtime_operation_unknown(&field_string(request, "operation_id")?)?;
+            } else if let Some(operation_id) = request["recovery"]["operation_id"].as_str() {
+                self.mark_runtime_operation_unknown(operation_id)?;
+            }
             return Ok(runtime_error_response(
                 request,
                 &kind,
@@ -3275,6 +3303,7 @@ impl DurableHost {
             &operation.lease_id,
             operation.lease_epoch,
         )? {
+            self.mark_runtime_operation_unknown(&operation.operation_id)?;
             return Ok(runtime_error_response(
                 request,
                 "wait_request",
@@ -3660,6 +3689,29 @@ impl DurableHost {
             )
             .map_err(FixtureError::Sql)?;
         Ok(())
+    }
+
+    fn quarantine_queued_operation(&mut self, operation_id: &str) -> Result<(), FixtureError> {
+        // Keep the journal transition ahead of queue removal. If the process
+        // fails between these statements, restart sees an UNKNOWN attempt and
+        // can safely remove the leftover queue row without executing it.
+        let transaction = self.connection.transaction().map_err(FixtureError::Sql)?;
+        let changed = transaction
+            .execute(
+                "UPDATE operations SET state='UNKNOWN',uncertainty_reason='authority_rotated',ticket_json=json_set(ticket_json,'$.state','UNKNOWN'),updated_at=?2 WHERE operation_id=?1 AND state='MAY_HAVE_BEEN_DISPATCHED'",
+                params![operation_id, FIXTURE_TIMESTAMP],
+            )
+            .map_err(FixtureError::Sql)?;
+        if changed != 1 {
+            return Err(FixtureError::Conflict);
+        }
+        transaction
+            .execute(
+                "DELETE FROM queue WHERE operation_id=?1",
+                params![operation_id],
+            )
+            .map_err(FixtureError::Sql)?;
+        transaction.commit().map_err(FixtureError::Sql)
     }
 
     #[allow(clippy::type_complexity)]
