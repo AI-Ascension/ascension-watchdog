@@ -33,6 +33,7 @@ const FRAME_MAGIC: &[u8; 8] = b"ASC-LNX1";
 const FRAME_VERSION: u8 = 1;
 const GO_MAGIC: &[u8; 8] = b"ASC-GO01";
 const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
+const PARENT_BOOTSTRAP_PID_ARGUMENT: &str = "--ascension-linux-parent-bootstrap-pid";
 const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
 const DELEGATED_CGROUP_ROOT_ARGUMENT: &str = "--ascension-linux-delegated-cgroup-root";
 const MAX_FRAME_BYTES: usize = 256 * 1024;
@@ -47,6 +48,7 @@ const MIN_INHERITED_FD: RawFd = 3;
 const O_DIRECTORY: i32 = 0o200_000;
 const O_NONBLOCK: i32 = 0o4_000;
 const O_NOFOLLOW: i32 = 0o400_000;
+const O_CLOEXEC: i32 = 0o2_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProtectedFileIdentity {
@@ -111,19 +113,31 @@ impl LinuxHelperBootstrap {
         })
     }
 
-    fn from_inherited_fds(config_fd: RawFd, root_fd: RawFd) -> Result<Self, AdapterError> {
+    fn from_parent_fds(
+        parent_pid: u32,
+        config_fd: RawFd,
+        root_fd: RawFd,
+    ) -> Result<Self, AdapterError> {
+        let actual_parent_pid =
+            rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_pid()).ok());
+        if actual_parent_pid != Some(parent_pid) {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux helper bootstrap parent process is unexpected".to_owned(),
+            ));
+        }
         if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD || config_fd == root_fd {
             return Err(AdapterError::Invalid(
                 "Linux helper bootstrap descriptors are invalid".to_owned(),
             ));
         }
-        // These descriptors were explicitly opened by the trusted parent and
-        // made inheritable for this one exec.  Opening through `/proc/self/fd`
-        // duplicates the already-open file description; it never resolves a
-        // caller-controlled filesystem path and keeps this crate's no-unsafe
-        // boundary intact.
-        let config = open_inherited_descriptor(config_fd, false)?;
-        let root = open_inherited_descriptor(root_fd, true)?;
+        // The trusted parent keeps these descriptors open while the helper
+        // starts, but does not make them inheritable.  Opening through the
+        // parent's proc-fd view duplicates the exact already-open file
+        // descriptions into CLOEXEC handles owned only by this helper.  This
+        // avoids a process-wide inheritable-fd window and leaves no raw
+        // bootstrap descriptor for the eventual target exec to inherit.
+        let config = open_parent_descriptor(parent_pid, config_fd, false)?;
+        let root = open_parent_descriptor(parent_pid, root_fd, true)?;
         let config_identity = validate_protected_config_handle(&config)?;
         let root_metadata = root.metadata().map_err(|error| {
             AdapterError::Unavailable(format!(
@@ -136,16 +150,19 @@ impl LinuxHelperBootstrap {
                 "Linux delegated cgroup root descriptor is unsafe".to_owned(),
             ));
         }
-        let config_path = canonical_fd_path(config_fd)?;
-        let root_path = canonical_fd_path(root_fd)?;
+        let config_path = canonical_parent_fd_path(parent_pid, config_fd)?;
+        let root_path = canonical_parent_fd_path(parent_pid, root_fd)?;
         for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
-            let metadata =
-                fs::symlink_metadata(proc_fd_child(root_fd, std::ffi::OsStr::new(control)))
-                    .map_err(|error| {
-                        AdapterError::Unavailable(format!(
-                            "Linux delegated cgroup root lacks {control}: {error}"
-                        ))
-                    })?;
+            let metadata = fs::symlink_metadata(parent_fd_child(
+                parent_pid,
+                root_fd,
+                std::ffi::OsStr::new(control),
+            ))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux delegated cgroup root lacks {control}: {error}"
+                ))
+            })?;
             if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return Err(AdapterError::Invalid(format!(
                     "Linux delegated cgroup root has invalid {control}"
@@ -169,9 +186,9 @@ impl LinuxHelperBootstrap {
     }
 
     /// Attach the exact delegated cgroup root used by the parent adapter.
-    /// The directory is opened before the helper is spawned and inherited as
-    /// a descriptor, so a helper cannot substitute a sibling root by changing
-    /// a caller-controlled path or by winning a rename race.
+    /// The directory is opened before the helper is spawned and retained by
+    /// the parent, so a helper cannot substitute a sibling root by changing a
+    /// caller-controlled path or by winning a rename race.
     pub fn with_delegated_cgroup_root(
         mut self,
         path: impl Into<PathBuf>,
@@ -200,7 +217,7 @@ impl LinuxHelperBootstrap {
         })
     }
 
-    fn inherited_descriptors(&self) -> Result<InheritedBootstrap, AdapterError> {
+    fn parent_descriptors(&self) -> Result<ParentBootstrap, AdapterError> {
         let Some(root) = self.delegated_cgroup_root.as_ref() else {
             return Err(AdapterError::Invalid(
                 "Linux helper requires an exact delegated cgroup root bootstrap".to_owned(),
@@ -216,8 +233,6 @@ impl LinuxHelperBootstrap {
                 "Linux delegated cgroup root descriptor cannot be cloned: {error}"
             ))
         })?;
-        make_inheritable(&config)?;
-        make_inheritable(&root)?;
         let config_fd = config.as_raw_fd();
         let root_fd = root.as_raw_fd();
         if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD {
@@ -225,27 +240,31 @@ impl LinuxHelperBootstrap {
                 "Linux helper bootstrap descriptor is reserved for stdio".to_owned(),
             ));
         }
-        Ok(InheritedBootstrap {
-            _config: config,
+        Ok(ParentBootstrap {
+            config,
             config_fd,
-            _root: root,
+            root,
             root_fd,
         })
     }
 }
 
-struct InheritedBootstrap {
-    _config: File,
+/// CLOEXEC parent-owned descriptors kept alive until the helper has opened
+/// their proc-fd views.  They are never made inheritable by the parent.
+struct ParentBootstrap {
+    config: File,
     config_fd: RawFd,
-    _root: File,
+    root: File,
     root_fd: RawFd,
 }
 
-impl std::fmt::Debug for InheritedBootstrap {
+impl std::fmt::Debug for ParentBootstrap {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("InheritedBootstrap")
+            .debug_struct("ParentBootstrap")
+            .field("config", &self.config)
             .field("config_fd", &self.config_fd)
+            .field("root", &self.root)
             .field("root_fd", &self.root_fd)
             .finish_non_exhaustive()
     }
@@ -432,42 +451,50 @@ fn proc_fd_child(fd: RawFd, component: &std::ffi::OsStr) -> PathBuf {
 }
 
 fn canonical_fd_path(fd: RawFd) -> Result<PathBuf, AdapterError> {
-    fs::canonicalize(format!("/proc/self/fd/{fd}")).map_err(|error| {
+    canonical_descriptor_path(format!("/proc/self/fd/{fd}"))
+}
+
+fn canonical_parent_fd_path(parent_pid: u32, fd: RawFd) -> Result<PathBuf, AdapterError> {
+    canonical_descriptor_path(parent_fd_path(parent_pid, fd))
+}
+
+fn canonical_descriptor_path(path: impl AsRef<Path>) -> Result<PathBuf, AdapterError> {
+    fs::canonicalize(path).map_err(|error| {
         AdapterError::Unavailable(format!(
             "Linux bootstrap descriptor target is unavailable: {error}"
         ))
     })
 }
 
-fn open_inherited_descriptor(fd: RawFd, directory: bool) -> Result<File, AdapterError> {
+fn parent_fd_path(parent_pid: u32, fd: RawFd) -> PathBuf {
+    PathBuf::from(format!("/proc/{parent_pid}/fd/{fd}"))
+}
+
+fn parent_fd_child(parent_pid: u32, fd: RawFd, component: &std::ffi::OsStr) -> PathBuf {
+    let mut path = parent_fd_path(parent_pid, fd);
+    path.push(component);
+    path
+}
+
+fn open_parent_descriptor(
+    parent_pid: u32,
+    fd: RawFd,
+    directory: bool,
+) -> Result<File, AdapterError> {
     let mut options = OpenOptions::new();
     options.read(true);
     if directory {
-        options.custom_flags(O_DIRECTORY | O_NONBLOCK);
+        options.custom_flags(O_DIRECTORY | O_NONBLOCK | O_CLOEXEC);
     } else {
-        options.custom_flags(O_NONBLOCK);
+        options.custom_flags(O_NONBLOCK | O_CLOEXEC);
     }
     options
-        .open(format!("/proc/self/fd/{fd}"))
+        .open(parent_fd_path(parent_pid, fd))
         .map_err(|error| {
             AdapterError::Unavailable(format!(
-                "Linux inherited bootstrap descriptor cannot be opened: {error}"
+                "Linux parent bootstrap descriptor cannot be opened: {error}"
             ))
         })
-}
-
-fn make_inheritable(file: &File) -> Result<(), AdapterError> {
-    let mut flags = rustix::io::fcntl_getfd(file).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux bootstrap descriptor flags are unavailable: {error}"
-        ))
-    })?;
-    flags.remove(rustix::io::FdFlags::CLOEXEC);
-    rustix::io::fcntl_setfd(file, flags).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux bootstrap descriptor cannot be inherited: {error}"
-        ))
-    })
 }
 
 /// Hidden command-line argument recognized by the watchdog's real executable
@@ -477,7 +504,7 @@ pub const fn helper_argument() -> &'static str {
     HELPER_ARGUMENT
 }
 
-/// Hidden argument carrying the inherited separately validated config fd.
+/// Hidden argument carrying the parent-owned separately validated config fd.
 #[must_use]
 pub const fn protected_config_argument() -> &'static str {
     PROTECTED_CONFIG_ARGUMENT
@@ -600,6 +627,7 @@ impl LinuxHelperAuthorization {
 pub(crate) struct PendingLaunch {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
+    parent_bootstrap: Option<ParentBootstrap>,
     launch_nonce: String,
     timeout: Duration,
     released: bool,
@@ -671,6 +699,11 @@ impl PendingLaunch {
             ));
         }
         self.stdin.take();
+        // The helper parsed and opened both parent descriptors before it could
+        // read the frame or accept GO, so the parent-side keepalive can close
+        // before returning the target handle.  The target never inherited
+        // these CLOEXEC parent descriptors in the first place.
+        self.parent_bootstrap.take();
         self.child.take().ok_or_else(|| {
             AdapterError::Unavailable("Linux helper child handle was lost".to_owned())
         })
@@ -783,8 +816,8 @@ impl TrustedLinuxLauncher {
 
     /// Bind a protected configuration path to every helper invocation.
     ///
-    /// The path is opened and validated immediately; the resulting file
-    /// descriptor is passed as a separate fixed argument, never accepted from
+    /// The path is opened and validated immediately; a parent-owned descriptor
+    /// is kept alive and referenced by a fixed argument, never accepted from
     /// the launch frame.  The companion cgroup-root binding must be added for
     /// production helper launches.
     pub fn with_protected_config_path(
@@ -796,7 +829,8 @@ impl TrustedLinuxLauncher {
     }
 
     /// Bind the exact delegated cgroup root to the already protected config
-    /// bootstrap.  Both descriptors are inherited by the hidden helper.
+    /// bootstrap.  Both descriptors are opened by the helper through the
+    /// trusted parent's proc-fd view and remain CLOEXEC in the target.
     pub fn with_delegated_cgroup_root(
         mut self,
         path: impl Into<PathBuf>,
@@ -860,14 +894,16 @@ impl TrustedLinuxLauncher {
         let mut command = Command::new(&helper_fd_path);
         command.arg0(&self.helper_executable);
         command.arg(&self.helper_argument);
-        let inherited_bootstrap = if let Some(bootstrap) = &self.bootstrap {
-            let inherited = bootstrap.inherited_descriptors()?;
+        let parent_bootstrap = if let Some(bootstrap) = &self.bootstrap {
+            let parent = bootstrap.parent_descriptors()?;
             command
+                .arg(PARENT_BOOTSTRAP_PID_ARGUMENT)
+                .arg(std::process::id().to_string())
                 .arg(PROTECTED_CONFIG_ARGUMENT)
-                .arg(inherited.config_fd.to_string())
+                .arg(parent.config_fd.to_string())
                 .arg(DELEGATED_CGROUP_ROOT_ARGUMENT)
-                .arg(inherited.root_fd.to_string());
-            Some(inherited)
+                .arg(parent.root_fd.to_string());
+            Some(parent)
         } else {
             None
         };
@@ -880,7 +916,6 @@ impl TrustedLinuxLauncher {
             .spawn()
             .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
         drop(helper_file);
-        drop(inherited_bootstrap);
         let Some(mut stdin) = child.stdin.take() else {
             terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
             return Err(AdapterError::Io(
@@ -896,6 +931,7 @@ impl TrustedLinuxLauncher {
         Ok(PendingLaunch {
             child: Some(child),
             stdin: Some(stdin),
+            parent_bootstrap,
             launch_nonce: specification.launch_nonce.clone(),
             timeout: self.timeout,
             released: false,
@@ -924,6 +960,29 @@ fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError
             "Linux helper entrypoint was not requested".to_owned(),
         ));
     }
+    let parent_argument = arguments.next().ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper parent bootstrap process identifier is missing".to_owned(),
+        )
+    })?;
+    if parent_argument != PARENT_BOOTSTRAP_PID_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid parent bootstrap argument".to_owned(),
+        ));
+    }
+    let parent_pid = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid(
+                "Linux helper parent bootstrap process identifier is missing".to_owned(),
+            )
+        })?
+        .parse::<u32>()
+        .map_err(|_| {
+            AdapterError::Invalid(
+                "Linux helper parent bootstrap process identifier is invalid".to_owned(),
+            )
+        })?;
     let Some(config_argument) = arguments.next() else {
         return Ok(None);
     };
@@ -967,7 +1026,7 @@ fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError
             "Linux helper invocation has unexpected arguments".to_owned(),
         ));
     }
-    LinuxHelperBootstrap::from_inherited_fds(config_fd, root_fd).map(Some)
+    LinuxHelperBootstrap::from_parent_fds(parent_pid, config_fd, root_fd).map(Some)
 }
 
 /// Run the hidden helper after root code has authorized its frame.
@@ -1938,6 +1997,70 @@ mod tests {
             LinuxHelperBootstrap::new(&path),
             Err(AdapterError::Invalid(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn parent_bootstrap_handles_remain_cloexec_and_invisible_to_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let config_path = directory.path().join("watchdog.json");
+        fs::write(&config_path, b"trusted-config")?;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
+        let root_path = directory.path().join("cgroup");
+        fs::create_dir(&root_path)?;
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            fs::write(root_path.join(control), b"")?;
+        }
+
+        let bootstrap =
+            LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
+        let parent = bootstrap.parent_descriptors()?;
+        assert!(rustix::io::fcntl_getfd(&parent.config)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&parent.root)?.contains(rustix::io::FdFlags::CLOEXEC));
+
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "test ! -e /proc/self/fd/$1 && test ! -e /proc/self/fd/$2",
+                "fd-check",
+                &parent.config_fd.to_string(),
+                &parent.root_fd.to_string(),
+            ])
+            .status()?;
+        assert!(status.success(), "target observed a parent bootstrap fd");
+        Ok(())
+    }
+
+    #[test]
+    fn parent_bootstrap_drop_closes_keepalive_descriptors() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let config_path = directory.path().join("watchdog.json");
+        fs::write(&config_path, b"trusted-config")?;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
+        let root_path = directory.path().join("cgroup");
+        fs::create_dir(&root_path)?;
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            fs::write(root_path.join(control), b"")?;
+        }
+
+        let bootstrap =
+            LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
+        let (config_fd, root_fd) = {
+            let parent = bootstrap.parent_descriptors()?;
+            assert!(Path::new(&format!("/proc/self/fd/{}", parent.config_fd)).exists());
+            assert!(Path::new(&format!("/proc/self/fd/{}", parent.root_fd)).exists());
+            (parent.config_fd, parent.root_fd)
+        };
+        assert!(!Path::new(&format!("/proc/self/fd/{config_fd}")).exists());
+        assert!(!Path::new(&format!("/proc/self/fd/{root_fd}")).exists());
         Ok(())
     }
 
