@@ -730,6 +730,23 @@ fn operator_table_supports_job_submit(conn: &Connection) -> Result<bool> {
 }
 
 fn migrate_operator_table_v1_to_v2(tx: &Transaction<'_>) -> Result<()> {
+    let high_water: Option<i64> = tx
+        .query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name='operator_commands'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let retained_max: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(sequence), 0) FROM operator_commands",
+        [],
+        |row| row.get(0),
+    )?;
+    if high_water.unwrap_or(0) < retained_max || high_water.is_some_and(|value| value < 0) {
+        return Err(WatchdogError::Conflict(
+            "operator sequence high-water mark is inconsistent with retained receipts".to_owned(),
+        ));
+    }
     tx.execute_batch(OPERATOR_TABLE_V2_REBUILD_SQL)?;
     tx.execute(
         "INSERT INTO operator_commands_v2 (sequence, request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms) SELECT sequence, request_id, idempotency_key, principal, capability, command, command_fingerprint, desired_mode, response_json, recorded_at_ms FROM operator_commands ORDER BY sequence",
@@ -742,6 +759,18 @@ fn migrate_operator_table_v1_to_v2(tx: &Transaction<'_>) -> Result<()> {
          ALTER TABLE operator_commands_v2 RENAME TO operator_commands;",
     )?;
     tx.execute_batch(OPERATOR_INDEX_SQL)?;
+    if let Some(high_water) = high_water {
+        let updated = tx.execute(
+            "UPDATE sqlite_sequence SET seq=MAX(seq, ?) WHERE name='operator_commands'",
+            params![high_water],
+        )?;
+        if updated == 0 {
+            tx.execute(
+                "INSERT INTO sqlite_sequence(name, seq) VALUES ('operator_commands', ?)",
+                params![high_water],
+            )?;
+        }
+    }
     Ok(())
 }
 

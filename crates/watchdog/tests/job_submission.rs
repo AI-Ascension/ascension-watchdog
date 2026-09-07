@@ -303,6 +303,7 @@ fn old_v1_operator_ledger_migrates_transactionally_and_preserves_receipts() {
          CREATE INDEX operator_commands_order_idx ON operator_commands(sequence);
          CREATE INDEX operator_commands_principal_idx ON operator_commands(principal, sequence);
          UPDATE metadata SET value='1' WHERE key='operator_ledger_schema_version';
+         UPDATE sqlite_sequence SET seq=100 WHERE name='operator_commands';
          COMMIT;",
     )
     .expect("v1 fixture");
@@ -331,6 +332,24 @@ fn old_v1_operator_ledger_migrates_transactionally_and_preserves_receipts() {
         reopened.desired_mode().expect("stop remains durable"),
         DesiredMode::Stopped
     );
+    // AUTOINCREMENT's durable high-water mark can exceed the retained row
+    // maximum (for example after INSERT OR IGNORE). Rebuilding the table must
+    // not reuse any previously allocated sequence namespace.
+    let payload = json!({"value": 1});
+    let next = job_context(
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "after-migration",
+        "episode",
+        &payload,
+        Capability::Admin,
+    );
+    let outcome = reopened
+        .admit_operator_job_submission(&owner, &next, "episode", &payload, 13)
+        .expect("post-migration submission");
+    let OperatorCommandOutcome::Accepted(receipt) = outcome else {
+        panic!("new submission was not accepted");
+    };
+    assert_eq!(receipt.sequence, 101);
 }
 
 #[test]
