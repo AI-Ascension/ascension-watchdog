@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 const FRAME_MAGIC: &[u8; 8] = b"ASC-LNX1";
 const FRAME_VERSION: u8 = 1;
 const GO_MAGIC: &[u8; 8] = b"ASC-GO01";
+const READY_MAGIC: &[u8; 8] = b"ASC-RDY1";
 const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
 const PARENT_BOOTSTRAP_PID_ARGUMENT: &str = "--ascension-linux-parent-bootstrap-pid";
 const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
@@ -117,7 +118,8 @@ impl LinuxHelperBootstrap {
         parent_pid: u32,
         config_fd: RawFd,
         root_fd: RawFd,
-    ) -> Result<Self, AdapterError> {
+        ready_fd: RawFd,
+    ) -> Result<(Self, HelperReadyChannel), AdapterError> {
         let actual_parent_pid =
             rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_pid()).ok());
         if actual_parent_pid != Some(parent_pid) {
@@ -125,7 +127,13 @@ impl LinuxHelperBootstrap {
                 "Linux helper bootstrap parent process is unexpected".to_owned(),
             ));
         }
-        if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD || config_fd == root_fd {
+        if config_fd < MIN_INHERITED_FD
+            || root_fd < MIN_INHERITED_FD
+            || ready_fd < MIN_INHERITED_FD
+            || config_fd == root_fd
+            || config_fd == ready_fd
+            || root_fd == ready_fd
+        {
             return Err(AdapterError::Invalid(
                 "Linux helper bootstrap descriptors are invalid".to_owned(),
             ));
@@ -136,6 +144,17 @@ impl LinuxHelperBootstrap {
         // descriptions into CLOEXEC handles owned only by this helper.  This
         // avoids a process-wide inheritable-fd window and leaves no raw
         // bootstrap descriptor for the eventual target exec to inherit.
+        let ready = open_parent_ready_descriptor(parent_pid, ready_fd)?;
+        let ready_metadata = ready.metadata().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux helper readiness descriptor metadata failed: {error}"
+            ))
+        })?;
+        if !ready_metadata.is_file() || ready_metadata.len() != 0 {
+            return Err(AdapterError::Invalid(
+                "Linux helper readiness descriptor is not a fresh regular file".to_owned(),
+            ));
+        }
         let config = open_parent_descriptor(parent_pid, config_fd, false)?;
         let root = open_parent_descriptor(parent_pid, root_fd, true)?;
         let config_identity = validate_protected_config_handle(&config)?;
@@ -169,14 +188,17 @@ impl LinuxHelperBootstrap {
                 )));
             }
         }
-        Ok(Self {
-            protected_config_path: config_path,
-            protected_config: Arc::new(config),
-            protected_config_identity: config_identity,
-            delegated_cgroup_root_path: Some(root_path),
-            delegated_cgroup_root: Some(Arc::new(root)),
-            delegated_cgroup_root_identity: Some(root_identity),
-        })
+        Ok((
+            Self {
+                protected_config_path: config_path,
+                protected_config: Arc::new(config),
+                protected_config_identity: config_identity,
+                delegated_cgroup_root_path: Some(root_path),
+                delegated_cgroup_root: Some(Arc::new(root)),
+                delegated_cgroup_root_identity: Some(root_identity),
+            },
+            HelperReadyChannel { file: ready },
+        ))
     }
 
     /// Return the canonical path that was validated for helper bootstrap.
@@ -235,7 +257,21 @@ impl LinuxHelperBootstrap {
         })?;
         let config_fd = config.as_raw_fd();
         let root_fd = root.as_raw_fd();
-        if config_fd < MIN_INHERITED_FD || root_fd < MIN_INHERITED_FD {
+        let ready = File::from(
+            memfd_create("ascension-linux-helper-ready", MemfdFlags::CLOEXEC).map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux helper readiness descriptor cannot be created: {error}"
+                ))
+            })?,
+        );
+        let ready_fd = ready.as_raw_fd();
+        if config_fd < MIN_INHERITED_FD
+            || root_fd < MIN_INHERITED_FD
+            || ready_fd < MIN_INHERITED_FD
+            || config_fd == root_fd
+            || config_fd == ready_fd
+            || root_fd == ready_fd
+        {
             return Err(AdapterError::Unavailable(
                 "Linux helper bootstrap descriptor is reserved for stdio".to_owned(),
             ));
@@ -245,6 +281,8 @@ impl LinuxHelperBootstrap {
             config_fd,
             root,
             root_fd,
+            ready,
+            ready_fd,
         })
     }
 }
@@ -256,6 +294,8 @@ struct ParentBootstrap {
     config_fd: RawFd,
     root: File,
     root_fd: RawFd,
+    ready: File,
+    ready_fd: RawFd,
 }
 
 impl std::fmt::Debug for ParentBootstrap {
@@ -266,7 +306,95 @@ impl std::fmt::Debug for ParentBootstrap {
             .field("config_fd", &self.config_fd)
             .field("root", &self.root)
             .field("root_fd", &self.root_fd)
+            .field("ready", &self.ready)
+            .field("ready_fd", &self.ready_fd)
             .finish_non_exhaustive()
+    }
+}
+
+impl ParentBootstrap {
+    fn wait_for_ready(
+        &mut self,
+        launch_nonce: &str,
+        timeout: Duration,
+    ) -> Result<(), AdapterError> {
+        let expected_length = READY_MAGIC
+            .len()
+            .checked_add(2)
+            .and_then(|length| length.checked_add(launch_nonce.len()))
+            .ok_or_else(|| {
+                AdapterError::Invalid("Linux helper readiness frame length overflow".to_owned())
+            })?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        loop {
+            let metadata = self.ready.metadata().map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux helper readiness descriptor cannot be inspected: {error}"
+                ))
+            })?;
+            if metadata.len() >= u64::try_from(expected_length).unwrap_or(u64::MAX) {
+                self.ready.seek(SeekFrom::Start(0)).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness descriptor cannot be rewound: {error}"
+                    ))
+                })?;
+                let mut frame = vec![0_u8; expected_length];
+                self.ready.read_exact(&mut frame).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness acknowledgement cannot be read: {error}"
+                    ))
+                })?;
+                let mut cursor = Cursor::new(frame);
+                let mut magic = [0_u8; READY_MAGIC.len()];
+                cursor.read_exact(&mut magic).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness acknowledgement is truncated: {error}"
+                    ))
+                })?;
+                if magic != *READY_MAGIC {
+                    return Err(AdapterError::IdentityMismatch(
+                        "Linux helper readiness acknowledgement has the wrong magic".to_owned(),
+                    ));
+                }
+                let acknowledged_nonce = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+                if acknowledged_nonce != launch_nonce {
+                    return Err(AdapterError::IdentityMismatch(
+                        "Linux helper readiness acknowledgement nonce differs".to_owned(),
+                    ));
+                }
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(AdapterError::Timeout(
+                    "Linux helper did not acknowledge protected bootstrap readiness".to_owned(),
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+        }
+    }
+}
+
+struct HelperReadyChannel {
+    file: File,
+}
+
+impl HelperReadyChannel {
+    fn send(&mut self, launch_nonce: &str) -> Result<(), AdapterError> {
+        let mut frame = Vec::with_capacity(READY_MAGIC.len() + 2 + launch_nonce.len());
+        frame.extend_from_slice(READY_MAGIC);
+        put_string_io(&mut frame, launch_nonce).map_err(|error| {
+            AdapterError::Io(format!(
+                "Linux helper readiness acknowledgement failed: {error}"
+            ))
+        })?;
+        self.file.write_all(&frame).map_err(|error| {
+            AdapterError::Io(format!(
+                "Linux helper readiness acknowledgement failed: {error}"
+            ))
+        })
     }
 }
 
@@ -668,6 +796,9 @@ impl PendingLaunch {
                 "Linux helper release was already sent".to_owned(),
             ));
         }
+        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
+            bootstrap.wait_for_ready(&self.launch_nonce, self.timeout)?;
+        }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(AdapterError::Invalid(
                 "Linux helper stdin is unavailable".to_owned(),
@@ -902,7 +1033,8 @@ impl TrustedLinuxLauncher {
                 .arg(PROTECTED_CONFIG_ARGUMENT)
                 .arg(parent.config_fd.to_string())
                 .arg(DELEGATED_CGROUP_ROOT_ARGUMENT)
-                .arg(parent.root_fd.to_string());
+                .arg(parent.root_fd.to_string())
+                .arg(parent.ready_fd.to_string());
             Some(parent)
         } else {
             None
@@ -949,7 +1081,8 @@ pub fn helper_invocation_requested() -> bool {
         .is_some_and(|value| value == HELPER_ARGUMENT)
 }
 
-fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError> {
+fn parse_helper_bootstrap()
+-> Result<Option<(LinuxHelperBootstrap, HelperReadyChannel)>, AdapterError> {
     let mut arguments = env::args();
     let _ = arguments.next();
     let Some(argument) = arguments.next() else {
@@ -1021,12 +1154,21 @@ fn parse_helper_bootstrap() -> Result<Option<LinuxHelperBootstrap>, AdapterError
                 "Linux helper delegated cgroup root descriptor is invalid".to_owned(),
             )
         })?;
+    let ready_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid("Linux helper readiness descriptor is missing".to_owned())
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid("Linux helper readiness descriptor is invalid".to_owned())
+        })?;
     if arguments.next().is_some() {
         return Err(AdapterError::Invalid(
             "Linux helper invocation has unexpected arguments".to_owned(),
         ));
     }
-    LinuxHelperBootstrap::from_parent_fds(parent_pid, config_fd, root_fd).map(Some)
+    LinuxHelperBootstrap::from_parent_fds(parent_pid, config_fd, root_fd, ready_fd).map(Some)
 }
 
 /// Run the hidden helper after root code has authorized its frame.
@@ -1053,7 +1195,7 @@ where
             "Linux helper protected bootstrap requires the bootstrap authorizer API".to_owned(),
         ));
     }
-    run_hidden_helper_core(authorizer)
+    run_hidden_helper_core(None, authorizer)
 }
 
 /// Run the hidden helper with the separately supplied protected-config
@@ -1072,21 +1214,27 @@ where
             "Linux helper entrypoint was not requested".to_owned(),
         ));
     }
-    let bootstrap = parse_helper_bootstrap()?.ok_or_else(|| {
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
         AdapterError::Invalid(
             "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
         )
     })?;
-    run_hidden_helper_core(|request| authorizer(request, &bootstrap))
+    run_hidden_helper_core(Some(ready), |request| authorizer(request, &bootstrap))
 }
 
-fn run_hidden_helper_core<F>(authorizer: F) -> Result<i32, AdapterError>
+fn run_hidden_helper_core<F>(
+    mut ready: Option<HelperReadyChannel>,
+    authorizer: F,
+) -> Result<i32, AdapterError>
 where
     F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
 {
     let (frame_rx, go_rx) = spawn_protocol_reader();
     let started = Instant::now();
     let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    if let Some(channel) = ready.as_mut() {
+        channel.send(&request.specification.launch_nonce)?;
+    }
     let authorization = authorize_after_release(&request, &go_rx, started, authorizer)?;
     verify_current_cgroup(&authorization.cgroup_path)?;
     spawn_authorized_target(&authorization).map(|()| 0)
@@ -1384,6 +1532,19 @@ fn decode_frame(payload: &[u8]) -> Result<LinuxHelperRequest, AdapterError> {
         specification,
         cgroup_path,
     })
+}
+
+fn open_parent_ready_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent readiness descriptor cannot be opened: {error}"
+            ))
+        })
 }
 
 fn authorize_request(
@@ -2021,14 +2182,16 @@ mod tests {
         let parent = bootstrap.parent_descriptors()?;
         assert!(rustix::io::fcntl_getfd(&parent.config)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(rustix::io::fcntl_getfd(&parent.root)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&parent.ready)?.contains(rustix::io::FdFlags::CLOEXEC));
 
         let status = Command::new("/bin/sh")
             .args([
                 "-c",
-                "test ! -e /proc/self/fd/$1 && test ! -e /proc/self/fd/$2",
+                "test ! -e /proc/self/fd/$1 && test ! -e /proc/self/fd/$2 && test ! -e /proc/self/fd/$3",
                 "fd-check",
                 &parent.config_fd.to_string(),
                 &parent.root_fd.to_string(),
+                &parent.ready_fd.to_string(),
             ])
             .status()?;
         assert!(status.success(), "target observed a parent bootstrap fd");
@@ -2053,14 +2216,44 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let (config_fd, root_fd) = {
+        let (config_fd, root_fd, ready_fd) = {
             let parent = bootstrap.parent_descriptors()?;
             assert!(Path::new(&format!("/proc/self/fd/{}", parent.config_fd)).exists());
             assert!(Path::new(&format!("/proc/self/fd/{}", parent.root_fd)).exists());
-            (parent.config_fd, parent.root_fd)
+            assert!(Path::new(&format!("/proc/self/fd/{}", parent.ready_fd)).exists());
+            (parent.config_fd, parent.root_fd, parent.ready_fd)
         };
         assert!(!Path::new(&format!("/proc/self/fd/{config_fd}")).exists());
         assert!(!Path::new(&format!("/proc/self/fd/{root_fd}")).exists());
+        assert!(!Path::new(&format!("/proc/self/fd/{ready_fd}")).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_helper_ready_ack_keeps_parent_descriptor_alive()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ready = File::from(memfd_create("ascension-ready-test", MemfdFlags::CLOEXEC)?);
+        let ready_fd = ready.as_raw_fd();
+        let mut parent = ParentBootstrap {
+            config: File::open("/dev/null")?,
+            config_fd: 0,
+            root: File::open("/dev/null")?,
+            root_fd: 1,
+            ready,
+            ready_fd,
+        };
+        let mut delayed_helper = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
+                "delayed-helper",
+                &ready_fd.to_string(),
+            ])
+            .spawn()?;
+        let started = Instant::now();
+        parent.wait_for_ready("x", Duration::from_secs(1))?;
+        assert!(started.elapsed() >= Duration::from_millis(30));
+        assert!(delayed_helper.wait()?.success());
         Ok(())
     }
 
