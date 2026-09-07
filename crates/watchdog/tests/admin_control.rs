@@ -9,8 +9,8 @@
 use ascension_watchdog::admin::{
     AcceptedView, AdminClient, AdminClientConfig, AdminCommand, AdminDispatchError,
     AdminDispatcher, AdminQueue, AdminRequest, AdminResult, AdminServer, AdminServerConfig,
-    AuthReferences, Authz, Capability, CommandName, EmptyParams, HealthSnapshot, MAX_FRAME_BYTES,
-    MainLoopHealth, MainLoopPhase, ReplyStatus,
+    AuthReferences, Authz, Capability, CommandName, DispatchContext, EmptyParams, HealthSnapshot,
+    MAX_FRAME_BYTES, MainLoopHealth, MainLoopPhase, ReplyStatus,
 };
 use std::io::{Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -86,6 +86,7 @@ impl RecordingDispatcher {
 impl AdminDispatcher for RecordingDispatcher {
     fn dispatch(
         &mut self,
+        _context: &DispatchContext,
         command: &AdminCommand,
     ) -> std::result::Result<AdminResult, AdminDispatchError> {
         self.commands
@@ -187,7 +188,7 @@ fn read_and_unknown_credentials_cannot_administer() {
         1_000,
     )
     .expect("admin read request");
-    assert_eq!(auth.authorize(&admin_read), Authz::Allowed);
+    assert!(matches!(auth.authorize(&admin_read), Authz::Allowed(_)));
 
     let read_client = fixture.client(Capability::Read, &fixture.read_token);
     let forbidden = read_client
@@ -282,6 +283,69 @@ fn health_and_drain_bounds_fail_closed() {
     let mut loop_dispatcher = dispatcher.clone();
     assert_eq!(queue.drain(&mut loop_dispatcher, &health, now_ms(), 0), 0);
     assert_eq!(dispatcher.count(), 0);
+}
+
+#[test]
+fn dispatch_context_is_authenticated_token_free_and_health_age_is_monotonic() {
+    let fixture = Fixture::new();
+    let request = AdminRequest::new(
+        Capability::Admin,
+        "admin-test-token".to_string(),
+        "context-key".to_string(),
+        AdminCommand::Stop(EmptyParams::default()),
+        1_000,
+    )
+    .expect("request");
+    let auth = AuthReferences::new(&fixture.read_token, &fixture.admin_token)
+        .expect("auth refs")
+        .load()
+        .expect("credentials");
+    let Authz::Allowed(principal) = auth.authorize(&request) else {
+        panic!("admin credential should authenticate");
+    };
+    let context = request.dispatch_context(principal).expect("context");
+    assert_eq!(context.request_id().to_string(), request.request_id);
+    assert_eq!(context.idempotency_key(), "context-key");
+    assert_eq!(context.capability(), Capability::Admin);
+    assert_eq!(context.principal(), principal);
+    assert_eq!(context.command_fingerprint(), request.fingerprint());
+    assert!(!format!("{context:?}").contains("admin-test-token"));
+
+    let health = MainLoopHealth::new();
+    health
+        .publish(HealthSnapshot {
+            phase: MainLoopPhase::Reconciling,
+            ready: true,
+            heartbeat_seq: 7,
+            progress_age_ms: Some(0),
+            ..HealthSnapshot::default()
+        })
+        .expect("initial health");
+    thread::sleep(Duration::from_millis(20));
+    let before = health.snapshot();
+    assert!(before.progress_age_ms.unwrap_or(0) >= 10);
+    health
+        .publish(HealthSnapshot {
+            phase: MainLoopPhase::Blocked,
+            ready: false,
+            heartbeat_seq: 7,
+            progress_age_ms: None,
+            ..HealthSnapshot::default()
+        })
+        .expect("same heartbeat health");
+    thread::sleep(Duration::from_millis(20));
+    let after = health.snapshot();
+    assert_eq!(after.heartbeat_seq, 7);
+    assert!(!after.ready);
+    assert!(after.progress_age_ms.unwrap_or(0) >= before.progress_age_ms.unwrap_or(0));
+    assert!(
+        health
+            .publish(HealthSnapshot {
+                heartbeat_seq: 6,
+                ..HealthSnapshot::default()
+            })
+            .is_err()
+    );
 }
 
 #[test]

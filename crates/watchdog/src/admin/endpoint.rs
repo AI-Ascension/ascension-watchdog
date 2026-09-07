@@ -16,6 +16,11 @@ use std::fs;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub(crate) fn current_uid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
 /// Validate a Unix-domain endpoint before a bind attempt.  The parent must be
 /// an existing owner-only directory; this function never creates or deletes
 /// ancestors.
@@ -26,10 +31,27 @@ pub fn validate_endpoint_path(path: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        let _ = path;
-        Err(WatchdogError::Unsupported(
-            "native Windows admin transport is owned by the P2 broker".to_string(),
-        ))
+        let text = path.to_string_lossy();
+        let prefix = r"\\.\pipe\ascension-watchdog-";
+        let valid_suffix = text.strip_prefix(prefix).is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        });
+        if !path.is_absolute()
+            || text.len() > 192
+            || !valid_suffix
+            || text.contains(['\0', '\r', '\n'])
+            || !text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"\\._-".contains(&byte))
+        {
+            return Err(WatchdogError::InvalidInput(
+                "admin named-pipe endpoint is outside the fixed local namespace".to_string(),
+            ));
+        }
+        Ok(())
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -79,7 +101,7 @@ fn validate_unix_path(path: &Path) -> Result<()> {
             "admin socket parent must have mode 0700".to_string(),
         ));
     }
-    let current_uid = fs::metadata(".")?.uid();
+    let current_uid = current_uid();
     if parent_metadata.uid() != current_uid {
         return Err(WatchdogError::Unauthorized(
             "admin socket parent is not owned by the current user".to_string(),
@@ -193,9 +215,10 @@ impl EndpointGuard {
         }
         #[cfg(not(unix))]
         {
-            Err(WatchdogError::Unsupported(
-                "native Windows admin transport is owned by the P2 broker".to_string(),
-            ))
+            // Named pipes have kernel-owned names rather than filesystem
+            // entries.  The native server closes its exact handle during
+            // shutdown, which removes the endpoint namespace entry.
+            Ok(())
         }
     }
 }
@@ -244,6 +267,6 @@ pub(crate) fn bind_endpoint(
 pub(crate) fn bind_endpoint(path: &Path) -> Result<((), EndpointGuard)> {
     let _ = path;
     Err(WatchdogError::Unsupported(
-        "native Windows admin transport is owned by the P2 broker".to_string(),
+        "filesystem endpoint binding is unavailable on this platform".to_string(),
     ))
 }

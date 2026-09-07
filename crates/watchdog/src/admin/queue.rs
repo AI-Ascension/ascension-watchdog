@@ -10,7 +10,9 @@
 )]
 
 use super::MAX_QUEUE;
-use super::protocol::{AdminDispatcher, AdminRequest, AdminResponse, MainLoopHealth, ReplyStatus};
+use super::protocol::{
+    AdminCommand, AdminDispatcher, AdminResponse, DispatchContext, MainLoopHealth, ReplyStatus,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
@@ -36,7 +38,9 @@ struct QueueInner {
 }
 
 struct QueuedRequest {
-    request: AdminRequest,
+    context: DispatchContext,
+    command: AdminCommand,
+    deadline_ms: u32,
     response: SyncSender<AdminResponse>,
     received_at_ms: u64,
     cache: Arc<IdempotencyCache>,
@@ -89,7 +93,9 @@ impl AdminQueue {
     /// the transport workers do not call the dispatcher.
     pub(crate) fn enqueue(
         &self,
-        request: AdminRequest,
+        context: DispatchContext,
+        command: AdminCommand,
+        deadline_ms: u32,
         response: SyncSender<AdminResponse>,
         received_at_ms: u64,
         cache: Arc<IdempotencyCache>,
@@ -100,9 +106,11 @@ impl AdminQueue {
             .gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let fingerprint = request.fingerprint();
+        let fingerprint = context.command_fingerprint().to_owned();
         let item = QueuedRequest {
-            request,
+            context,
+            command,
+            deadline_ms,
             response,
             received_at_ms,
             cache,
@@ -159,31 +167,22 @@ impl AdminQueue {
 
             let deadline = item
                 .received_at_ms
-                .saturating_add(u64::from(item.request.deadline_ms));
-            let response = if now_ms > deadline {
-                AdminResponse::error(
-                    item.request.request_id.clone(),
-                    item.request.idempotency_key.clone(),
-                    ReplyStatus::Timeout,
-                    health,
-                )
+                .saturating_add(u64::from(item.deadline_ms));
+            let response = if now_ms >= deadline {
+                AdminResponse::context_error(&item.context, ReplyStatus::Timeout, health)
             } else {
-                match dispatcher.dispatch(&item.request.command) {
+                match dispatcher.dispatch(&item.context, &item.command) {
                     Ok(result) => match result.validate() {
-                        Ok(()) => AdminResponse::success(&item.request, result, health),
-                        Err(_) => AdminResponse::error(
-                            item.request.request_id.clone(),
-                            item.request.idempotency_key.clone(),
+                        Ok(()) => AdminResponse::success(&item.context, result, health),
+                        Err(_) => AdminResponse::context_error(
+                            &item.context,
                             ReplyStatus::BoundsExceeded,
                             health,
                         ),
                     },
-                    Err(error) => AdminResponse::error(
-                        item.request.request_id.clone(),
-                        item.request.idempotency_key.clone(),
-                        error.status(),
-                        health,
-                    ),
+                    Err(error) => {
+                        AdminResponse::context_error(&item.context, error.status(), health)
+                    }
                 }
             };
             item.cache

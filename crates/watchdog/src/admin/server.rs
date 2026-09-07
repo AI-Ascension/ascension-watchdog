@@ -10,24 +10,19 @@
 )]
 
 use super::auth::AuthReferences;
-#[cfg(unix)]
 use super::auth::{AuthStore, Authz};
 #[cfg(unix)]
 use super::endpoint::bind_endpoint;
 use super::protocol::{AdminRequest, MainLoopHealth, reject_duplicate_fields};
-#[cfg(unix)]
 use super::protocol::{AdminResponse, ReplyStatus};
 use super::queue::AdminQueue;
-#[cfg(unix)]
 use super::queue::{IdempotencyCache, QueueAdmission, now_unix_ms};
 use super::{MAX_CLIENT_WORKERS, MAX_CLIENTS, MAX_FRAME_BYTES, MAX_IDEMPOTENCY_RECORDS};
 use crate::error::{Result, WatchdogError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[cfg(unix)]
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
-#[cfg(unix)]
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -42,6 +37,8 @@ pub struct AdminServerConfig {
     worker_count: usize,
     io_timeout: Duration,
     idempotency_capacity: usize,
+    #[cfg(windows)]
+    allowed_peer_sid: Option<String>,
 }
 
 impl std::fmt::Debug for AdminServerConfig {
@@ -68,6 +65,8 @@ impl AdminServerConfig {
             worker_count: MAX_CLIENT_WORKERS,
             io_timeout: Duration::from_secs(5),
             idempotency_capacity: MAX_IDEMPOTENCY_RECORDS,
+            #[cfg(windows)]
+            allowed_peer_sid: None,
         };
         config.validate()
     }
@@ -100,6 +99,15 @@ impl AdminServerConfig {
     /// Set bounded in-memory idempotency retention.
     pub fn with_idempotency_capacity(mut self, capacity: usize) -> Result<Self> {
         self.idempotency_capacity = capacity;
+        self.validate()
+    }
+
+    /// Restrict Windows named-pipe peers to this explicit operator SID.  When
+    /// omitted, the native transport uses the service owner's SID and an
+    /// owner-only pipe ACL.
+    #[cfg(windows)]
+    pub fn with_allowed_peer_sid(mut self, sid: impl Into<String>) -> Result<Self> {
+        self.allowed_peer_sid = Some(sid.into());
         self.validate()
     }
 
@@ -137,9 +145,12 @@ impl AdminServerConfig {
 pub struct AdminServer {
     stop: Arc<AtomicBool>,
     client_count: Arc<AtomicUsize>,
+    #[cfg(unix)]
     accept_thread: Option<JoinHandle<()>>,
     #[cfg(unix)]
     workers: Vec<WorkerHandle>,
+    #[cfg(windows)]
+    workers: Vec<JoinHandle<()>>,
     endpoint: Option<super::endpoint::EndpointGuard>,
 }
 
@@ -155,14 +166,17 @@ impl std::fmt::Debug for AdminServer {
         builder.field("client_count", &self.client_count.load(Ordering::Acquire));
         #[cfg(unix)]
         builder.field("workers", &self.workers.len());
+        #[cfg(windows)]
+        builder.field("workers", &self.workers.len());
         builder.finish_non_exhaustive()
     }
 }
 
 impl AdminServer {
     /// Start the server.  On Unix, binding an incumbent path returns `BUSY`
-    /// and never unlinks it.  On Windows this returns `UNSUPPORTED` until the
-    /// separately owned P2 named-pipe transport is integrated.
+    /// and never unlinks it.  On Windows, fixed worker threads own isolated
+    /// native named-pipe instances and hand the same queue contract to the
+    /// reconciliation loop.
     #[cfg(unix)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn start(
@@ -240,16 +254,76 @@ impl AdminServer {
         })
     }
 
-    /// Windows/non-Unix builds fail closed rather than pretending to have a
-    /// local authenticated transport.
-    #[cfg(not(unix))]
+    /// Start the authenticated Windows named-pipe transport.
+    #[cfg(windows)]
+    pub fn start(
+        config: AdminServerConfig,
+        queue: AdminQueue,
+        health: MainLoopHealth,
+    ) -> Result<Self> {
+        use ascension_platform_windows::AdminPipeServer;
+
+        let config = config.validate()?;
+        let auth = config.auth.load()?;
+        let cache = Arc::new(
+            IdempotencyCache::new(config.idempotency_capacity)
+                .map_err(WatchdogError::InvalidInput)?,
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let client_count = Arc::new(AtomicUsize::new(0));
+        let mut pipe_servers = Vec::with_capacity(config.worker_count);
+        for _ in 0..config.worker_count {
+            pipe_servers.push(
+                AdminPipeServer::create(
+                    config.endpoint.to_string_lossy().into_owned(),
+                    config.allowed_peer_sid.as_deref(),
+                )
+                .map_err(|error| WatchdogError::Unsupported(error.to_string()))?,
+            );
+        }
+        let mut workers = Vec::with_capacity(config.worker_count);
+        for pipe_server in pipe_servers {
+            let worker_stop = Arc::clone(&stop);
+            let worker_auth = auth.clone();
+            let worker_queue = queue.clone();
+            let worker_health = health.clone();
+            let worker_cache = Arc::clone(&cache);
+            let worker_count = Arc::clone(&client_count);
+            let io_timeout = config.io_timeout;
+            let join = thread::Builder::new()
+                .name("watchdog-admin-pipe".to_string())
+                .spawn(move || {
+                    windows_worker_loop(
+                        pipe_server,
+                        worker_stop,
+                        worker_auth,
+                        worker_queue,
+                        worker_health,
+                        worker_cache,
+                        worker_count,
+                        io_timeout,
+                    );
+                })
+                .map_err(WatchdogError::Io)?;
+            workers.push(join);
+        }
+        Ok(Self {
+            stop,
+            client_count,
+            workers,
+            endpoint: None,
+        })
+    }
+
+    /// Other targets have no authenticated local transport.
+    #[cfg(not(any(unix, windows)))]
     pub fn start(
         _config: AdminServerConfig,
         _queue: AdminQueue,
         _health: MainLoopHealth,
     ) -> Result<Self> {
         Err(WatchdogError::Unsupported(
-            "native Windows admin transport is owned by the P2 broker".to_string(),
+            "admin transport is unsupported on this platform".to_string(),
         ))
     }
 
@@ -269,6 +343,7 @@ impl AdminServer {
 
     fn shutdown_inner(&mut self) {
         self.stop.store(true, Ordering::Release);
+        #[cfg(unix)]
         if let Some(join) = self.accept_thread.take() {
             let _ = join.join();
         }
@@ -279,6 +354,13 @@ impl AdminServer {
                 if let Some(join) = worker.join.take() {
                     let _ = join.join();
                 }
+            }
+        }
+        #[cfg(windows)]
+        {
+            let mut workers = std::mem::take(&mut self.workers);
+            for join in workers.drain(..) {
+                let _ = join.join();
             }
         }
     }
@@ -380,8 +462,8 @@ fn handle_connection(
         let _ = send_error(&mut stream, ReplyStatus::Invalid, health);
         return;
     };
-    match auth.authorize(&request) {
-        Authz::Allowed => {}
+    let principal = match auth.authorize(&request) {
+        Authz::Allowed(principal) => principal,
         Authz::Forbidden => {
             let _ = send_response(
                 &mut stream,
@@ -406,9 +488,21 @@ fn handle_connection(
             );
             return;
         }
-    }
+    };
 
-    let fingerprint = request.fingerprint();
+    let Ok(context) = request.dispatch_context(principal) else {
+        let _ = send_response(
+            &mut stream,
+            &AdminResponse::error(
+                request.request_id,
+                request.idempotency_key,
+                ReplyStatus::Invalid,
+                health,
+            ),
+        );
+        return;
+    };
+    let fingerprint = context.command_fingerprint().to_owned();
     let cache_key = request.idempotency_key.clone();
     match cache.begin(&cache_key, &fingerprint) {
         super::queue::CacheLookup::Complete(response) => {
@@ -444,8 +538,13 @@ fn handle_connection(
     }
     let (response_sender, response_receiver) = mpsc::sync_channel(1);
     let received_at_ms = now_unix_ms();
+    let command = request.command.clone();
+    let deadline_ms = request.deadline_ms;
+    drop(request);
     if let Err(admission) = queue.enqueue(
-        request.clone(),
+        context.clone(),
+        command,
+        deadline_ms,
         response_sender,
         received_at_ms,
         Arc::clone(cache),
@@ -458,11 +557,11 @@ fn handle_connection(
         };
         let _ = send_response(
             &mut stream,
-            &AdminResponse::error(request.request_id, request.idempotency_key, status, health),
+            &AdminResponse::context_error(&context, status, health),
         );
         return;
     }
-    let deadline = Duration::from_millis(u64::from(request.deadline_ms));
+    let deadline = Duration::from_millis(u64::from(deadline_ms));
     match response_receiver.recv_timeout(deadline) {
         Ok(response) => {
             let _ = send_response(&mut stream, &response);
@@ -474,8 +573,8 @@ fn handle_connection(
             let _ = send_response(
                 &mut stream,
                 &AdminResponse::error(
-                    request.request_id,
-                    request.idempotency_key,
+                    context.request_id().to_string(),
+                    context.idempotency_key().to_string(),
                     ReplyStatus::Timeout,
                     health,
                 ),
@@ -483,6 +582,193 @@ fn handle_connection(
         }
         Err(RecvTimeoutError::Disconnected) => {}
     }
+}
+
+#[cfg(windows)]
+fn windows_worker_loop(
+    mut pipe: ascension_platform_windows::AdminPipeServer,
+    stop: Arc<AtomicBool>,
+    auth: AuthStore,
+    queue: AdminQueue,
+    health: MainLoopHealth,
+    cache: Arc<IdempotencyCache>,
+    client_count: Arc<AtomicUsize>,
+    io_timeout: Duration,
+) {
+    // A short accept poll keeps shutdown bounded even when no client is
+    // present.  Once connected, all reads/writes retain the configured
+    // per-request deadline and are polled in the native boundary.
+    let accept_poll = Duration::from_millis(50).min(io_timeout);
+    while !stop.load(Ordering::Acquire) {
+        match pipe.accept(accept_poll) {
+            Ok(None) => continue,
+            Err(_) => {
+                let _ = pipe.disconnect();
+                continue;
+            }
+            Ok(Some(_peer)) => {
+                client_count.fetch_add(1, Ordering::AcqRel);
+                windows_handle_connection(
+                    &mut pipe, &auth, &queue, &health, &cache, io_timeout, &stop,
+                );
+                let _ = pipe.cancel();
+                let _ = pipe.disconnect();
+                client_count.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+    }
+    let _ = pipe.cancel();
+    let _ = pipe.disconnect();
+}
+
+#[cfg(windows)]
+fn windows_handle_connection(
+    pipe: &mut ascension_platform_windows::AdminPipeServer,
+    auth: &AuthStore,
+    queue: &AdminQueue,
+    health: &MainLoopHealth,
+    cache: &Arc<IdempotencyCache>,
+    io_timeout: Duration,
+    stop: &AtomicBool,
+) {
+    let frame = match pipe.read_frame(io_timeout) {
+        Ok(frame) => frame,
+        Err(error) => {
+            let status = if error.to_string().contains("frame exceeds") {
+                ReplyStatus::BoundsExceeded
+            } else {
+                return;
+            };
+            let _ = send_pipe_error(pipe, status, health, io_timeout);
+            return;
+        }
+    };
+    let Ok(request) = decode_request(&frame) else {
+        let _ = send_pipe_error(pipe, ReplyStatus::Invalid, health, io_timeout);
+        return;
+    };
+    let principal = match auth.authorize(&request) {
+        Authz::Allowed(_) => super::protocol::AuthenticatedPrincipalClass::WindowsOperator,
+        Authz::Forbidden => {
+            let response = AdminResponse::error(
+                request.request_id,
+                request.idempotency_key,
+                ReplyStatus::Forbidden,
+                health,
+            );
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+        Authz::Unauthorized => {
+            let response = AdminResponse::error(
+                request.request_id,
+                request.idempotency_key,
+                ReplyStatus::Unauthorized,
+                health,
+            );
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+    };
+    let context = match request.dispatch_context(principal) {
+        Ok(context) => context,
+        Err(_) => {
+            let response = AdminResponse::error(
+                request.request_id,
+                request.idempotency_key,
+                ReplyStatus::Invalid,
+                health,
+            );
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+    };
+    let fingerprint = context.command_fingerprint().to_owned();
+    let cache_key = context.idempotency_key().to_owned();
+    match cache.begin(&cache_key, &fingerprint) {
+        super::queue::CacheLookup::Complete(response) => {
+            let response = response.with_current_health(health);
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+        super::queue::CacheLookup::Pending => {
+            let response = AdminResponse::context_error(&context, ReplyStatus::InProgress, health);
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+        super::queue::CacheLookup::Conflict => {
+            let response = AdminResponse::context_error(&context, ReplyStatus::Conflict, health);
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+        super::queue::CacheLookup::New => {}
+    }
+    let command = request.command.clone();
+    let deadline_ms = request.deadline_ms;
+    drop(request);
+    let (response_sender, response_receiver) = mpsc::sync_channel(1);
+    if let Err(admission) = queue.enqueue(
+        context.clone(),
+        command,
+        deadline_ms,
+        response_sender,
+        now_unix_ms(),
+        Arc::clone(cache),
+        cache_key.clone(),
+    ) {
+        cache.abandon(&cache_key, &fingerprint);
+        let status = match admission {
+            QueueAdmission::Full => ReplyStatus::Busy,
+            QueueAdmission::Closed => ReplyStatus::PersistenceUnavailable,
+        };
+        let response = AdminResponse::context_error(&context, status, health);
+        let _ = send_pipe_response(pipe, &response, io_timeout);
+        return;
+    }
+    let deadline = Duration::from_millis(u64::from(deadline_ms));
+    let started = std::time::Instant::now();
+    loop {
+        let elapsed = started.elapsed();
+        if elapsed >= deadline {
+            let response = AdminResponse::context_error(&context, ReplyStatus::Timeout, health);
+            let _ = send_pipe_response(pipe, &response, io_timeout);
+            return;
+        }
+        let wait = Duration::from_millis(50).min(deadline.saturating_sub(elapsed));
+        match response_receiver.recv_timeout(wait) {
+            Ok(response) => {
+                let _ = send_pipe_response(pipe, &response, io_timeout);
+                return;
+            }
+            Err(RecvTimeoutError::Timeout) if !stop.load(Ordering::Acquire) => {}
+            Err(RecvTimeoutError::Timeout) => return,
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn send_pipe_error(
+    pipe: &mut ascension_platform_windows::AdminPipeServer,
+    status: ReplyStatus,
+    health: &MainLoopHealth,
+    timeout: Duration,
+) -> Result<()> {
+    let response = AdminResponse::error("", "", status, health);
+    send_pipe_response(pipe, &response, timeout)
+        .map_err(|error| WatchdogError::Io(std::io::Error::other(error)))
+}
+
+#[cfg(windows)]
+fn send_pipe_response(
+    pipe: &mut ascension_platform_windows::AdminPipeServer,
+    response: &AdminResponse,
+    timeout: Duration,
+) -> std::result::Result<(), ascension_platform_windows::PlatformError> {
+    let bytes = response
+        .encode()
+        .map_err(ascension_platform_windows::PlatformError::Invalid)?;
+    pipe.write_frame(&bytes, timeout)
 }
 
 #[cfg(unix)]
