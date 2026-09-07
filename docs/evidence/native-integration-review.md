@@ -81,3 +81,12 @@ and a separate test PID witness, while asserting active PID authority is cleared
 All five tests in those two suites then passed. Synthetic descendant cleanup
 remains an open implementation defect assigned to P7. This is not a green
 workspace result or native service evidence.
+
+Linux follow-up `ac68c9b`, integrated as `4f2e3fb`, copies executable bytes into
+sealed snapshots and validates type and cumulative size on opened handles.
+Twenty-six focused Linux library tests and three Linux boundary tests passed
+after integration. Two delegated-cgroup tests remained ignored. The new
+in-place-mutation regression executed the approved snapshot after overwriting
+the source file and passed; it does not prove service installation or recovery.
+The native boundary test now contains actual descendant launch/cleanup checks,
+superseding the earlier construction-only test, but it has not run here.

@@ -39,3 +39,17 @@ These are source-derived findings, not executed failure reproductions:
 All four findings were returned to the job-admission author for a separate
 follow-up commit. No service installation, host restart, game/provider launch,
 or release activation was performed by this validation.
+
+## Integrated follow-up, 2026-09-07
+
+Revisions `bf83612` and `822e8f3` integrate the protected payload reader and
+bounded CLI test runner. Root `9a27751` also checks output deadlines during
+continuous successful reads. All four `job_submission_process` tests passed:
+actual daemon/CLI admission and replay, FIFO rejection, symlinked ancestor
+rejection, and cleanup of a descendant holding output pipes.
+
+Independent Windows review found write sharing on retained payload ancestors.
+Root `22597c1` removes that sharing and adds a Windows-only writer-open regression.
+Windows GNU workspace/all-target/all-feature Clippy passed after integration;
+the native test has not executed. Automatic scheduler-to-harness handoff and
+worker completion acknowledgment remain outside these test results.
