@@ -1,0 +1,392 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/watchdog-host-lease-control-v1/frame.schema.json",
+  "title": "watchdog host lease control v1 frame",
+  "description": "A closed, bounded gateway-to-host lease installation and synchronization sideband. Field equality, proof verification, time ordering, and durable commit ordering are semantic rules tested by consumers.",
+  "oneOf": [
+    { "$ref": "#/$defs/install_request_frame" },
+    { "$ref": "#/$defs/install_response_frame" },
+    { "$ref": "#/$defs/renew_request_frame" },
+    { "$ref": "#/$defs/renew_response_frame" },
+    { "$ref": "#/$defs/revoke_request_frame" },
+    { "$ref": "#/$defs/revoke_response_frame" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "u53": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive_u53": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "minLength": 43,
+      "maxLength": 43
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+      "minLength": 20,
+      "maxLength": 30
+    },
+    "digest_or_null": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "timestamp_or_null": {
+      "anyOf": [
+        { "$ref": "#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "positive_u53_or_null": {
+      "anyOf": [
+        { "$ref": "#/$defs/positive_u53" },
+        { "type": "null" }
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "role"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "role": { "enum": ["gateway", "host"] }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "capability", "proof"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "capability": {
+          "enum": ["lease_install", "lease_renew", "lease_revoke"]
+        },
+        "proof": {
+          "type": "string",
+          "pattern": "^[\\x21-\\x7e]+$",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "release_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release_digest", "config_digest", "profile_digest", "runtime_v3_schema_digest"],
+      "properties": {
+        "release_digest": { "$ref": "#/$defs/sha256" },
+        "config_digest": { "$ref": "#/$defs/sha256" },
+        "profile_digest": { "$ref": "#/$defs/sha256" },
+        "runtime_v3_schema_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "boot_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id", "instance_id", "instance_incarnation", "boot_id",
+        "authority_generation", "release", "created_at", "state"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "release": { "$ref": "#/$defs/release_set" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "state": { "const": "READY" }
+      }
+    },
+    "host_fence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_fence_id", "deployment_id", "instance_id", "instance_incarnation",
+        "boot_id", "authority_generation", "fence_generation", "created_at"
+      ],
+      "properties": {
+        "host_fence_id": { "$ref": "#/$defs/uuid_v4" },
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "fence_generation": { "$ref": "#/$defs/positive_u53" },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "lease_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id", "instance_id", "instance_incarnation", "boot_id",
+        "authority_generation", "host_fence_id", "host_fence_generation",
+        "lease_id", "lease_epoch", "fence_token", "issued_at", "expires_at",
+        "ttl_seconds", "renewal_interval_seconds"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "instance_incarnation": { "$ref": "#/$defs/uuid_v4" },
+        "boot_id": { "$ref": "#/$defs/uuid_v4" },
+        "authority_generation": { "$ref": "#/$defs/positive_u53" },
+        "host_fence_id": { "$ref": "#/$defs/uuid_v4" },
+        "host_fence_generation": { "$ref": "#/$defs/positive_u53" },
+        "lease_id": { "$ref": "#/$defs/uuid_v4" },
+        "lease_epoch": { "$ref": "#/$defs/positive_u53" },
+        "fence_token": { "$ref": "#/$defs/token" },
+        "issued_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "ttl_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
+        "renewal_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "gateway_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "instance_id", "session_id"],
+      "properties": {
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "instance_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid_v4" }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boot", "fence", "lease", "release", "gateway"],
+      "properties": {
+        "boot": { "$ref": "#/$defs/boot_context" },
+        "fence": { "$ref": "#/$defs/host_fence" },
+        "lease": { "$ref": "#/$defs/lease_context" },
+        "release": { "$ref": "#/$defs/release_set" },
+        "gateway": { "$ref": "#/$defs/gateway_identity" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "retryable", "retry_after_seconds"],
+      "properties": {
+        "status": {
+          "enum": [
+            "INSTALLED", "DUPLICATE", "RENEWED", "RENEW_DUPLICATE",
+            "REVOKED", "REVOKE_DUPLICATE", "CONFLICT", "STALE_BOOT",
+            "STALE_FENCE", "RELEASE_MISMATCH", "LEASE_MISMATCH", "EXPIRED",
+            "AUTH_REQUIRED", "PERSISTENCE_UNAVAILABLE", "INVALID", "BOUNDS_EXCEEDED"
+          ]
+        },
+        "retryable": { "type": "boolean" },
+        "retry_after_seconds": {
+          "anyOf": [
+            { "$ref": "#/$defs/positive_u53" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result", "installation_id", "grant_digest", "boot_id",
+        "instance_incarnation", "host_fence_id", "fence_generation",
+        "lease_id", "lease_epoch", "host_install_generation", "recorded_at",
+        "renew_sequence", "expires_at"
+      ],
+      "properties": {
+        "result": { "$ref": "#/$defs/result" },
+        "installation_id": { "$ref": "#/$defs/uuid_v4" },
+        "grant_digest": { "$ref": "#/$defs/sha256" },
+        "boot_id": { "$ref": "#/$defs/uuid_v4" },
+        "instance_incarnation": { "$ref": "#/$defs/uuid_v4" },
+        "host_fence_id": { "$ref": "#/$defs/uuid_v4" },
+        "fence_generation": { "$ref": "#/$defs/positive_u53" },
+        "lease_id": { "$ref": "#/$defs/uuid_v4" },
+        "lease_epoch": { "$ref": "#/$defs/positive_u53" },
+        "host_install_generation": { "$ref": "#/$defs/positive_u53" },
+        "recorded_at": { "$ref": "#/$defs/timestamp" },
+        "renew_sequence": { "$ref": "#/$defs/positive_u53_or_null" },
+        "expires_at": { "$ref": "#/$defs/timestamp_or_null" }
+      }
+    },
+    "common_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "schema_digest", "message_id", "correlation_id", "sent_at",
+        "actor", "auth", "kind", "payload"
+      ],
+      "properties": {
+        "contract": { "const": "watchdog-host-lease-control-v1" },
+        "schema_digest": { "$ref": "#/$defs/sha256" },
+        "message_id": { "$ref": "#/$defs/uuid_v4" },
+        "correlation_id": { "$ref": "#/$defs/uuid_v4" },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "actor": { "$ref": "#/$defs/actor" },
+        "auth": { "$ref": "#/$defs/auth" },
+        "kind": {
+          "enum": [
+            "lease_install_request", "lease_install_response",
+            "lease_renew_request", "lease_renew_response",
+            "lease_revoke_request", "lease_revoke_response"
+          ]
+        },
+        "payload": { "type": "object" }
+      }
+    },
+    "install_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installation_id", "grant", "grant_digest"],
+      "properties": {
+        "installation_id": { "$ref": "#/$defs/uuid_v4" },
+        "grant": { "$ref": "#/$defs/grant" },
+        "grant_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "install_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ack"],
+      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+    },
+    "renew_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installation_id", "grant", "grant_digest", "renew_sequence"],
+      "properties": {
+        "installation_id": { "$ref": "#/$defs/uuid_v4" },
+        "grant": { "$ref": "#/$defs/grant" },
+        "grant_digest": { "$ref": "#/$defs/sha256" },
+        "renew_sequence": { "$ref": "#/$defs/positive_u53" }
+      }
+    },
+    "renew_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ack"],
+      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+    },
+    "revoke_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installation_id", "grant", "grant_digest", "reason"],
+      "properties": {
+        "installation_id": { "$ref": "#/$defs/uuid_v4" },
+        "grant": { "$ref": "#/$defs/grant" },
+        "grant_digest": { "$ref": "#/$defs/sha256" },
+        "reason": {
+          "enum": ["operator", "shutdown", "incarnation_replaced", "suspend_ambiguous", "rekey"]
+        }
+      }
+    },
+    "revoke_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ack"],
+      "properties": { "ack": { "$ref": "#/$defs/ack" } }
+    },
+    "install_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_install_request" },
+            "payload": { "$ref": "#/$defs/install_request" }
+          }
+        }
+      ]
+    },
+    "install_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_install_response" },
+            "payload": { "$ref": "#/$defs/install_response" }
+          }
+        }
+      ]
+    },
+    "renew_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_renew_request" },
+            "payload": { "$ref": "#/$defs/renew_request" }
+          }
+        }
+      ]
+    },
+    "renew_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_renew_response" },
+            "payload": { "$ref": "#/$defs/renew_response" }
+          }
+        }
+      ]
+    },
+    "revoke_request_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_revoke_request" },
+            "payload": { "$ref": "#/$defs/revoke_request" }
+          }
+        }
+      ]
+    },
+    "revoke_response_frame": {
+      "allOf": [
+        { "$ref": "#/$defs/common_frame" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "lease_revoke_response" },
+            "payload": { "$ref": "#/$defs/revoke_response" }
+          }
+        }
+      ]
+    }
+  }
+}
