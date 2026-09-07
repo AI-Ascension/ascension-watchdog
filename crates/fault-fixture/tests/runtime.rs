@@ -1,0 +1,304 @@
+//! Runtime-v3 newline-adapter coverage against the frozen Draft 2020-12 schema.
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::Duration;
+
+use fault_fixture::{RUNTIME_V3_SCHEMA_DIGEST, RUNTIME_V3_SCHEMA_JSON};
+use jsonschema::{Draft, Validator};
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+struct RunningServer {
+    child: Child,
+    address: SocketAddr,
+    database: PathBuf,
+}
+
+impl RunningServer {
+    fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        let database = std::env::temp_dir().join(format!(
+            "watchdog-runtime-fixture-{}.sqlite",
+            Uuid::new_v4()
+        ));
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fault-fixture-server"))
+            .arg("--db")
+            .arg(&database)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or("server stdout unavailable")?;
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        let address = line
+            .strip_prefix("LISTEN ")
+            .ok_or("server did not announce its listener")?
+            .trim()
+            .parse()?;
+        Ok(Self {
+            child,
+            address,
+            database,
+        })
+    }
+
+    fn stop(mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.child.try_wait()?.is_none() {
+            let stop_request = json!({
+                "protocol_version":"runtime-v3-gameplay",
+                "schema_digest":RUNTIME_V3_SCHEMA_DIGEST,
+                "provenance":{"artifact":"sts2-protocol/runtime-v3-gameplay","source":"schemas/runtime-v3-gameplay.schema.json","generator":"hand-authored"},
+                "correlation_id":"stop-correlation",
+                "instance_id":"instance-1","session_id":"session-1","lease_id":"lease-1",
+                "lease_epoch":0,"generation":0,"kind":"state_request",
+                "state_id":null,"operation_id":null,"observation":null,"legal_actions":null,
+                "action":null,"status":null,"transition":null,"error_code":null,
+                "wait_for_millis":null,"wait_outcome":null,"recovery":null
+            });
+            let _ = send_raw(self.address, &stop_request);
+            self.child.kill()?;
+        }
+        let _ = self.child.wait();
+        remove_database(&self.database);
+        Ok(())
+    }
+}
+
+fn remove_database(path: &PathBuf) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite.lock"));
+}
+
+fn send_raw(address: SocketAddr, value: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    let bytes = serde_json::to_vec(&value)?;
+    let mut stream = TcpStream::connect(address)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.write_all(&bytes)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    Ok(serde_json::from_str(&line)?)
+}
+
+fn send_http(
+    address: SocketAddr,
+    method: &str,
+    path: &str,
+    value: &Value,
+) -> Result<(u16, Value), Box<dyn std::error::Error>> {
+    let body = serde_json::to_vec(value)?;
+    let mut stream = TcpStream::connect(address)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let instance_id = value["instance_id"].as_str().ok_or("instance id")?;
+    let session_id = value["session_id"].as_str().ok_or("session id")?;
+    let lease_id = value["lease_id"].as_str().ok_or("lease id")?;
+    let lease_epoch = value["lease_epoch"].as_i64().ok_or("lease epoch")?;
+    let correlation_id = value["correlation_id"].as_str().ok_or("correlation id")?;
+    let headers = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer fixture\r\nX-STS2-Instance-Id: {}\r\nX-STS2-Session-Id: {}\r\nX-STS2-Lease-Id: {}\r\nX-STS2-Lease-Epoch: {}\r\nX-STS2-Correlation-Id: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        instance_id,
+        session_id,
+        lease_id,
+        lease_epoch,
+        correlation_id,
+        body.len()
+    );
+    stream.write_all(headers.as_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("HTTP status missing")?
+        .parse()?;
+    let mut content_length = 0_usize;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+        if let Some(length) = line.strip_prefix("Content-Length:") {
+            content_length = length.trim().parse()?;
+        }
+    }
+    let mut response_body = vec![0_u8; content_length];
+    std::io::Read::read_exact(&mut reader, &mut response_body)?;
+    Ok((status, serde_json::from_slice(&response_body)?))
+}
+
+fn envelope(
+    kind: &str,
+    generation: i64,
+    state_id: Option<&str>,
+    operation_id: Option<&str>,
+) -> Value {
+    json!({
+        "protocol_version":"runtime-v3-gameplay", "schema_digest":RUNTIME_V3_SCHEMA_DIGEST,
+        "provenance":{"artifact":"sts2-protocol/runtime-v3-gameplay","source":"schemas/runtime-v3-gameplay.schema.json","generator":"hand-authored"},
+        "correlation_id":Uuid::new_v4().to_string(), "instance_id":"instance-1",
+        "session_id":"session-1", "lease_id":"lease-1", "lease_epoch":0,
+        "generation":generation, "kind":kind, "state_id":state_id,
+        "operation_id":operation_id, "observation":null, "legal_actions":null,
+        "action":null, "status":null, "transition":null, "error_code":null,
+        "wait_for_millis":null, "wait_outcome":null, "recovery":null
+    })
+}
+
+fn assert_schema(validator: &Validator, value: &Value) {
+    if let Err(error) = validator.validate(value) {
+        panic!("runtime-v3 schema rejected {value}: {error}");
+    }
+}
+
+#[test]
+fn newline_runtime_queue_guard_and_recovery_are_schema_valid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
+    let validator = jsonschema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .build(&schema)?;
+    let server = RunningServer::start()?;
+
+    let state_request = envelope("state_request", 0, None, None);
+    let state_response = send_raw(server.address, &state_request)?;
+    assert_schema(&validator, &state_response);
+    assert_eq!(state_response["kind"], "state_response");
+    let state_id = state_response["state_id"]
+        .as_str()
+        .ok_or("state id")?
+        .to_owned();
+
+    let legal_request = envelope("legal_actions_request", 0, Some(&state_id), None);
+    let legal_response = send_raw(server.address, &legal_request)?;
+    assert_schema(&validator, &legal_response);
+    let action = legal_response["legal_actions"][0].clone();
+
+    let operation_id = "operation-1";
+    let mut dispatch = envelope(
+        "dispatch_action_request",
+        0,
+        Some(&state_id),
+        Some(operation_id),
+    );
+    dispatch["action"] = action.clone();
+    let accepted = send_raw(server.address, &dispatch)?;
+    assert_schema(&validator, &accepted);
+    assert_eq!(accepted["status"], "accepted");
+
+    let second_id = "operation-2";
+    let mut conflicting = envelope(
+        "dispatch_action_request",
+        0,
+        Some(&state_id),
+        Some(second_id),
+    );
+    conflicting["action"] = action;
+    let rejected = send_raw(server.address, &conflicting)?;
+    assert_schema(&validator, &rejected);
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["error_code"], "active_operation");
+
+    let mut wait = envelope("wait_request", 0, None, Some(operation_id));
+    wait["wait_for_millis"] = json!(1);
+    let settled = send_raw(server.address, &wait)?;
+    assert_schema(&validator, &settled);
+    assert_eq!(settled["status"], "settled");
+    assert_eq!(settled["wait_outcome"], "successor");
+    assert_eq!(settled["generation"], 1);
+
+    let replay = send_raw(server.address, &wait)?;
+    assert_schema(&validator, &replay);
+    assert_eq!(replay["status"], "settled");
+    assert_eq!(replay["observation"], settled["observation"]);
+
+    let mut recover = envelope("recover_request", 1, None, None);
+    recover["recovery"] = json!({"kind":"reobserve","operation_id":null});
+    let reobserved = send_raw(server.address, &recover)?;
+    assert_schema(&validator, &reobserved);
+    assert_eq!(reobserved["status"], "accepted");
+
+    let mut next_dispatch = envelope(
+        "dispatch_action_request",
+        1,
+        Some(&state_id),
+        Some("operation-3"),
+    );
+    next_dispatch["action"] = settled["legal_actions"][0].clone();
+    let admitted = send_raw(server.address, &next_dispatch)?;
+    assert_schema(&validator, &admitted);
+    assert_eq!(admitted["status"], "accepted");
+
+    let mut stop = envelope("recover_request", 1, None, None);
+    stop["recovery"] = json!({"kind":"stop_episode","operation_id":null});
+    let cancelled = send_raw(server.address, &stop)?;
+    assert_schema(&validator, &cancelled);
+    assert_eq!(cancelled["status"], "cancelled");
+
+    let mut unknown_wait = envelope("wait_request", 1, None, Some("operation-3"));
+    unknown_wait["wait_for_millis"] = json!(1);
+    let unknown = send_raw(server.address, &unknown_wait)?;
+    assert_schema(&validator, &unknown);
+    assert_eq!(unknown["status"], "unknown");
+    assert_eq!(unknown["wait_outcome"], "recovery_required");
+
+    server.stop()?;
+    Ok(())
+}
+
+#[test]
+fn http_runtime_action_and_wait_use_the_same_durable_queue()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema: Value = serde_json::from_str(RUNTIME_V3_SCHEMA_JSON)?;
+    let validator = jsonschema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .build(&schema)?;
+    let server = RunningServer::start()?;
+    let operation_id = "http-operation-1";
+    let mut action_request = envelope(
+        "dispatch_action_request",
+        0,
+        Some("state-http"),
+        Some(operation_id),
+    );
+    action_request["action"] = json!({
+        "action_id":"action-end-turn",
+        "action":{"kind":"end_turn"}
+    });
+    let (status, accepted) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/action",
+        &action_request,
+    )?;
+    assert_eq!(status, 200);
+    assert_schema(&validator, &accepted);
+    assert_eq!(accepted["status"], "accepted");
+
+    let mut wait_request = envelope("wait_request", 0, None, Some(operation_id));
+    wait_request["wait_for_millis"] = json!(1);
+    let (status, settled) = send_http(
+        server.address,
+        "POST",
+        "/api/v3/runtime/wait",
+        &wait_request,
+    )?;
+    assert_eq!(status, 200);
+    assert_schema(&validator, &settled);
+    assert_eq!(settled["status"], "settled");
+    assert_eq!(settled["generation"], 1);
+    server.stop()?;
+    Ok(())
+}
