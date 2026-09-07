@@ -24,6 +24,10 @@ use crate::storage::{LaunchIntent, LaunchIntentState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(target_os = "linux")]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -168,9 +172,10 @@ impl RuntimeProcessManager {
         planned_containment: &str,
         intent_id: &str,
         now_ms: u64,
-    ) -> Result<RuntimeChild> {
+    ) -> std::result::Result<RuntimeChild, RuntimeLaunchError> {
         if self.synthetic {
-            let child = OwnedChild::spawn(component, now_ms)?;
+            let child =
+                OwnedChild::spawn(component, now_ms).map_err(RuntimeLaunchError::Ordinary)?;
             let mut portable_identity = child.identity().clone();
             portable_identity
                 .launch_nonce
@@ -180,7 +185,8 @@ impl RuntimeProcessManager {
                 specification,
                 planned_containment,
                 &portable_identity,
-            )?;
+            )
+            .map_err(RuntimeLaunchError::Ordinary)?;
             return Ok(RuntimeChild {
                 portable_identity,
                 intent_id: intent_id.to_owned(),
@@ -189,16 +195,35 @@ impl RuntimeProcessManager {
             });
         }
         let native = self
-            .ensure_native(config)?
+            .ensure_native(config)
+            .map_err(RuntimeLaunchError::Ordinary)?
             .launch(specification, planned_containment)?;
-        let (portable_identity, ownership) =
-            native.identity(intent_id, specification, planned_containment, now_ms)?;
+        let (portable_identity, ownership) = native
+            .identity(intent_id, specification, planned_containment, now_ms)
+            .map_err(RuntimeLaunchError::Ordinary)?;
         Ok(RuntimeChild {
             portable_identity,
             intent_id: intent_id.to_owned(),
             ownership,
             handle: RuntimeChildHandle::Native(native),
         })
+    }
+
+    /// Reconcile a prepared launch intent by its exact planned platform
+    /// containment.  A prepared intent has no process identity, so callers
+    /// must never attempt PID-based cleanup or invent a replacement child.
+    pub(crate) fn cleanup_planned_containment(
+        &mut self,
+        config: &WatchdogConfig,
+        planned_containment: &str,
+    ) -> Result<RuntimeStopOutcome> {
+        if self.synthetic {
+            return Err(WatchdogError::Unsupported(
+                "synthetic launch intents have no recoverable containment authority".to_owned(),
+            ));
+        }
+        self.ensure_native(config)?
+            .force_cleanup_planned_containment(planned_containment)
     }
 
     pub(crate) fn recover_intent(
@@ -330,6 +355,13 @@ impl RuntimeChild {
             },
         }
     }
+
+    /// Native platform launchers currently use null standard streams and the
+    /// platform-owned child handle does not expose a drain API.  Keep this
+    /// explicit so an empty snapshot is never reported as captured output.
+    pub(crate) fn captures_output(&self) -> bool {
+        matches!(&self.handle, RuntimeChildHandle::Synthetic(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,6 +370,27 @@ pub(crate) enum RuntimeStopOutcome {
     AlreadyExited,
     TimedOut,
 }
+
+/// Launch admission failure classification. A Linux uncertain-cleanup
+/// failure means the platform retained a planned containment authority even
+/// though no child handle was returned; the durable intent must remain
+/// unsettled until that exact containment is reconciled.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum RuntimeLaunchError {
+    Ordinary(WatchdogError),
+    CleanupUncertain(WatchdogError),
+}
+
+impl std::fmt::Display for RuntimeLaunchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ordinary(error) | Self::CleanupUncertain(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeLaunchError {}
 
 impl RuntimeProcessManager {
     fn ensure_native(&mut self, config: &WatchdogConfig) -> Result<&mut NativeBackend> {
@@ -401,7 +454,42 @@ impl NativeBackend {
         &mut self,
         specification: &LaunchSpec,
         planned_containment: &str,
-    ) -> Result<NativeChild> {
+    ) -> std::result::Result<NativeChild, RuntimeLaunchError> {
+        #[cfg(windows)]
+        let _ = planned_containment;
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::Linux(adapter) => {
+                let containment = ContainmentId::new(planned_containment.to_owned())
+                    .map_err(|error| RuntimeLaunchError::Ordinary(map_adapter_error(error)))?;
+                adapter
+                    .launch_with_planned_containment(specification, &containment)
+                    .map(NativeChild::Linux)
+                    .map_err(|error| {
+                        if crate::platform::linux_process::is_cleanup_uncertain(&error) {
+                            RuntimeLaunchError::CleanupUncertain(map_adapter_error(error))
+                        } else {
+                            RuntimeLaunchError::Ordinary(map_adapter_error(error))
+                        }
+                    })
+            }
+            #[cfg(windows)]
+            Self::Windows(backend) => {
+                let windows_spec =
+                    windows_launch_spec(specification).map_err(RuntimeLaunchError::Ordinary)?;
+                backend
+                    .launcher
+                    .launch(&windows_spec)
+                    .map(NativeChild::Windows)
+                    .map_err(|error| RuntimeLaunchError::Ordinary(map_windows_error(error)))
+            }
+        }
+    }
+
+    fn force_cleanup_planned_containment(
+        &mut self,
+        planned_containment: &str,
+    ) -> Result<RuntimeStopOutcome> {
         #[cfg(windows)]
         let _ = planned_containment;
         match self {
@@ -410,19 +498,14 @@ impl NativeBackend {
                 let containment = ContainmentId::new(planned_containment.to_owned())
                     .map_err(map_adapter_error)?;
                 adapter
-                    .launch_with_planned_containment(specification, &containment)
-                    .map(NativeChild::Linux)
+                    .force_cleanup_planned_containment(&containment)
+                    .map(map_stop_outcome)
                     .map_err(map_adapter_error)
             }
             #[cfg(windows)]
-            Self::Windows(backend) => {
-                let windows_spec = windows_launch_spec(specification)?;
-                backend
-                    .launcher
-                    .launch(&windows_spec)
-                    .map(NativeChild::Windows)
-                    .map_err(map_windows_error)
-            }
+            Self::Windows(_) => Err(WatchdogError::Unsupported(
+                "Windows prepared launch intents require a persisted Job authority".to_owned(),
+            )),
         }
     }
 
@@ -783,7 +866,69 @@ fn validate_proof(
             "launch ownership proof has no incarnation".to_owned(),
         ));
     }
+    // The incarnation is part of the platform containment derivation.  A
+    // proof that merely has a plausible-looking generation string is not
+    // enough: rebuild the complete launch request and require the persisted
+    // containment identity to be the one derived from that request.  This
+    // prevents a proof from being rebound to another generation or nonce.
+    let specification = LaunchSpec {
+        deployment_id: config.deployment_id.clone(),
+        instance_id: component.id.clone(),
+        component: platform_component_kind(&component.id)?,
+        incarnation: proof.incarnation.clone(),
+        launch_nonce: intent.launch_nonce.clone(),
+        executable: component.executable.clone(),
+        executable_sha256: expected_digest.to_owned(),
+        arguments: component.args.clone(),
+        working_directory: component.cwd.clone(),
+        environment: component
+            .environment
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        // Background watchdog components are intentionally restricted to the
+        // service session.  HostBroker is not admitted by this runtime.
+        session: PlatformSessionSelector::Explicit(0),
+        graceful_timeout: NATIVE_GRACEFUL_TIMEOUT,
+        force_timeout: NATIVE_FORCE_TIMEOUT,
+    };
+    let expected_containment = expected_containment_for(&specification)?;
+    if expected_containment != proof.containment_id {
+        return Err(WatchdogError::IdentityMismatch(
+            "launch ownership proof containment is not derived from its incarnation and request"
+                .to_owned(),
+        ));
+    }
+    if proof.backend == "linux" && proof.session_id.is_some() {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux launch proof unexpectedly contains a session identity".to_owned(),
+        ));
+    }
+    if proof.backend == "windows" && proof.session_id != Some(0) {
+        return Err(WatchdogError::IdentityMismatch(
+            "Windows service launch proof is not bound to session zero".to_owned(),
+        ));
+    }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
+    crate::platform::LinuxProcessAdapter::planned_containment_for(specification)
+        .map(|containment| containment.as_str().to_owned())
+        .map_err(map_adapter_error)
+}
+
+#[cfg(windows)]
+fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
+    Ok(format!("windows-job:{}", specification.launch_nonce))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn expected_containment_for(_specification: &LaunchSpec) -> Result<String> {
+    Err(WatchdogError::Unsupported(
+        "native process containment is unsupported on this platform".to_owned(),
+    ))
 }
 
 fn component_kind(component: &ComponentConfig) -> Result<PlatformComponentKind> {
@@ -1008,17 +1153,15 @@ fn authorize_linux_helper(
             "Linux helper has no unique prepared durable launch intent".to_owned(),
         ));
     }
-    let expected_name = planned.as_str().strip_prefix("cgroup-v2:").ok_or_else(|| {
-        AdapterError::Invalid("Linux containment identity is malformed".to_owned())
-    })?;
-    let actual_name = request
-        .cgroup_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| AdapterError::Invalid("Linux helper cgroup path is malformed".to_owned()))?;
-    if actual_name != expected_name {
+    if !planned.as_str().starts_with("cgroup-v2:") {
+        return Err(AdapterError::Invalid(
+            "Linux containment identity is malformed".to_owned(),
+        ));
+    }
+    verify_current_cgroup_full_path(&request.cgroup_path)?;
+    if !request.cgroup_path.is_absolute() {
         return Err(AdapterError::IdentityMismatch(
-            "Linux helper cgroup path differs from durable containment intent".to_owned(),
+            "Linux helper cgroup path is not absolute".to_owned(),
         ));
     }
     let mut allowlisted_executables = BTreeMap::new();
@@ -1034,6 +1177,87 @@ fn authorize_linux_helper(
         cgroup_path: request.cgroup_path.clone(),
         allowlisted_executables,
     })
+}
+
+/// Verify the helper's complete cgroup path, not only the generated leaf
+/// name.  A basename check could authorize an identically named cgroup below
+/// another mount or delegated subtree.  `/proc/self/cgroup` supplies the
+/// process-relative path and `/proc/self/mountinfo` supplies the cgroup v2
+/// mount point; both are compared after canonicalization.
+#[cfg(target_os = "linux")]
+fn verify_current_cgroup_full_path(requested: &Path) -> std::result::Result<(), AdapterError> {
+    if !requested.is_absolute() {
+        return Err(AdapterError::Invalid(
+            "Linux helper cgroup path must be absolute".to_owned(),
+        ));
+    }
+    let current_relative = fs::read_to_string("/proc/self/cgroup")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("Linux cgroup membership unavailable: {error}"))
+        })?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.splitn(3, ':');
+            let hierarchy = fields.next()?;
+            let controllers = fields.next()?;
+            let path = fields.next()?;
+            (hierarchy == "0" && controllers.is_empty()).then_some(path.to_owned())
+        })
+        .ok_or_else(|| {
+            AdapterError::Unavailable("Linux cgroup v2 membership entry is unavailable".to_owned())
+        })?;
+    let mountpoint = cgroup_v2_mountpoint()?;
+    let relative = current_relative.trim_start_matches('/');
+    let current = mountpoint.join(relative);
+    let expected = fs::canonicalize(requested).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux authorized cgroup path cannot be resolved: {error}"
+        ))
+    })?;
+    let actual = fs::canonicalize(&current).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux current cgroup path cannot be resolved: {error}"
+        ))
+    })?;
+    if expected != actual {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper is not in the authorized full cgroup path".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_v2_mountpoint() -> std::result::Result<PathBuf, AdapterError> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
+        AdapterError::Unavailable(format!("Linux mountinfo unavailable: {error}"))
+    })?;
+    for line in mountinfo.lines() {
+        let Some((before, after)) = line.split_once(" - ") else {
+            continue;
+        };
+        let post_fields = after.split_whitespace().collect::<Vec<_>>();
+        if post_fields.first().copied() != Some("cgroup2") {
+            continue;
+        }
+        let fields = before.split_whitespace().collect::<Vec<_>>();
+        let Some(mountpoint) = fields.get(4) else {
+            continue;
+        };
+        return Ok(PathBuf::from(unescape_mountinfo(mountpoint)));
+    }
+    Err(AdapterError::Unavailable(
+        "Linux cgroup v2 mountpoint is unavailable".to_owned(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn unescape_mountinfo(value: &str) -> String {
+    value
+        .replace("\\134", "\\")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\040", " ")
 }
 
 #[cfg(target_os = "linux")]
