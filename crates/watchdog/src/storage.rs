@@ -72,6 +72,15 @@ pub struct SingletonLock {
 struct LockInner {
     path: PathBuf,
     file: File,
+    // On Windows this handle is opened with directory backup semantics and
+    // without delete sharing.  Holding it keeps the owner directory from
+    // being replaced while the lock file is authoritative.  The standard
+    // library does not expose a stable Windows file-id accessor on the pinned
+    // toolchain, so this protected-directory/handle boundary is the identity
+    // check rather than an unstable MetadataExt method.
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    protected_parent: File,
 }
 
 impl Drop for LockInner {
@@ -107,12 +116,9 @@ impl SingletonLock {
                 "lock path changed while preparing owner lock".to_string(),
             ));
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)?;
+        #[cfg(windows)]
+        let protected_parent = open_protected_owner_directory(database.parent())?;
+        let file = open_lock_file(&path)?;
         validate_opened_lock_handle(&path, &file)?;
         file.try_lock_exclusive().map_err(|error| {
             if is_lock_contention(&error) {
@@ -124,6 +130,8 @@ impl SingletonLock {
         let inner = Arc::new(LockInner {
             path: path.clone(),
             file,
+            #[cfg(windows)]
+            protected_parent,
         });
         if let Ok(mut registry) = lock_registry().lock() {
             registry.retain(|_, weak| weak.strong_count() > 0);
@@ -182,6 +190,42 @@ fn lock_path(database: &Path) -> PathBuf {
     let mut value = database.as_os_str().to_os_string();
     value.push(".lock");
     PathBuf::from(value)
+}
+
+/// Open the lock file with no delete sharing on Windows.  This is the stable
+/// standard-library equivalent of the native platform wrapper's protected
+/// file boundary: another process may still open the file and receive normal
+/// fs2 lock contention, but it cannot unlink, rename, or replace the file
+/// underneath the authoritative handle.
+#[allow(clippy::suspicious_open_options)]
+fn open_lock_file(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    }
+    Ok(options.open(path)?)
+}
+
+#[cfg(windows)]
+fn open_protected_owner_directory(path: Option<&Path>) -> Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    let path = path.ok_or_else(|| {
+        WatchdogError::InvalidInput("database path has no owner-local parent".to_string())
+    })?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    Ok(options.open(path)?)
 }
 
 fn ensure_owner_lock(database: &Path, owner: &SingletonLock) -> Result<()> {
@@ -306,10 +350,23 @@ fn validate_opened_lock_handle(path: &Path, file: &File) -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if let (Some(path_index), Some(opened_index)) =
-            (path_metadata.file_index(), opened_metadata.file_index())
-            && path_index != opened_index
-        {
+        // `file_index`/volume identity is still unstable in Rust 1.97.1.
+        // Compare the stable metadata exposed by the pinned toolchain as a
+        // post-open sanity check; the no-delete sharing on both the lock file
+        // and its protected parent is the stronger anti-replacement guard.
+        let path_fingerprint = (
+            path_metadata.file_size(),
+            path_metadata.creation_time(),
+            path_metadata.last_write_time(),
+            path_metadata.file_attributes(),
+        );
+        let opened_fingerprint = (
+            opened_metadata.file_size(),
+            opened_metadata.creation_time(),
+            opened_metadata.last_write_time(),
+            opened_metadata.file_attributes(),
+        );
+        if path_fingerprint != opened_fingerprint {
             return Err(WatchdogError::Conflict(
                 "lock path changed after its handle was opened".to_string(),
             ));
