@@ -38,6 +38,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_BOOT_ID_BYTES: usize = 128;
 const DEFAULT_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_FORCE_TIMEOUT: Duration = Duration::from_secs(10);
+const FAILED_LAUNCH_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Stable marker for the runtime integration: an adapter launch error carries
 /// retained containment authority and must not clean the durable launch intent
@@ -1071,25 +1072,54 @@ fn cleanup_failed_cgroup_launch(
     cgroup: &Cgroup,
     child: Option<&mut Child>,
 ) -> Result<(), CleanupFailure> {
+    cleanup_failed_cgroup_launch_with(cgroup, child, terminate_failed_child)
+}
+
+fn cleanup_failed_cgroup_launch_with(
+    cgroup: &Cgroup,
+    child: Option<&mut Child>,
+    terminate: impl FnOnce(&mut Child, Instant) -> Result<(), AdapterError>,
+) -> Result<(), CleanupFailure> {
+    // The deadline covers both direct-child termination and the cgroup
+    // membership/removal proof.  Starting this clock only after `wait()`
+    // would let a failed launch hang indefinitely before containment is
+    // checked.
+    let deadline = Instant::now()
+        .checked_add(FAILED_LAUNCH_CLEANUP_TIMEOUT)
+        .unwrap_or_else(Instant::now);
     let mut first_error = None;
     if let Err(error) = cgroup.kill_all() {
         first_error = Some(error);
     }
+    let mut child_cleanup_failed = false;
     if let Some(child) = child {
-        if let Err(error) = terminate_failed_child(child) {
+        if let Err(error) = terminate(child, deadline) {
             if first_error.is_none() {
                 first_error = Some(error);
             }
+            child_cleanup_failed = true;
         }
     }
 
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(500))
-        .unwrap_or_else(Instant::now);
     loop {
         match cgroup.pids() {
-            Ok(pids) if pids.is_empty() => break,
-            Ok(_) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
+            Ok(pids) if pids.is_empty() => {
+                if child_cleanup_failed {
+                    // An empty cgroup proves no member remains, but it does
+                    // not prove that the exact Child handle was reaped.  Keep
+                    // the cgroup as the durable recovery authority until the
+                    // next reconciliation pass proves both facts.
+                    return Err(CleanupFailure {
+                        error: first_error.expect("child cleanup failure must have an error"),
+                        containment_retained: true,
+                    });
+                }
+                break;
+            }
+            Ok(_) if Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(POLL_INTERVAL.min(remaining));
+            }
             Ok(_) => {
                 return Err(CleanupFailure {
                     error: AdapterError::Timeout(format!(
@@ -1126,7 +1156,15 @@ fn cleanup_failed_cgroup_launch(
     Ok(())
 }
 
-fn terminate_failed_child(child: &mut Child) -> Result<(), AdapterError> {
+fn terminate_failed_child(child: &mut Child, deadline: Instant) -> Result<(), AdapterError> {
+    terminate_failed_child_with(child, deadline, Child::kill)
+}
+
+fn terminate_failed_child_with(
+    child: &mut Child,
+    deadline: Instant,
+    mut kill: impl FnMut(&mut Child) -> std::io::Result<()>,
+) -> Result<(), AdapterError> {
     if child
         .try_wait()
         .map_err(|error| AdapterError::Io(format!("failed launch child status: {error}")))?
@@ -1134,20 +1172,34 @@ fn terminate_failed_child(child: &mut Child) -> Result<(), AdapterError> {
     {
         return Ok(());
     }
-    let kill_error = child
-        .kill()
+    let kill_error = kill(child)
         .err()
         .map(|error| AdapterError::Io(format!("failed launch child kill: {error}")));
-    let wait_result = child
-        .wait()
-        .map_err(|error| AdapterError::Io(format!("failed launch child reap: {error}")));
-    match (kill_error, wait_result) {
-        (None, Ok(_)) => Ok(()),
-        (Some(error), Ok(_)) => Err(error),
-        (kill, Err(wait_error)) => Err(AdapterError::Io(format!(
-            "failed launch child cleanup ({:?}): {wait_error}",
-            kill.map(|error| error.to_string())
-        ))),
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return match kill_error {
+                    None => Ok(()),
+                    Some(error) => Err(error),
+                };
+            }
+            Ok(None) if Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(POLL_INTERVAL.min(remaining));
+            }
+            Ok(None) => {
+                return Err(AdapterError::Timeout(format!(
+                    "failed launch child did not exit before cleanup deadline ({:?})",
+                    kill_error.map(|error| error.to_string())
+                )));
+            }
+            Err(error) => {
+                return Err(AdapterError::Io(format!(
+                    "failed launch child reap status ({:?}): {error}",
+                    kill_error.map(|error| error.to_string())
+                )));
+            }
+        }
     }
 }
 
@@ -1340,6 +1392,7 @@ fn unescape_mountinfo(value: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
     use tempfile::tempdir;
 
     #[test]
@@ -1414,6 +1467,44 @@ mod tests {
         assert!(failure.containment_retained);
         assert!(matches!(failure.error, AdapterError::Unavailable(_)));
         assert!(cgroup.path().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_child_termination_fault_is_deadline_bound()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut child = Command::new("/bin/sleep").arg("30").spawn()?;
+        let started = Instant::now();
+        let result = terminate_failed_child_with(&mut child, Instant::now(), |_| {
+            Err(std::io::Error::other("synthetic kill failure"))
+        });
+        assert!(matches!(result, Err(AdapterError::Timeout(_))));
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "synthetic termination fault exceeded deadline: {:?}",
+            started.elapsed()
+        );
+        child.kill()?;
+        child.wait()?;
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_unproven_reap_retains_empty_containment() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (_directory, cgroup) = fake_cgroup("")?;
+        let mut child = Command::new("/bin/sleep").arg("30").spawn()?;
+        let failure = cleanup_failed_cgroup_launch_with(&cgroup, Some(&mut child), |_, _| {
+            Err(AdapterError::Timeout(
+                "synthetic child reap timeout".to_owned(),
+            ))
+        })
+        .unwrap_err();
+        assert!(failure.containment_retained);
+        assert!(matches!(failure.error, AdapterError::Timeout(_)));
+        assert!(cgroup.path().exists());
+        child.kill()?;
+        child.wait()?;
         Ok(())
     }
 

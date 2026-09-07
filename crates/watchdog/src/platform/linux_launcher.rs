@@ -37,6 +37,8 @@ const MAX_ARGUMENTS: usize = 64;
 const MAX_ENVIRONMENT: usize = 64;
 const MAX_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
+const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+const CHILD_CLEANUP_POLL: Duration = Duration::from_millis(10);
 
 /// Immutable bootstrap context supplied separately from the untrusted launch
 /// frame.  The real watchdog should bind this path to its already validated
@@ -312,8 +314,30 @@ impl Drop for PendingLaunch {
     fn drop(&mut self) {
         self.stdin.take();
         if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child_bounded(child, CHILD_CLEANUP_TIMEOUT);
+        }
+    }
+}
+
+/// Kill and reap a helper without allowing a launch-error path or `Drop` to
+/// block forever.  The cgroup owner remains responsible for a later
+/// `cgroup.kill` reconciliation when this best-effort reap cannot be proved.
+fn terminate_child_bounded(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let _ = child.kill();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Ok(None) => return,
         }
     }
 }
@@ -470,15 +494,13 @@ impl TrustedLinuxLauncher {
             .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
         drop(helper_file);
         let Some(mut stdin) = child.stdin.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
             return Err(AdapterError::Io(
                 "Linux helper did not provide anonymous stdin".to_owned(),
             ));
         };
         if let Err(error) = stdin.write_all(&frame) {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
             return Err(AdapterError::Io(format!(
                 "Linux helper request handoff failed: {error}"
             )));
