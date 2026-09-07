@@ -114,6 +114,8 @@ impl NativeSystemdBackend {
             unit: unit.to_owned(),
             pid,
             creation_token: process.creation_token,
+            executable: process.executable,
+            executable_sha256: process.executable_sha256,
             uid: process.uid,
             gid: process.gid,
             capability_bounding_set: process.capability_bounding_set,
@@ -320,6 +322,8 @@ impl SystemdBackend for NativeSystemdBackend {
 #[cfg(target_os = "linux")]
 struct ProcessPostcondition {
     creation_token: String,
+    executable: PathBuf,
+    executable_sha256: String,
     uid: u32,
     gid: u32,
     capability_bounding_set: u64,
@@ -333,6 +337,7 @@ fn read_process_postcondition(
     policy: &LaunchPolicy,
     control_group: &str,
 ) -> BrokerResult<ProcessPostcondition> {
+    let executable = process_executable_proof(pid, policy)?;
     let status = String::from_utf8(read_bounded_file(
         Path::new(&format!("/proc/{pid}/status")),
         MAX_FRAME_BYTES,
@@ -381,15 +386,83 @@ fn read_process_postcondition(
             "target cgroup does not match exact systemd unit".to_owned(),
         ));
     }
-    let creation_token = process_start_token(pid)?;
+    let final_executable = process_executable_proof(pid, policy)?;
+    if executable.creation_token != final_executable.creation_token
+        || executable.executable != final_executable.executable
+        || executable.executable_sha256 != final_executable.executable_sha256
+    {
+        return Err(BrokerError::Conflict(
+            "target executable identity changed during postcheck".to_owned(),
+        ));
+    }
     Ok(ProcessPostcondition {
-        creation_token,
+        creation_token: final_executable.creation_token,
+        executable: final_executable.executable,
+        executable_sha256: final_executable.executable_sha256,
         uid: policy.target_uid,
         gid: policy.target_gid,
         capability_bounding_set: cap_bounding_set,
         ambient_capabilities,
         no_new_privileges,
     })
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProcessExecutableProof {
+    creation_token: String,
+    executable: PathBuf,
+    executable_sha256: String,
+}
+
+/// Pin the PID while checking its current executable.  The start token alone
+/// does not bind an execve result, and a path-only check does not bind the
+/// inode contents.  Both the exact /proc/PID/exe path and its digest must
+/// match the immutable launch policy before a unit is acknowledged.
+#[cfg(target_os = "linux")]
+fn process_executable_proof(
+    pid: u32,
+    policy: &LaunchPolicy,
+) -> BrokerResult<ProcessExecutableProof> {
+    let process = Pid::from_raw(
+        i32::try_from(pid)
+            .map_err(|_| BrokerError::Conflict("process PID is out of bounds".to_owned()))?,
+    )
+    .ok_or_else(|| BrokerError::Conflict("process PID is zero".to_owned()))?;
+    let _pidfd = pidfd_open(process, PidfdFlags::empty()).map_err(|error| {
+        BrokerError::Conflict(format!("process identity is unavailable: {error}"))
+    })?;
+    let creation_before = process_start_token(pid)?;
+    let proc_executable = PathBuf::from(format!("/proc/{pid}/exe"));
+    let executable = fs::read_link(&proc_executable).map_err(io_error)?;
+    if executable != policy.executable {
+        return Err(BrokerError::Conflict(
+            "process executable path does not match fixed policy".to_owned(),
+        ));
+    }
+    let executable_sha256 = hash_open_file(File::open(&proc_executable).map_err(io_error)?)?;
+    let creation_after = process_start_token(pid)?;
+    let executable_after = fs::read_link(&proc_executable).map_err(io_error)?;
+    if creation_before != creation_after || executable != executable_after {
+        return Err(BrokerError::Conflict(
+            "process executable identity changed during proof".to_owned(),
+        ));
+    }
+    if executable_sha256 != policy.executable_sha256 {
+        return Err(BrokerError::Conflict(
+            "process executable digest does not match fixed policy".to_owned(),
+        ));
+    }
+    Ok(ProcessExecutableProof {
+        creation_token: creation_after,
+        executable: executable_after,
+        executable_sha256,
+    })
+}
+
+#[cfg(all(target_os = "linux", test))]
+pub(crate) fn verify_process_executable(pid: u32, policy: &LaunchPolicy) -> BrokerResult<()> {
+    process_executable_proof(pid, policy).map(|_| ())
 }
 
 #[cfg(target_os = "linux")]

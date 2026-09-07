@@ -27,6 +27,8 @@ impl SystemdBackend for FakeBackend {
             unit: unit.to_owned(),
             pid: 42,
             creation_token: "start-token".to_owned(),
+            executable: policy.executable.clone(),
+            executable_sha256: policy.executable_sha256.clone(),
             uid: policy.target_uid,
             gid: policy.target_gid,
             capability_bounding_set: policy.capabilities.bounding_set,
@@ -115,6 +117,22 @@ fn request(nonce: &str) -> BrokerRequest {
     }
 }
 
+fn observation(policy: &LaunchPolicy, unit: &str) -> UnitObservation {
+    UnitObservation {
+        unit: unit.to_owned(),
+        pid: 42,
+        creation_token: "start-token".to_owned(),
+        executable: policy.executable.clone(),
+        executable_sha256: policy.executable_sha256.clone(),
+        uid: policy.target_uid,
+        gid: policy.target_gid,
+        capability_bounding_set: policy.capabilities.bounding_set,
+        ambient_capabilities: policy.capabilities.ambient_set,
+        no_new_privileges: true,
+        control_group: format!("/system.slice/{unit}"),
+    }
+}
+
 #[test]
 fn fixed_policy_has_distinct_target_identity_and_no_capabilities() {
     let policy = policy();
@@ -200,7 +218,14 @@ fn durable_pending_record_never_relaunches_an_inactive_unit() {
     let mut ledger = BrokerLedger::memory();
     let request = request("pending");
     let unit = unit_name(&request);
-    assert!(ledger.reserve(&request, &unit).expect("reserve pending"));
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    assert!(
+        ledger
+            .reserve(&request, &unit, launch_policy)
+            .expect("reserve pending")
+    );
     let mut broker =
         LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), ledger);
     let (peer, mut child) = credentials(&policy);
@@ -210,6 +235,107 @@ fn durable_pending_record_never_relaunches_an_inactive_unit() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(matches!(error, BrokerError::Conflict(_)));
+    assert_eq!(broker.backend.starts, 0);
+}
+
+#[test]
+fn active_unit_without_durable_history_is_not_adopted() {
+    let policy = policy();
+    let request = request("orphan");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let mut backend = FakeBackend::new();
+    backend
+        .units
+        .insert(unit.clone(), observation(launch_policy, &unit));
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), backend);
+    let (peer, mut child) = credentials(&policy);
+    let error = broker
+        .handle(peer, request.clone())
+        .expect_err("orphan unit must not be adopted");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert!(!broker.ledger.contains(&request));
+    assert_eq!(broker.backend.starts, 0);
+}
+
+#[test]
+fn missing_persistent_ledger_is_not_treated_as_empty() {
+    let path = PathBuf::from(format!(
+        "/var/lib/ascension-watchdog-p28-missing-{}",
+        std::process::id()
+    ));
+    let error = BrokerLedger::open(&path).expect_err("missing ledger must fail closed");
+    assert!(matches!(error, BrokerError::Unavailable(_)));
+}
+
+#[test]
+fn executable_path_and_digest_are_required_in_postcondition() {
+    let policy = policy();
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let unit = unit_name(&request("postcondition"));
+    let mut wrong_path = observation(launch_policy, &unit);
+    wrong_path.executable = PathBuf::from("/usr/bin/sleep");
+    assert!(wrong_path.verify(&unit, launch_policy).is_err());
+
+    let mut wrong_digest = observation(launch_policy, &unit);
+    wrong_digest.executable_sha256 = "0".repeat(64);
+    assert!(wrong_digest.verify(&unit, launch_policy).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_executable_proof_rejects_wrong_path_and_digest() {
+    let policy = policy();
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let mut child = std::process::Command::new("/usr/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("fixture process");
+    assert!(verify_process_executable(child.id(), launch_policy).is_err());
+
+    let sleep = fs::canonicalize("/usr/bin/sleep").expect("sleep fixture path");
+    let mut wrong_digest = launch_policy.clone();
+    wrong_digest.executable = sleep;
+    wrong_digest.executable_sha256 = "0".repeat(64);
+    assert!(verify_process_executable(child.id(), &wrong_digest).is_err());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn active_capacity_applies_to_existing_durable_records() {
+    let policy = policy();
+    let request = request("existing-at-cap");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let mut ledger = BrokerLedger::memory();
+    assert!(
+        ledger
+            .reserve(&request, &unit, launch_policy)
+            .expect("reserve durable record")
+    );
+    let mut broker =
+        LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), ledger);
+    for index in 0..MAX_ACTIVE_PROCESSES {
+        broker.active_units.insert(format!("active-{index}"));
+    }
+    let (peer, mut child) = credentials(&policy);
+    let error = broker
+        .handle(peer, request)
+        .expect_err("existing ledger records must not bypass active cap");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Unavailable(_)));
     assert_eq!(broker.backend.starts, 0);
 }
 

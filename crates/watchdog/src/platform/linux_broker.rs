@@ -768,6 +768,8 @@ pub struct UnitObservation {
     pub unit: String,
     pub pid: u32,
     pub creation_token: String,
+    pub executable: PathBuf,
+    pub executable_sha256: String,
     pub uid: u32,
     pub gid: u32,
     pub capability_bounding_set: u64,
@@ -781,6 +783,8 @@ impl UnitObservation {
         if self.unit != unit
             || self.pid == 0
             || self.creation_token.is_empty()
+            || self.executable != policy.executable
+            || self.executable_sha256 != policy.executable_sha256
             || self.uid != policy.target_uid
             || self.gid != policy.target_gid
             || self.capability_bounding_set != policy.capabilities.bounding_set
@@ -803,6 +807,8 @@ pub struct LaunchReceipt {
     pub unit: String,
     pub pid: u32,
     pub creation_token: String,
+    pub executable: PathBuf,
+    pub executable_sha256: String,
     pub uid: u32,
     pub gid: u32,
     pub capability_bounding_set: u64,
@@ -867,40 +873,46 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         authenticate_peer(credentials, &self.policy.peer)?;
         let policy = self.policy.component(request.component)?;
         let unit = unit_name(&request);
-        let existing = self.ledger.contains(&request);
-        if !existing && self.active_units.len() >= MAX_ACTIVE_PROCESSES {
+        if self.active_units.len() >= MAX_ACTIVE_PROCESSES {
             return Err(BrokerError::Unavailable(
                 "broker active-process capacity is exhausted".to_owned(),
             ));
         }
-        let newly_reserved = self.ledger.reserve(&request, &unit)?;
         let deadline = Instant::now()
             .checked_add(policy.timeout)
             .unwrap_or_else(Instant::now);
-        if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
-            observation.verify(&unit, policy)?;
-            self.active_units.insert(unit.clone());
-            let mut receipt = receipt_from(&request, &observation, true);
-            if newly_reserved {
-                receipt.duplicate = false;
+        let existing = self.ledger.contains(&request);
+        if !existing {
+            // An active deterministic unit without a durable pre-launch
+            // reservation belongs to no recoverable operation.  Inspect it
+            // before writing anything so this request can never adopt or stop
+            // an orphan left by another broker incarnation.
+            if self.backend.inspect(&unit, policy, deadline)?.is_some() {
+                return Err(BrokerError::Conflict(
+                    "active unit has no durable launch reservation".to_owned(),
+                ));
             }
-            self.ledger.commit(&request, &receipt)?;
-            self.cache_receipt(&request, &receipt);
-            return Ok(receipt);
         }
+        let newly_reserved = self.ledger.reserve(&request, &unit, policy)?;
         if !newly_reserved {
+            if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
+                observation.verify(&unit, policy)?;
+                self.active_units.insert(unit.clone());
+                let receipt = receipt_from(&request, &observation, true);
+                self.ledger.commit(&request, &receipt)?;
+                self.cache_receipt(&request, &receipt);
+                return Ok(receipt);
+            }
             return Err(BrokerError::Conflict(
                 "durable launch record has no active unit; refusing to relaunch old nonce"
                     .to_owned(),
             ));
         }
-        let observation = match self.backend.start(&unit, &request, policy, deadline) {
-            Ok(observation) => observation,
-            Err(error) => {
-                let cleanup = self.cleanup_unit(&unit);
-                return Err(cleanup_error(error, cleanup));
-            }
-        };
+        // A start error does not prove that PID 1 created no unit.  Keep the
+        // durable pending reservation and leave cleanup to a later exact-unit
+        // reconciliation instead of stopping an orphan that may have raced
+        // this request.
+        let observation = self.backend.start(&unit, &request, policy, deadline)?;
         if let Err(error) = observation.verify(&unit, policy) {
             let cleanup = self.cleanup_unit(&unit);
             return Err(cleanup_error(error, cleanup));
@@ -950,6 +962,8 @@ fn receipt_from(
         unit: observation.unit.clone(),
         pid: observation.pid,
         creation_token: observation.creation_token.clone(),
+        executable: observation.executable.clone(),
+        executable_sha256: observation.executable_sha256.clone(),
         uid: observation.uid,
         gid: observation.gid,
         capability_bounding_set: observation.capability_bounding_set,
@@ -1177,6 +1191,8 @@ impl BrokerClient {
             || receipt.unit != unit_name(request)
             || receipt.pid == 0
             || receipt.creation_token.is_empty()
+            || !receipt.executable.is_absolute()
+            || validate_sha256(&receipt.executable_sha256).is_err()
             || receipt.duplicate != duplicate
         {
             return Err(BrokerError::Conflict(
@@ -1242,6 +1258,8 @@ struct LaunchReceiptOwned {
     unit: String,
     pid: u32,
     creation_token: String,
+    executable: PathBuf,
+    executable_sha256: String,
     uid: u32,
     gid: u32,
     capability_bounding_set: u64,
@@ -1257,6 +1275,8 @@ impl LaunchReceiptOwned {
             unit: self.unit,
             pid: self.pid,
             creation_token: self.creation_token,
+            executable: self.executable,
+            executable_sha256: self.executable_sha256,
             uid: self.uid,
             gid: self.gid,
             capability_bounding_set: self.capability_bounding_set,
@@ -1281,6 +1301,8 @@ pub(crate) use native::process_start_token;
 pub(crate) use native::require_no_supplementary_groups;
 #[cfg(target_os = "linux")]
 pub use native::run_native_broker;
+#[cfg(all(target_os = "linux", test))]
+pub(crate) use native::verify_process_executable;
 
 #[cfg(test)]
 mod tests;
