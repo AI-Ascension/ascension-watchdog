@@ -33,6 +33,10 @@ const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 static PROCESS_GROUP_SIGNAL_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(all(test, unix))]
+static FORCE_GROUP_CLEANUP_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Immutable launch identity.  It is persisted alongside the component state
 /// and is intentionally richer than a PID.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,6 +131,12 @@ impl ProcessGroupAuthority {
     /// process-group `kill` status alone includes that zombie, so inspect
     /// `/proc` to distinguish the leader from remaining group members.
     fn cleanup_before_reap(&self, leader_pid: u32, deadline: Instant) -> Result<()> {
+        #[cfg(test)]
+        if FORCE_GROUP_CLEANUP_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(WatchdogError::Timeout(
+                "injected process-group cleanup proof failure".to_owned(),
+            ));
+        }
         loop {
             self.kill()?;
             if !group_has_other_members(self.pgid, leader_pid)? {
@@ -256,17 +266,19 @@ impl OwnedChild {
             Ok(status) => status.is_none(),
             Err(error) => {
                 #[cfg(unix)]
-                let _ = abort_spawned_child(
+                let cleanup = abort_spawned_child(
                     &mut child,
                     &mut process_group,
                     Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT,
                 );
+                #[cfg(unix)]
+                return Err(report_spawn_cleanup(error, cleanup));
                 #[cfg(not(unix))]
                 {
                     let _ = child.kill();
                     let _ = child.wait();
+                    return Err(error);
                 }
-                return Err(error);
             }
         };
         if still_running && let Err(error) = ensure_identity(&identity) {
@@ -275,17 +287,19 @@ impl OwnedChild {
             // for that handle.  Cleanup does not fall back to a PID/name
             // lookup.
             #[cfg(unix)]
-            let _ = abort_spawned_child(
+            let cleanup = abort_spawned_child(
                 &mut child,
                 &mut process_group,
                 Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT,
             );
+            #[cfg(unix)]
+            return Err(report_spawn_cleanup(error, cleanup));
             #[cfg(not(unix))]
             {
                 let _ = child.kill();
                 let _ = child.wait();
+                return Err(error);
             }
-            return Err(error);
         }
         let output = Arc::new(Mutex::new(BoundedOutput::default()));
         let mut readers = Vec::new();
@@ -479,14 +493,28 @@ impl Drop for OwnedChild {
             // PID and PGID reserved until the cleanup proof completes.
             if self.process_group.is_armed() {
                 let _ = self.process_group.kill();
-                if wait_for_child_exit(&mut self.child, deadline).is_ok() {
-                    let _ = self
+                let observed_exit = wait_for_child_exit(&mut self.child, deadline).is_ok();
+                let group_proven_empty = observed_exit
+                    && self
                         .process_group
-                        .cleanup_before_reap(self.identity.pid, deadline);
-                }
-                if self.child.wait().is_ok() {
-                    self.process_group.disarm_after_reap();
-                    let _ = self.process_group.wait_gone_after_reap(deadline);
+                        .cleanup_before_reap(self.identity.pid, deadline)
+                        .is_ok();
+                if group_proven_empty {
+                    // The non-reaping wait above proves this is an exited
+                    // child, so this final reap is bounded by the kernel's
+                    // already-recorded wait status. On any failed proof path
+                    // below, no blocking wait is attempted.
+                    if self.child.wait().is_ok() {
+                        self.process_group.disarm_after_reap();
+                        let _ = self.process_group.wait_gone_after_reap(deadline);
+                    }
+                } else {
+                    // Keep Drop bounded when the leader is still running or
+                    // containment proof is unavailable. The group signal and
+                    // this exact-child signal are best effort; the caller has
+                    // no safe authority to reap or signal by numeric PGID
+                    // after this point.
+                    let _ = self.child.kill();
                 }
             }
         }
@@ -572,17 +600,24 @@ fn abort_spawned_child(
         Err(cleanup_error) => {
             // Keep the exact group signal before final reap. If the proof
             // failed, this is still safe because the direct leader has not
-            // been reaped; do not ever signal the group after the fallback
-            // Child::wait below.
+            // been reaped. Do not block in a fallback wait after the bounded
+            // proof deadline: the caller must retain/report this uncertainty.
             if process_group.is_armed() {
                 let _ = process_group.kill();
             }
             let _ = child.kill();
-            if child.wait().is_ok() {
-                process_group.disarm_after_reap();
-            }
             Err(cleanup_error)
         }
+    }
+}
+
+#[cfg(unix)]
+fn report_spawn_cleanup(original: WatchdogError, cleanup: Result<()>) -> WatchdogError {
+    match cleanup {
+        Ok(()) => original,
+        Err(cleanup_error) => WatchdogError::Conflict(format!(
+            "spawn failed ({original}); exact containment cleanup is uncertain ({cleanup_error})"
+        )),
     }
 }
 
@@ -899,6 +934,39 @@ mod tests {
             after_reap,
             "terminate/Drop must not signal a recycled numeric PGID"
         );
+    }
+
+    #[test]
+    fn injected_cleanup_proof_failure_returns_without_unbounded_reap() {
+        struct FailureGuard;
+        impl Drop for FailureGuard {
+            fn drop(&mut self) {
+                FORCE_GROUP_CLEANUP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        FORCE_GROUP_CLEANUP_FAILURE.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _guard = FailureGuard;
+        let mut child = OwnedChild::spawn(&immediate_component(), 1_000).expect("spawn");
+        let started = Instant::now();
+        let result = abort_spawned_child(
+            &mut child.child,
+            &mut child.process_group,
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "injected cleanup failure must not block in Child::wait"
+        );
+        assert!(result.is_err(), "injected cleanup failure must be reported");
+
+        FORCE_GROUP_CLEANUP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
+        cleanup_spawned_child(
+            &mut child.child,
+            &mut child.process_group,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("clear injected failure and reap through exact authority");
     }
 }
 
