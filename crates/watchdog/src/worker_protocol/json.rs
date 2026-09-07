@@ -1,6 +1,6 @@
 use super::types::{Frame, ProtocolError};
 use super::validation;
-use super::{MAX_FRAME_BYTES, MAX_JSON_DEPTH};
+use super::{MAX_ATTEMPT_NUMBER, MAX_FRAME_BYTES, MAX_JSON_DEPTH};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -189,6 +189,7 @@ pub fn decode_frame(bytes: &[u8]) -> Result<Frame, ProtocolError> {
     if bytes.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge);
     }
+    validate_canonical_number_lexemes(bytes)?;
     let value = parse_strict_json(bytes)?;
     let object = value
         .as_object()
@@ -274,6 +275,64 @@ fn reject_unknown(
 
 fn parse_typed<T: DeserializeOwned>(value: Value) -> Result<T, ProtocolError> {
     serde_json::from_value(value).map_err(|error| ProtocolError::InvalidSchema(error.to_string()))
+}
+
+fn validate_canonical_number_lexemes(bytes: &[u8]) -> Result<(), ProtocolError> {
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => skip_json_string(bytes, &mut index),
+            b'-' => {
+                return Err(ProtocolError::InvalidNumber(
+                    "JSON numbers must use canonical unsigned decimal syntax".to_owned(),
+                ));
+            }
+            byte if byte.is_ascii_digit() => {
+                let start = index;
+                while index < bytes.len()
+                    && matches!(
+                        bytes[index],
+                        b'0'..=b'9' | b'e' | b'E' | b'+' | b'-' | b'.'
+                    )
+                {
+                    index += 1;
+                }
+                let lexeme = &bytes[start..index];
+                let is_decimal = lexeme == b"0"
+                    || (lexeme.first().is_some_and(|byte| (b'1'..=b'9').contains(byte))
+                        && lexeme[1..].iter().all(u8::is_ascii_digit));
+                if !is_decimal {
+                    return Err(ProtocolError::InvalidNumber(
+                        "JSON numbers must be canonical unsigned decimal integers".to_owned(),
+                    ));
+                }
+                let value = std::str::from_utf8(lexeme)
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok());
+                if value.is_none_or(|value| value > MAX_ATTEMPT_NUMBER) {
+                    return Err(ProtocolError::InvalidNumber(
+                        "JSON integer exceeds the u53 wire bound".to_owned(),
+                    ));
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    Ok(())
+}
+
+fn skip_json_string(bytes: &[u8], index: &mut usize) {
+    *index += 1;
+    while *index < bytes.len() {
+        match bytes[*index] {
+            b'\\' => *index = (*index + 2).min(bytes.len()),
+            b'"' => {
+                *index += 1;
+                return;
+            }
+            _ => *index += 1,
+        }
+    }
 }
 
 fn parse_strict_json(bytes: &[u8]) -> Result<Value, ProtocolError> {

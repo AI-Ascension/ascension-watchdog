@@ -293,3 +293,72 @@ fn nested_terminal_fields_are_closed_and_status_correlated() {
     mismatch["status"] = Value::String("accepted".to_owned());
     assert!(decode_frame(&serde_json::to_vec(&mismatch).expect("status mismatch")).is_err());
 }
+
+#[test]
+fn numeric_lexemes_are_canonical_unsigned_decimals() {
+    for (fixture, needle, replacement) in [
+        (
+            "dispatch",
+            "\"timeout_ms\": 5000",
+            "\"timeout_ms\": 1.0",
+        ),
+        (
+            "dispatch",
+            "\"attempt_number\": 1",
+            "\"attempt_number\": 1e0",
+        ),
+        (
+            "dispatch",
+            "\"mode_sequence\": 1",
+            "\"mode_sequence\": -0",
+        ),
+        (
+            "dispatch-response",
+            "\"checkpoint_sequence\": 12",
+            "\"checkpoint_sequence\": 9007199254740992",
+        ),
+    ] {
+        let source = std::str::from_utf8(valid_fixture(fixture)).expect("UTF-8 fixture");
+        let mutated = source.replacen(needle, replacement, 1);
+        assert_ne!(mutated, source, "replacement found in {fixture}");
+        assert!(
+            decode_frame(mutated.as_bytes()).is_err(),
+            "accepted noncanonical number in {fixture}: {replacement}"
+        );
+    }
+
+    for (fixture, needle, replacement) in [
+        (
+            "dispatch",
+            "\"timeout_ms\": 5000",
+            "\"timeout_ms\": 5001",
+        ),
+        (
+            "dispatch",
+            "\"attempt_number\": 1",
+            "\"attempt_number\": 9007199254740992",
+        ),
+        (
+            "dispatch",
+            "\"mode_sequence\": 1",
+            "\"mode_sequence\": 9007199254740992",
+        ),
+        (
+            "dispatch-response",
+            "\"checkpoint_sequence\": 12",
+            "\"checkpoint_sequence\": 9007199254740992",
+        ),
+    ] {
+        let source = std::str::from_utf8(valid_fixture(fixture)).expect("UTF-8 fixture");
+        let mutated = source.replacen(needle, replacement, 1);
+        assert_ne!(mutated, source, "replacement found in {fixture}");
+        assert!(
+            decode_frame(mutated.as_bytes()).is_err(),
+            "accepted above-bound number in {fixture}: {replacement}"
+        );
+    }
+
+    assert!(decode_frame(valid_fixture("dispatch")).is_ok());
+    assert!(decode_frame(valid_fixture("dispatch-response")).is_ok());
+    assert!(decode_frame(valid_fixture("control-request")).is_ok());
+}
