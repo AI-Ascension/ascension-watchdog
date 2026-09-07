@@ -1413,6 +1413,11 @@ fn rust_required() -> Vec<CheckSpec> {
             ".",
         ),
         check(
+            "cargo-clippy-production",
+            "cargo clippy --workspace --lib --bins --all-features --locked -- -D warnings -F clippy::unwrap_used -F clippy::expect_used -F clippy::panic -F clippy::todo -F clippy::unimplemented",
+            ".",
+        ),
+        check(
             "cargo-clippy",
             "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
             ".",

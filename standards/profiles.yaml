@@ -10,19 +10,19 @@ profiles:
     purpose: Host-independent Rust core or contract repository with frozen artifact checks.
     scopes: [rust, json, contracts]
     fast: [git-diff-check, standards-validate, cargo-metadata, cargo-fmt]
-    required: [repo-policy-strict, cargo-clippy, cargo-test, cargo-doc-tests]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests]
     extended: [artifact-checksums, contract-conformance]
   - id: rust-service
     purpose: Rust gateway, MCP adapter, or harness repository with owned lifecycle and transport seams.
     scopes: [rust, json, contracts]
     fast: [git-diff-check, standards-validate, cargo-metadata, cargo-fmt]
-    required: [repo-policy-strict, cargo-clippy, cargo-test, cargo-doc-tests]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests]
     extended: [artifact-checksums, contract-conformance, synthetic-boundary-tests]
   - id: rust-managed
     purpose: Rust game-mod repository with a narrow managed/native source-only boundary.
     scopes: [rust, csharp, shell, powershell, json, contracts]
     fast: [git-diff-check, standards-validate, cargo-fmt]
-    required: [repo-policy-strict, cargo-clippy, cargo-test, cargo-doc-tests, managed-source-probes, powershell-syntax, powershell-syntax-negative]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests, managed-source-probes, powershell-syntax, powershell-syntax-negative]
     extended: [artifact-checksums, managed-bridge-tests, exact-host-build]
   - id: web-php
     purpose: Static site with a PHP subscription endpoint and Composer-managed tests.

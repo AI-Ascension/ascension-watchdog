@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "44b403033f9c19a3e7b119bd32433f1cb1b1cc1f",
-    "bundle_digest": "sha256:30022718c9bbff2ff6deae7a42c2d7fae74b045a1c999aa62d84090afd037e84",
+    "commit": "ce4ca6dc4a202a276cf5387ae5c43011e3bbe88f",
+    "bundle_digest": "sha256:af5c0138aff3356cb1bb520c90e61bfc68efc1f8d4fa6f436570e7e3b231190a",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "f2c3e8e260d4506d9dbadee1c3384308c3e168242ccacf4b9151bc83a3a49bc9",
+  "profile_sha256": "0302041e94e9d1722b802ece444fd771614cf51bffe19f32a6ccd5ee28e41517",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -89,7 +89,7 @@
     },
     {
       "path": "standards/profiles.yaml",
-      "sha256": "2a59a9303c7049ab8e15c5edffd08772d86a90b8f8d8cff1595e41a14f4b8228"
+      "sha256": "d07e3c3177bea12638887394aaa19f118130d6c38fd7c514c471bdc91821557a"
     },
     {
       "path": "standards/repositories.yaml",
@@ -153,7 +153,7 @@
     },
     {
       "path": "standards/tools/standards-sync/src/main.rs",
-      "sha256": "6911fa3168e0adea9fe8d081385f7c32957104c81de066d2dfd24f356bb0c02f"
+      "sha256": "8dafb7fc9b06b5e1675fee2c955b60695d785803baadb22c30c2bd62c28128eb"
     }
   ],
   "protected_paths": [
