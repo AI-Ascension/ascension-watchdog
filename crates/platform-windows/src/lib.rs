@@ -20,7 +20,7 @@ mod admin_pipe;
 #[cfg(windows)]
 pub use admin_pipe::{
     AdminPipeClient, AdminPipePeer, AdminPipeServer, MAX_ADMIN_PIPE_FRAME,
-    validate_protected_credential_file,
+    read_protected_payload_file, validate_protected_credential_file,
 };
 
 #[cfg(windows)]
