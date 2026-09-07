@@ -3,12 +3,12 @@
 //! The native platform crate owns SCM status and dispatch. This module only
 //! binds that runner to the watchdog's real durable reconciliation loop. The
 //! SCM command line is intentionally closed: the service accepts `daemon
-//! --service` and, optionally, one absolute `--config` path. No credentials or
+//! --service --config` and one canonical absolute config path. No credentials or
 //! arbitrary child arguments are carried in the service command line.
 
 #![cfg(windows)]
 
-use crate::config::WatchdogConfig;
+use crate::config::{DesiredMode, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 use crate::runtime::Supervisor;
 use crate::service::ServiceLoop;
@@ -63,7 +63,7 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
                     args[0]
                 )));
             }
-            let config_path = service_config_path(global_config)?;
+            let config_path = canonical_service_config_path(&service_config_path(global_config)?)?;
             // Validate the closed config before mutating SCM. This reads only
             // the config document and never initializes the owner database.
             WatchdogConfig::from_file(&config_path)?;
@@ -92,18 +92,55 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
                     args[0]
                 )));
             }
-            // The owner store is the durable stop authority. A running service
-            // holds the singleton lock, so this safely refuses to race its
-            // reconciliation; after SCM has stopped it, this command commits
-            // Stopped before asking the native boundary to delete the service.
-            let config = WatchdogConfig::from_file(global_config)?;
-            let mut supervisor = Supervisor::open(config)?;
-            supervisor.request_stop(now_unix_ms())?;
             let plan = ServiceInstallPlan {
                 service_name: SERVICE_NAME.to_owned(),
                 executable: std::env::current_exe()?,
             };
-            plan.uninstall_after_durable_stop()
+            let config_input = service_config_path(global_config)?;
+            // Bind the operator's config to the fixed SCM service before
+            // opening its store or writing owner state. A missing service is
+            // idempotent and must not cause an alternate store to be opened.
+            let Some(binding) = plan
+                .bind_installed_service(&config_input)
+                .map_err(|error| platform_error(&error))?
+            else {
+                return Ok(Some(
+                    json!({
+                        "uninstalled": true,
+                        "service": SERVICE_NAME,
+                        "data_preserved": true,
+                        "already_absent": true,
+                    })
+                    .to_string(),
+                ));
+            };
+            // Use the canonical path captured from SCM. Re-resolving the
+            // operator's input here could follow a changed symlink to an
+            // alternate owner store after binding succeeded.
+            let config_path = binding.config_path().to_owned();
+            // A running service receives the authenticated SCM stop first. Its
+            // reconciliation thread persists Stopped and drains owned work;
+            // this command does not race its singleton store.
+            plan.stop_bound_service(&binding)
+                .map_err(|error| platform_error(&error))?;
+            // Once SCM is stopped, reopen the exact bound store and verify its
+            // durable stop state before any service deletion. If the service
+            // was already stopped, persist and reconcile the stop locally.
+            let config = WatchdogConfig::from_file(&config_path)?;
+            let mut supervisor = Supervisor::open(config)?;
+            if supervisor.status()?.desired_mode != DesiredMode::Stopped {
+                supervisor.request_stop(now_unix_ms())?;
+            }
+            let report = supervisor.reconcile_once(now_unix_ms())?;
+            if report.desired_mode != DesiredMode::Stopped
+                || !report.errors.is_empty()
+                || !report.quarantined.is_empty()
+            {
+                return Err(WatchdogError::Conflict(
+                    "bound watchdog store did not reach a clean Stopped reconciliation".to_owned(),
+                ));
+            }
+            plan.delete_bound_stopped_service(&binding)
                 .map_err(|error| platform_error(&error))?;
             Ok(Some(
                 json!({
@@ -191,25 +228,25 @@ fn run_service(config_path: &Path) -> Result<()> {
 fn parse_service_args(args: &[String]) -> Result<Option<PathBuf>> {
     let values = args.iter().skip(1).map(String::as_str).collect::<Vec<_>>();
     match values.as_slice() {
-        [SERVICE_COMMAND, SERVICE_SWITCH] => Ok(Some(default_config_path())),
         [SERVICE_COMMAND, SERVICE_SWITCH, CONFIG_SWITCH, path] => {
             let path = PathBuf::from(path);
-            validate_service_config_path(&path)?;
-            Ok(Some(path))
+            Ok(Some(canonical_service_config_path(&path)?))
         }
         [SERVICE_COMMAND, SERVICE_SWITCH, ..] => Err(WatchdogError::InvalidInput(
-            "Windows service accepts only `daemon --service [--config ABSOLUTE_PATH]`".to_owned(),
+            "Windows service accepts only `daemon --service --config ABSOLUTE_PATH`".to_owned(),
         )),
         _ => Ok(None),
     }
 }
 
 fn service_config_path(global_config: &Path) -> Result<PathBuf> {
-    if global_config == Path::new("config/watchdog.json") {
-        return Ok(default_config_path());
-    }
-    validate_service_config_path(global_config)?;
-    Ok(global_config.to_owned())
+    let path = if global_config == Path::new("config/watchdog.json") {
+        default_config_path()
+    } else {
+        global_config.to_owned()
+    };
+    validate_service_config_path(&path)?;
+    Ok(path)
 }
 
 fn default_config_path() -> PathBuf {
@@ -222,6 +259,7 @@ fn validate_service_config_path(path: &Path) -> Result<()> {
         || text.is_empty()
         || text.len() > MAX_SERVICE_CONFIG_BYTES
         || text.contains('\0')
+        || text.contains('"')
         || text.chars().any(char::is_control)
     {
         return Err(WatchdogError::InvalidInput(
@@ -229,6 +267,17 @@ fn validate_service_config_path(path: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn canonical_service_config_path(path: &Path) -> Result<PathBuf> {
+    validate_service_config_path(path)?;
+    let canonical = std::fs::canonicalize(path)?;
+    if !canonical.is_file() {
+        return Err(WatchdogError::InvalidInput(
+            "Windows service config is not a regular file".to_owned(),
+        ));
+    }
+    Ok(canonical)
 }
 
 fn take_option(args: &mut Vec<String>, option: &str) -> Option<String> {
@@ -263,12 +312,7 @@ mod tests {
     #[test]
     fn only_the_fixed_service_invocation_is_claimed() {
         assert!(parse_service_args(&args(&["daemon"])).unwrap().is_none());
-        assert_eq!(
-            parse_service_args(&args(&["daemon", "--service"]))
-                .unwrap()
-                .unwrap(),
-            PathBuf::from(DEFAULT_SERVICE_CONFIG)
-        );
+        assert!(parse_service_args(&args(&["daemon", "--service"])).is_err());
     }
 
     #[test]
@@ -280,5 +324,25 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn service_argument_path_is_canonical_and_must_be_a_file() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let configured = directory.path().join("watchdog.json");
+        std::fs::write(&configured, b"{}")?;
+        let parsed = parse_service_args(&args(&[
+            "daemon",
+            "--service",
+            "--config",
+            configured
+                .to_str()
+                .ok_or_else(|| WatchdogError::InvalidInput("test path was not UTF-8".to_owned()))?,
+        ]))?
+        .ok_or_else(|| {
+            WatchdogError::InvalidInput("service invocation was not claimed".to_owned())
+        })?;
+        assert_eq!(parsed, std::fs::canonicalize(configured)?);
+        Ok(())
     }
 }

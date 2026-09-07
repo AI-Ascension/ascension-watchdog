@@ -23,8 +23,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use windows_service::service::{
     Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceErrorControl,
-    ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceState, ServiceStatus,
-    ServiceType,
+    ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType, ServiceState,
+    ServiceStatus, ServiceType,
 };
 use windows_service::service_control_handler::{
     self, ServiceControlHandlerResult, ServiceStatusHandle,
@@ -1762,7 +1762,7 @@ impl ServiceInstallPlan {
             ));
         }
         validate_service_account(account_name)?;
-        validate_service_config_path(config_path)?;
+        let config_path = canonicalize_service_config_path(config_path)?;
         let executable = canonicalize_executable(&self.executable)?;
         let manager = ServiceManager::local_computer(
             None::<&str>,
@@ -1840,38 +1840,82 @@ impl ServiceInstallPlan {
         Ok(())
     }
 
-    /// Refuse to remove the service without a durable owner-local stop witness.
-    /// The platform boundary cannot authenticate or persist watchdog state, so
-    /// callers must use [`Self::uninstall_after_durable_stop`] after committing
-    /// `Stopped` through the owner store.
+    /// Refuse the legacy unbound removal path. The platform boundary cannot
+    /// authenticate an owner-local deployment from a bare service name, so
+    /// callers must bind SCM, stop that concrete binding, verify the owner
+    /// store, and then use the bound deletion operation.
     pub fn uninstall(&self) -> Result<(), PlatformError> {
         Err(PlatformError::Unsupported(
             "Windows service uninstall requires a durable owner-local Stopped intent".to_owned(),
         ))
     }
 
-    /// Stop the fixed service if present, wait for SCM's stopped state, and
-    /// mark it for deletion after the caller has committed a durable owner-local
-    /// `Stopped` intent. State and releases remain on disk.
-    pub fn uninstall_after_durable_stop(&self) -> Result<(), PlatformError> {
+    /// Bind the fixed service's SCM command line before opening the owner
+    /// store or writing a stop intent. A missing service is an idempotent
+    /// no-op; an existing service returns an opaque concrete binding that must
+    /// be supplied to both the bounded stop and deletion operations.
+    pub fn bind_installed_service(
+        &self,
+        config_path: &Path,
+    ) -> Result<Option<ServiceBinding>, PlatformError> {
+        if self.service_name != SERVICE_NAME {
+            return Err(PlatformError::Invalid(
+                "service name is not the fixed ascension-watchdog name".to_owned(),
+            ));
+        }
+        validate_service_config_path(config_path)?;
+        let expected_executable = canonicalize_executable(&self.executable)?;
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(service_error("OpenSCManager(verify uninstall)"))?;
+        let service = match manager.open_service(&self.service_name, ServiceAccess::QUERY_CONFIG) {
+            Ok(service) => service,
+            Err(error) if service_missing(&error) => return Ok(None),
+            Err(error) => return Err(service_error("OpenService(verify uninstall)")(error)),
+        };
+        let expected_config = canonicalize_service_config_path(config_path)?;
+        let service_config = service
+            .query_config()
+            .map_err(service_error("QueryServiceConfig(verify uninstall)"))?;
+        validate_installed_service_config(&service_config, &expected_executable, &expected_config)?;
+        Ok(Some(ServiceBinding {
+            executable: expected_executable,
+            config: expected_config,
+        }))
+    }
+
+    /// Stop a previously bound service and wait for SCM's stopped state. This
+    /// operation never deletes the service; the caller must verify the bound
+    /// owner store after the service's authenticated stop callback completes.
+    pub fn stop_bound_service(&self, binding: &ServiceBinding) -> Result<(), PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
                 "service name is not the fixed ascension-watchdog name".to_owned(),
             ));
         }
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
-            .map_err(service_error("OpenSCManager(uninstall)"))?;
+            .map_err(service_error("OpenSCManager(stop uninstall)"))?;
         let service = match manager.open_service(
             &self.service_name,
-            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+            ServiceAccess::QUERY_CONFIG | ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
         ) {
             Ok(service) => service,
-            Err(error) if service_missing(&error) => return Ok(()),
-            Err(error) => return Err(service_error("OpenService(uninstall)")(error)),
+            Err(error) if service_missing(&error) => {
+                return Err(PlatformError::IdentityMismatch(
+                    "bound watchdog service disappeared before stop".to_owned(),
+                ));
+            }
+            Err(error) => return Err(service_error("OpenService(stop uninstall)")(error)),
         };
+        // Re-query immediately before the SCM stop. The initial bind occurs
+        // before the owner store is opened; this closes the gap where another
+        // deployment could rewrite the fixed service while state is settling.
+        let service_config = service
+            .query_config()
+            .map_err(service_error("QueryServiceConfig(stop uninstall)"))?;
+        validate_installed_service_config(&service_config, &binding.executable, &binding.config)?;
         let status = service
             .query_status()
-            .map_err(service_error("QueryServiceStatus(uninstall)"))?;
+            .map_err(service_error("QueryServiceStatus(stop uninstall)"))?;
         if status.current_state != ServiceState::Stopped
             && status.current_state != ServiceState::StopPending
             && let Err(error) = service.stop()
@@ -1884,7 +1928,7 @@ impl ServiceInstallPlan {
             // deciding whether deletion is safe.
             let refreshed = service
                 .query_status()
-                .map_err(service_error("QueryServiceStatus(uninstall race)"))?;
+                .map_err(service_error("QueryServiceStatus(stop race)"))?;
             if refreshed.current_state != ServiceState::Stopped
                 && refreshed.current_state != ServiceState::StopPending
             {
@@ -1896,9 +1940,75 @@ impl ServiceInstallPlan {
         if status.current_state != ServiceState::Stopped {
             wait_for_service_state(&service, ServiceState::Stopped, SERVICE_STOP_TIMEOUT)?;
         }
+        // The service can be reconfigured while it is stopping. Re-bind before
+        // returning the stop witness so deletion cannot use stale authority.
+        let service_config = service
+            .query_config()
+            .map_err(service_error("QueryServiceConfig(after stop)"))?;
+        validate_installed_service_config(&service_config, &binding.executable, &binding.config)?;
+        Ok(())
+    }
+
+    /// Delete a concrete bound service only after it is stopped and the
+    /// command line has been re-queried. A missing service is idempotent once
+    /// the earlier stop witness was established.
+    pub fn delete_bound_stopped_service(
+        &self,
+        binding: &ServiceBinding,
+    ) -> Result<(), PlatformError> {
+        if self.service_name != SERVICE_NAME {
+            return Err(PlatformError::Invalid(
+                "service name is not the fixed ascension-watchdog name".to_owned(),
+            ));
+        }
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(service_error("OpenSCManager(delete uninstall)"))?;
+        let service = match manager.open_service(
+            &self.service_name,
+            ServiceAccess::QUERY_CONFIG | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
+        ) {
+            Ok(service) => service,
+            Err(error) if service_missing(&error) => return Ok(()),
+            Err(error) => return Err(service_error("OpenService(delete uninstall)")(error)),
+        };
+        let service_config = service
+            .query_config()
+            .map_err(service_error("QueryServiceConfig(delete uninstall)"))?;
+        validate_installed_service_config(&service_config, &binding.executable, &binding.config)?;
+        let status = service
+            .query_status()
+            .map_err(service_error("QueryServiceStatus(delete uninstall)"))?;
+        if status.current_state != ServiceState::Stopped {
+            return Err(PlatformError::Unavailable(
+                "SCM service was not stopped before deletion".to_owned(),
+            ));
+        }
+        let service_config = service
+            .query_config()
+            .map_err(service_error("QueryServiceConfig(before delete)"))?;
+        validate_installed_service_config(&service_config, &binding.executable, &binding.config)?;
         service
             .delete()
             .map_err(service_error("DeleteService(uninstall)"))
+    }
+}
+
+/// A concrete SCM binding captured by querying the fixed service's installed
+/// command line. Its fields remain private so callers cannot substitute a
+/// different executable or owner config between stop and delete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceBinding {
+    executable: PathBuf,
+    config: PathBuf,
+}
+
+impl ServiceBinding {
+    /// Return the canonical owner-local config path captured from SCM. The
+    /// caller must use this path for the post-stop store verification rather
+    /// than resolving its original operator input again.
+    #[must_use]
+    pub fn config_path(&self) -> &Path {
+        &self.config
     }
 }
 
@@ -1908,10 +2018,135 @@ fn validate_service_config_path(path: &Path) -> Result<(), PlatformError> {
         || text.is_empty()
         || text.len() > 512
         || text.contains('\0')
+        || text.contains('"')
         || text.chars().any(char::is_control)
     {
         return Err(PlatformError::Invalid(
             "Windows service config must be an absolute bounded path".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_service_config_path(path: &Path) -> Result<PathBuf, PlatformError> {
+    validate_service_config_path(path)?;
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| PlatformError::Io(format!("service config path: {error}")))?;
+    if !canonical.is_file() {
+        return Err(PlatformError::Invalid(
+            "Windows service config is not a regular file".to_owned(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn parse_service_command_line(command_line: &Path) -> Result<Vec<String>, PlatformError> {
+    let text = command_line.to_string_lossy();
+    let characters = text.chars().collect::<Vec<_>>();
+    let mut arguments = Vec::new();
+    let mut index = 0_usize;
+    while index < characters.len() {
+        while index < characters.len()
+            && matches!(characters[index], ' ' | '\t' | '\n' | '\r' | '\u{000b}')
+        {
+            index += 1;
+        }
+        if index == characters.len() {
+            break;
+        }
+        let mut argument = String::new();
+        let mut quoted = false;
+        loop {
+            let mut slashes = 0_usize;
+            while index < characters.len() && characters[index] == '\\' {
+                slashes += 1;
+                index += 1;
+            }
+            if index == characters.len() {
+                argument.extend(std::iter::repeat_n('\\', slashes));
+                break;
+            }
+            match characters[index] {
+                '"' => {
+                    argument.extend(std::iter::repeat_n('\\', slashes / 2));
+                    if slashes % 2 == 1 {
+                        argument.push('"');
+                        index += 1;
+                    } else if quoted && index + 1 < characters.len() && characters[index + 1] == '"'
+                    {
+                        argument.push('"');
+                        index += 2;
+                    } else {
+                        quoted = !quoted;
+                        index += 1;
+                    }
+                }
+                character
+                    if !quoted && matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000b}') =>
+                {
+                    argument.extend(std::iter::repeat_n('\\', slashes));
+                    break;
+                }
+                character => {
+                    argument.extend(std::iter::repeat_n('\\', slashes));
+                    argument.push(character);
+                    index += 1;
+                }
+            }
+        }
+        if quoted {
+            return Err(PlatformError::Invalid(
+                "Windows service command line contains an unterminated quote".to_owned(),
+            ));
+        }
+        arguments.push(argument);
+    }
+    Ok(arguments)
+}
+
+fn validate_installed_service_config(
+    service_config: &windows_service::service::ServiceConfig,
+    expected_executable: &Path,
+    expected_config: &Path,
+) -> Result<(), PlatformError> {
+    if service_config.service_type != ServiceType::OWN_PROCESS
+        || service_config.start_type != ServiceStartType::AutoStart
+    {
+        return Err(PlatformError::IdentityMismatch(
+            "SCM service type/start mode is not the fixed watchdog deployment".to_owned(),
+        ));
+    }
+    let arguments = parse_service_command_line(&service_config.executable_path)?;
+    validate_service_command_shape(&arguments)?;
+    let actual_executable = PathBuf::from(&arguments[0]);
+    let actual_config = PathBuf::from(&arguments[4]);
+    let canonical_executable = canonicalize_executable(&actual_executable)?;
+    let canonical_config = canonicalize_service_config_path(&actual_config)?;
+    if normalize_path(&actual_executable) != normalize_path(&canonical_executable)
+        || normalize_path(&canonical_executable) != normalize_path(expected_executable)
+    {
+        return Err(PlatformError::IdentityMismatch(
+            "SCM service executable is not the approved canonical watchdog executable".to_owned(),
+        ));
+    }
+    if normalize_path(&actual_config) != normalize_path(&canonical_config)
+        || normalize_path(&canonical_config) != normalize_path(expected_config)
+    {
+        return Err(PlatformError::IdentityMismatch(
+            "SCM service config is not the approved canonical owner-local config".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_service_command_shape(arguments: &[String]) -> Result<(), PlatformError> {
+    if arguments.len() != 5
+        || arguments[1] != "daemon"
+        || arguments[2] != SERVICE_SWITCH_ARGUMENT
+        || arguments[3] != SERVICE_CONFIG_ARGUMENT
+    {
+        return Err(PlatformError::IdentityMismatch(
+            "SCM service command line is not exactly daemon --service --config PATH".to_owned(),
         ));
     }
     Ok(())
@@ -3002,6 +3237,7 @@ fn service_error(operation: &'static str) -> impl Fn(windows_service::Error) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_service::service::ServiceConfig;
 
     #[test]
     fn windows_quoting_preserves_backslashes_before_quotes() {
@@ -3019,6 +3255,95 @@ mod tests {
     fn invalid_nonce_and_pipe_namespace_are_rejected() {
         assert!(validate_nonce("../old").is_err());
         assert!(validate_pipe_name(r"\\.\pipe\other").is_err());
+    }
+
+    #[test]
+    fn service_command_line_parser_requires_the_closed_daemon_grammar() {
+        let parsed = parse_service_command_line(Path::new(
+            r#"C:\Program Files\Ascension\watchdog.exe daemon --service --config "C:\ProgramData\Ascension\watchdog.json""#,
+        ))
+        .expect("closed service command line should parse");
+        assert_eq!(
+            parsed,
+            vec![
+                r"C:\Program Files\Ascension\watchdog.exe".to_owned(),
+                "daemon".to_owned(),
+                "--service".to_owned(),
+                "--config".to_owned(),
+                r"C:\ProgramData\Ascension\watchdog.json".to_owned(),
+            ]
+        );
+        let missing_config =
+            parse_service_command_line(Path::new(r"watchdog.exe daemon --service --config"))
+                .expect("parser should preserve the incomplete argument list");
+        assert!(validate_service_command_shape(&missing_config).is_err());
+        let extra_argument = parse_service_command_line(Path::new(
+            r"watchdog.exe daemon --service --config C:\one.json extra",
+        ))
+        .expect("parser should preserve the extra argument");
+        assert!(validate_service_command_shape(&extra_argument).is_err());
+        assert!(
+            parse_service_command_line(Path::new(
+                r#""C:\broken path\watchdog.exe daemon --service"#,
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn service_binding_rejects_a_different_existing_config() -> Result<(), PlatformError> {
+        let directory = std::env::temp_dir().join(format!(
+            "ascension-service-binding-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir(&directory)
+            .map_err(|error| PlatformError::Io(format!("test directory: {error}")))?;
+        let expected_config = directory.join("expected.json");
+        let other_config = directory.join("other.json");
+        std::fs::write(&expected_config, b"expected")
+            .map_err(|error| PlatformError::Io(format!("expected config: {error}")))?;
+        std::fs::write(&other_config, b"other")
+            .map_err(|error| PlatformError::Io(format!("other config: {error}")))?;
+        let executable = canonicalize_executable(
+            &std::env::current_exe()
+                .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?,
+        )?;
+        let command_line = format!(
+            "{} daemon --service --config {}",
+            quote_windows(executable.to_string_lossy().as_ref()),
+            quote_windows(other_config.to_string_lossy().as_ref()),
+        );
+        let service_config = ServiceConfig {
+            service_type: ServiceType::OWN_PROCESS,
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
+            executable_path: PathBuf::from(command_line),
+            load_order_group: None,
+            tag_id: 0,
+            dependencies: Vec::new(),
+            account_name: None,
+            display_name: "test".into(),
+        };
+        let result = validate_installed_service_config(
+            &service_config,
+            &executable,
+            &canonicalize_service_config_path(&expected_config)?,
+        );
+        assert!(matches!(result, Err(PlatformError::IdentityMismatch(_))));
+        let _ = std::fs::remove_dir_all(directory);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_service_is_an_idempotent_probe_result() {
+        let error = windows_service::Error::Winapi(std::io::Error::from_raw_os_error(
+            windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST.cast_signed(),
+        ));
+        assert!(service_missing(&error));
+        assert!(!service_not_active(&error));
     }
 
     #[test]

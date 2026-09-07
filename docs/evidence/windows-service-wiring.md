@@ -5,21 +5,29 @@ was installed, started, stopped, or removed in this validation, and no native
 SCM, reboot, desktop-session, or live-host claim follows.
 
 The watchdog executable now recognizes only the bounded service invocation
-`daemon --service`, optionally followed by one absolute `--config` path. The
-entrypoint uses `ascension-platform-windows::ServiceRuntime`; its readiness
-witness opens the existing owner-local state and completes a real
-`ServiceLoop::reconcile` before SCM receives `Running`. SCM stop is observed by
-the loop, persisted as `Stopped`, and only then reconciled into exact child
-cleanup.
+`daemon --service --config PATH`, where `PATH` is canonical, absolute, and
+validated before dispatch. The entrypoint uses
+`ascension-platform-windows::ServiceRuntime`; its readiness witness opens the
+existing owner-local state and completes a real `ServiceLoop::reconcile`
+before SCM receives `Running`. SCM stop is observed by the loop, persisted as
+`Stopped`, and only then reconciled into exact child cleanup.
 
 `watchdog service install` delegates to `ServiceInstallPlan`, while the Windows
 PowerShell wrappers remain thin packaging helpers. Installation does not start
 the service. The install wrapper requires a separate protected release verifier
 and runs `release inspect --manifest ... --root ...` successfully before any SCM
 mutation; a manifest's presence alone is not validation. Uninstallation first
-requires the configured owner-local store, persists `Stopped` intent, and then
-removes the SCM definition. It has no data-removal switch: state, credentials,
-and releases are preserved for separately audited lifecycle work.
+queries SCM and requires the fixed service name, own-process/automatic-start
+shape, canonical executable, and exact `daemon --service --config PATH`
+binding. Only that concrete binding may receive the bounded stop and final
+delete re-query; the owner-local store is opened after SCM stop and must reach
+a clean `Stopped` reconciliation. A missing service is an idempotent no-op.
+There is no data-removal switch: state, credentials, and releases are
+preserved for separately audited lifecycle work.
+
+The configuration file must also be provisioned with ACLs readable by the
+installed service identity. This source-only review does not claim that an
+operator-owned/inherited config is readable by the virtual service account.
 
 Validation from the isolated service-wiring worktree:
 

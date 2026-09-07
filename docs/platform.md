@@ -52,23 +52,33 @@ added. No background thread fabricates liveness.
 
 ## Windows and WSL requirements
 
-The Windows service is entered by `watchdog.exe daemon --service` through the
-existing `ServiceRuntime` SCM dispatcher. Its readiness witness opens the
-owner-local store and completes one real `ServiceLoop::reconcile` before SCM
-receives `Running`. SCM stop is first converted to durable `Stopped` intent on
-the reconciliation thread; only subsequent iterations perform child cleanup.
-The service command line is closed and bounded to the fixed marker plus one
-absolute `--config` path. Credentials are never command-line arguments.
+The Windows service is entered by `watchdog.exe daemon --service --config PATH`
+through the existing `ServiceRuntime` SCM dispatcher. `PATH` must be a
+canonical absolute validated file. Its readiness witness opens the owner-local
+store and completes one real `ServiceLoop::reconcile` before SCM receives
+`Running`. SCM stop is first converted to durable `Stopped` intent on the
+reconciliation thread; only subsequent iterations perform child cleanup.
+The service command line is closed and bounded to this exact grammar.
+Credentials are never command-line arguments.
 
 `watchdog service install` calls the native `ServiceInstallPlan` API, registers
 automatic start and bounded failure actions, and does not start or initialize
 the service. `deploy/windows/install.ps1` requires a separately protected
 release verifier and finishes `release inspect --manifest ... --root ...` before
 it mutates SCM; a manifest's presence is not release validation.
-`deploy/windows/uninstall.ps1` requires the owner-local config, persists
-`Stopped` intent before removing the SCM definition, and has no data-removal
+`deploy/windows/uninstall.ps1` requires the owner-local config. Before opening
+its store or changing state, the native boundary queries SCM and binds the
+fixed service to the canonical executable and exact `daemon --service
+--config PATH` command line. A concrete binding is re-queried before the
+authenticated bounded SCM stop and again before deletion. The stopped service
+then reopens the same singleton store and must complete a clean `Stopped`
+reconciliation; a missing service is idempotent. There is no data-removal
 switch. State, credentials, and releases remain for separately audited
 lifecycle work.
+
+The config file must be provisioned with ACLs readable by the installed service
+identity. This wiring evidence does not claim that an operator-owned or
+inherited config is readable by the virtual service account.
 
 The Windows service must be registered with SCM automatic start and bounded
 failure actions. The graphical host broker must select an explicitly approved
