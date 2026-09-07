@@ -45,8 +45,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE,
-    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, GetFileInformationByHandle, GetFileSizeEx,
-    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetFileInformationByHandle,
+    GetFileSizeEx, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -1139,6 +1139,18 @@ impl NamedPipeServer {
         }
         let nonce = nonce.into();
         validate_replay_policy(epoch, &nonce)?;
+        if let Some(previous_epoch) = self.expected_epoch {
+            if epoch <= previous_epoch {
+                return Err(PlatformError::IdentityMismatch(
+                    "lifecycle replay policy epoch must advance before its sequence can reset"
+                        .to_owned(),
+                ));
+            }
+        } else if self.expected_nonce.is_some() {
+            return Err(PlatformError::Invalid(
+                "lifecycle replay policy epoch is missing".to_owned(),
+            ));
+        }
         self.expected_epoch = Some(epoch);
         self.expected_nonce = Some(nonce);
         self.last_sequence = 0;
@@ -1737,8 +1749,7 @@ fn service_entry(
             let checkpoint = handler_checkpoint.fetch_add(1, Ordering::AcqRel);
             if let Ok(slot) = handler_status_slot.lock()
                 && let Some(status) = *slot
-            {
-                if let Err(error) = status.set_service_status(ServiceStatus {
+                && let Err(error) = status.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,
                     current_state: ServiceState::StopPending,
                     controls_accepted: windows_service::service::ServiceControlAccept::empty(),
@@ -1746,9 +1757,9 @@ fn service_entry(
                     checkpoint,
                     wait_hint: SERVICE_STOP_TIMEOUT,
                     process_id: None,
-                }) {
-                    eprintln!("ascension-watchdog failed to publish STOP_PENDING: {error}");
-                }
+                })
+            {
+                eprintln!("ascension-watchdog failed to publish STOP_PENDING: {error}");
             }
             ServiceControlHandlerResult::NoError
         }
@@ -1961,6 +1972,7 @@ fn read_exact_poll(
 ) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
+        ensure_io_deadline(handle, deadline, "lifecycle pipe read deadline elapsed")?;
         let remaining = &mut buffer[offset..];
         let count = u32::try_from(remaining.len())
             .map_err(|_| PlatformError::Invalid("pipe read exceeds bounds".to_owned()))?;
@@ -1990,15 +2002,11 @@ fn read_exact_poll(
                 usize::try_from(read)
                     .map_err(|_| PlatformError::Invalid("pipe read count overflow".to_owned()))?,
             );
+            ensure_io_deadline(handle, deadline, "lifecycle pipe read deadline elapsed")?;
             continue;
         }
         if code == ERROR_NO_DATA || code == ERROR_PIPE_LISTENING {
-            if Instant::now() >= deadline {
-                let _ = unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, null()) };
-                return Err(PlatformError::Timeout(
-                    "lifecycle pipe read deadline elapsed".to_owned(),
-                ));
-            }
+            ensure_io_deadline(handle, deadline, "lifecycle pipe read deadline elapsed")?;
             thread::sleep(
                 Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
             );
@@ -2017,6 +2025,7 @@ fn read_exact_poll(
 fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
+        ensure_io_deadline(handle, deadline, "lifecycle pipe write deadline elapsed")?;
         let remaining = &buffer[offset..];
         let count = u32::try_from(remaining.len())
             .map_err(|_| PlatformError::Invalid("pipe write exceeds bounds".to_owned()))?;
@@ -2045,16 +2054,12 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
                 usize::try_from(written)
                     .map_err(|_| PlatformError::Invalid("pipe write count overflow".to_owned()))?,
             );
+            ensure_io_deadline(handle, deadline, "lifecycle pipe write deadline elapsed")?;
             continue;
         }
         let code = unsafe { GetLastError() };
         if code == ERROR_NO_DATA || code == ERROR_PIPE_LISTENING {
-            if Instant::now() >= deadline {
-                let _ = unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, null()) };
-                return Err(PlatformError::Timeout(
-                    "lifecycle pipe write deadline elapsed".to_owned(),
-                ));
-            }
+            ensure_io_deadline(handle, deadline, "lifecycle pipe write deadline elapsed")?;
             thread::sleep(
                 Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
             );
@@ -2066,6 +2071,18 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
             ));
         }
         return Err(win32_error("WriteFile(lifecycle pipe)", code));
+    }
+    Ok(())
+}
+
+fn ensure_io_deadline(
+    handle: HANDLE,
+    deadline: Instant,
+    message: &str,
+) -> Result<(), PlatformError> {
+    if Instant::now() >= deadline {
+        let _ = unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, null()) };
+        return Err(PlatformError::Timeout(message.to_owned()));
     }
     Ok(())
 }
@@ -2119,15 +2136,15 @@ fn open_immutable_path(
     operation: &str,
 ) -> Result<OwnedHandle, PlatformError> {
     let wide_path = wide_path(path)?;
-    // A zero share mask prevents later writers, deleters, or renamers from
-    // opening the approved release object.  Holding the directory handle at
-    // the same boundary prevents the release directory itself from being
-    // removed or renamed while a child is owned.
+    // Share reads so the barrier and CreateProcessW can reopen the approved
+    // object, while deliberately denying write and delete/rename access.
+    // Holding the directory handle at the same boundary prevents the release
+    // directory itself from being removed or renamed while a child is owned.
     let raw = unsafe {
         CreateFileW(
             wide_path.as_ptr(),
             desired_access,
-            0,
+            FILE_SHARE_READ,
             null(),
             OPEN_EXISTING,
             flags_and_attributes,
@@ -2605,5 +2622,35 @@ mod tests {
             digest.hex(),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
+    }
+
+    #[test]
+    fn executable_barrier_can_reopen_a_read_shared_guard() -> Result<(), PlatformError> {
+        let executable = std::env::current_exe()
+            .map_err(|error| PlatformError::Io(format!("current test executable: {error}")))?;
+        let guard = IntegrityGuards::open(&executable)?;
+        guard.verify_path_barrier()
+    }
+
+    #[test]
+    fn replay_policy_cannot_reset_after_disconnect_without_a_new_epoch() -> Result<(), PlatformError>
+    {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let name = format!(
+            r"\\.\pipe\ascension-watchdog-replay-policy-{}-{nonce}",
+            std::process::id()
+        );
+        let mut server = NamedPipeServer::create(name)?;
+        server.configure_replay_policy(7, "epoch-seven")?;
+        server.last_sequence = 4;
+        server.reset_listener()?;
+
+        assert!(server.configure_replay_policy(7, "epoch-seven").is_err());
+        assert!(server.configure_replay_policy(6, "older").is_err());
+        server.configure_replay_policy(8, "epoch-eight")?;
+        assert_eq!(server.last_sequence, 0);
+        Ok(())
     }
 }

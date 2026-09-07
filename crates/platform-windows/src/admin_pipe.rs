@@ -729,6 +729,7 @@ fn read_exact_poll(
 ) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
+        ensure_io_deadline(handle, deadline, "admin pipe read deadline elapsed")?;
         let remaining = &mut buffer[offset..];
         let count = u32::try_from(remaining.len())
             .map_err(|_| PlatformError::Invalid("admin read exceeds frame bound".to_owned()))?;
@@ -758,14 +759,11 @@ fn read_exact_poll(
                 usize::try_from(read)
                     .map_err(|_| PlatformError::Invalid("admin read count overflow".to_owned()))?,
             );
+            ensure_io_deadline(handle, deadline, "admin pipe read deadline elapsed")?;
             continue;
         }
         if is_pending_io_error(code) {
-            if Instant::now() >= deadline {
-                return Err(PlatformError::Timeout(
-                    "admin pipe read deadline elapsed".to_owned(),
-                ));
-            }
+            ensure_io_deadline(handle, deadline, "admin pipe read deadline elapsed")?;
             thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
             continue;
         }
@@ -782,6 +780,7 @@ fn read_exact_poll(
 fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<(), PlatformError> {
     let mut offset = 0_usize;
     while offset < buffer.len() {
+        ensure_io_deadline(handle, deadline, "admin pipe write deadline elapsed")?;
         let remaining = &buffer[offset..];
         let count = u32::try_from(remaining.len())
             .map_err(|_| PlatformError::Invalid("admin write exceeds frame bound".to_owned()))?;
@@ -810,6 +809,7 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
                 .saturating_add(usize::try_from(written).map_err(|_| {
                     PlatformError::Invalid("admin write count overflow".to_owned())
                 })?);
+            ensure_io_deadline(handle, deadline, "admin pipe write deadline elapsed")?;
             continue;
         }
         let code = unsafe { GetLastError() };
@@ -818,14 +818,11 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
                 .saturating_add(usize::try_from(written).map_err(|_| {
                     PlatformError::Invalid("admin write count overflow".to_owned())
                 })?);
+            ensure_io_deadline(handle, deadline, "admin pipe write deadline elapsed")?;
             continue;
         }
         if is_pending_io_error(code) {
-            if Instant::now() >= deadline {
-                return Err(PlatformError::Timeout(
-                    "admin pipe write deadline elapsed".to_owned(),
-                ));
-            }
+            ensure_io_deadline(handle, deadline, "admin pipe write deadline elapsed")?;
             thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
             continue;
         }
@@ -835,6 +832,18 @@ fn write_all_poll(handle: HANDLE, buffer: &[u8], deadline: Instant) -> Result<()
             ));
         }
         return Err(win32_error("WriteFile(admin pipe)", code));
+    }
+    Ok(())
+}
+
+fn ensure_io_deadline(
+    handle: HANDLE,
+    deadline: Instant,
+    message: &str,
+) -> Result<(), PlatformError> {
+    if Instant::now() >= deadline {
+        let _ = unsafe { CancelIoEx(handle, null()) };
+        return Err(PlatformError::Timeout(message.to_owned()));
     }
     Ok(())
 }

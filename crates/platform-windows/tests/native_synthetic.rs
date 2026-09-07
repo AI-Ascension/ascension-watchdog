@@ -172,3 +172,23 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     assert!(!restarted.is_running()?);
     Ok(())
 }
+
+#[test]
+fn native_launch_reopens_integrity_barrier_before_resuming_child() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let launcher = WindowsProcessLauncher::new(config(&executable, &unique_nonce("barrier")))?;
+    let owner = launcher.launch(&launch_spec(
+        &executable,
+        directory.path(),
+        0,
+        &unique_nonce("barrier-child"),
+        vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
+    ))?;
+    assert!(owner.is_running()?);
+    assert_eq!(
+        owner.force_stop()?,
+        ascension_platform_windows::StopOutcome::Exited
+    );
+    Ok(())
+}
