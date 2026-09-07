@@ -3,8 +3,8 @@ profile_id = "planning-bootstrap"
 repository = "AI-Ascension/ascension-watchdog"
 owner = "ARCH"
 source_bundle = "AI-Ascension/.github"
-source_commit = "ce4ca6dc4a202a276cf5387ae5c43011e3bbe88f"
-source_digest = "sha256:af5c0138aff3356cb1bb520c90e61bfc68efc1f8d4fa6f436570e7e3b231190a"
+source_commit = "0f743fd4cce4428f813a6d6f50c51d4fb901561b"
+source_digest = "sha256:326b45c4ee3421788da0ec5c258b0c1fc9f562034a2fcac260c50223b5b9f13d"
 distribution = "local"
 scopes = [
     "markdown",

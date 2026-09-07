@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "ce4ca6dc4a202a276cf5387ae5c43011e3bbe88f",
-    "bundle_digest": "sha256:af5c0138aff3356cb1bb520c90e61bfc68efc1f8d4fa6f436570e7e3b231190a",
+    "commit": "0f743fd4cce4428f813a6d6f50c51d4fb901561b",
+    "bundle_digest": "sha256:326b45c4ee3421788da0ec5c258b0c1fc9f562034a2fcac260c50223b5b9f13d",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "0302041e94e9d1722b802ece444fd771614cf51bffe19f32a6ccd5ee28e41517",
+  "profile_sha256": "5e702ba5c80832b8e9c9ff4aba27c2667c9ee428ae25699dcfb066ea7830f3c7",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -25,7 +25,7 @@
     },
     {
       "path": "standards/RUST.md",
-      "sha256": "8280f2c00385197ad43bb3b9ae6badb5c93f6fa19c51157e963a22f658c36475"
+      "sha256": "779db88b5573488b920c778b60dbbfa01df5a0091547fc23d6082cbb6e8131fd"
     },
     {
       "path": "standards/TESTING_AND_CI.md",
