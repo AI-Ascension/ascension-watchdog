@@ -44,3 +44,22 @@ selection.
 Unix-only process/race cases are intentionally gated until native Windows
 containment tests exist. The storage and pure-policy regressions remain
 platform-neutral.
+# Root integration follow-up
+
+The eight assertions were rerun after integration into the watchdog branch:
+initially all eight failed. Bounded cleanup through the original `Child` object
+now fixes the post-spawn persistence-failure leak. The separate
+`process_cleanup` integration test aborts the real reconciler's identity write
+after its PID row commits, and verifies that the spawned process has exited.
+That test passes. Strict workspace Clippy passes.
+
+Current adversarial suite: **2 passed, 6 failed, 0 ignored**. Remaining failures
+are metadata corruption defaulting, wall-clock restart-budget reset, stale
+health, restore admission, read-only open/path replacement, and background
+descendant cleanup. They remain active release blockers, not expected-green
+exceptions. Store/policy and native-containment repairs are pending integration.
+
+The drop-based persisted-child test now passes because ordinary controller
+destruction cleans its child. This is **not** proof of abrupt owner-death
+recovery: destructor execution must not be assumed during a process kill.
+Native cgroup/Job owner-death tests remain required.

@@ -260,12 +260,27 @@ impl OwnedChild {
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
-        // Do not kill from Drop: a process identity mismatch must never turn
-        // destructor cleanup into an unsafe name/PID kill.  The runtime owns
-        // explicit, audited termination.
-        if self.child.try_wait().ok().flatten().is_some() {
-            self.join_readers_bounded(Duration::from_millis(50));
+        // This is the original Child object, never a reconstructed PID/name
+        // handle. Keep ownership until the child is reaped: on Unix an exited
+        // unreaped child retains its PID; Windows retains the process handle.
+        // Dropping during a post-spawn persistence failure must not detach it.
+        // This fallback cleans the direct child only; native cgroup/Job
+        // containment remains responsible for arbitrary descendants.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let _ = self.child.kill();
+                while Instant::now() < deadline {
+                    match self.child.try_wait() {
+                        Ok(Some(_)) | Err(_) => break,
+                        Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    }
+                }
+            }
+            Err(_) => {}
         }
+        self.join_readers_bounded(Duration::from_millis(50));
     }
 }
 
