@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "classification": "source-inventory-not-integrated-release",
+  "root_code_base": "e8932d5",
+  "reserved_descendants": 11,
+  "maximum_descendants": 12,
+  "actual_depth": 1,
+  "required_depth": 3,
+  "model_effort": "gpt-5.6-luna/max requested and accepted for all; first execution contexts observed for the first nine resumed threads in agent-registry.json",
+  "current_owners": [
+    {"agent":"fixture_review_resumed","task":"F29","scope":"fixture instance-wide unresolved guard including stopped sessions","base":"7cc9d01","status":"authoring"},
+    {"agent":"fixture_final_review","task":"V31","scope":"fixture transport/context/session review","base":"7cc9d01","status":"completed-no-go-stop-replacement-bypass"},
+    {"agent":"gateway_catalog_resumed","task":"G10","scope":"catalog request-response boundary and freshness repair","base":"97b7524","status":"authoring"},
+    {"agent":"windows_cleanup_resumed","task":"P12","scope":"Windows approved digest before CreateProcess and typed post-creation cleanup","base":"954e321","status":"authoring"},
+    {"agent":"intent_review_resumed","task":"A14","scope":"independent repaired host lease schema and reference semantics review","base":"2574008","status":"reviewing"},
+    {"agent":"lease_contract_review","task":"P13","scope":"read-only concrete Linux OS identity separation design","base":"954e321","status":"designing"},
+    {"agent":"managed_catalog_finish","task":"G11","scope":"managed strict size policy and production interop compile/first-dispatch repair","base":"484f979","status":"authoring"},
+    {"agent":"mod_native_finish","task":"G12","scope":"preserved native recovery callback and route changes only","base":"484f979","status":"authoring-native-dirty-handoff"},
+    {"agent":"harness_recovery_audit","task":"H8","scope":"durable provider result bytes/reuse plus exclusive execution schema migration","base":"c500bbc","status":"authoring"},
+    {"agent":"harness_resume_contract","task":"H10","scope":"completed episode CLI fast path and strict resume fingerprints; no H8 source overlap","base":"c500bbc","status":"authoring"},
+    {"agent":"admin_backup_finish","task":"W11","scope":"authenticated owner-loop backup and CLI; schema additions require root approval","base":"954e321","status":"authoring"}
+  ],
+  "root_work": {
+    "platform_candidate":"954e321",
+    "platform_tests":"locked Linux workspace all-target/all-feature tests passed with two native cgroup ignores; fmt and strict Linux/Windows GNU Clippy passed",
+    "platform_review":"no-go: Windows expected digest absent before process resume; post-CreateProcess error typing; DLL integrity and Linux same-UID isolation remain open",
+    "managed_transport_fixture":"new test-only recovery-transport-tests project from 484f979 links actual Rust listener/managed callback to synthetic host; uncommitted, build blocked by interop type mismatch returned to G11"
+  },
+  "critical_companion_gaps": [
+    "Gateway-issued grant install/renew/revoke consumers await accepted additive host-lease-control-v1; host-issued lease adoption was rejected as violating ownership",
+    "Harness pending recovery still lacks persisted full canonical payload/context and authorized recovery-sideband wiring",
+    "Explicit reconstruction and interrupted-unknown admission are not implemented by completed-episode fast path",
+    "Fixture raw runtime transports bypass host_tick fault controls; runtime archive/tombstones beyond 64 remain incomplete",
+    "Operational restore/rekey, activation/rollback and long-run archival remain separate tasks"
+  ],
+  "external_evidence":"No service installation, game/provider run, host reboot, release activation, push or merge in this wave. Native Windows, native cgroup service, live/reboot/soak and depth-3 evidence remain unverified/unmet."
+}
