@@ -169,6 +169,42 @@ pub struct JobOwnedProcess {
     force_timeout: Duration,
 }
 
+/// Classification for failures after Windows has created a child in the
+/// exact named Job Object.  The caller must retain the durable launch intent
+/// when the Job cannot be proven empty before returning the error.
+#[derive(Debug)]
+pub enum WindowsLaunchError {
+    /// No child was created, or the exact Job was proven empty after cleanup.
+    Ordinary(PlatformError),
+    /// A child may still be owned by the exact Job and cleanup was not proven.
+    CleanupUncertain(PlatformError),
+}
+
+impl std::fmt::Display for WindowsLaunchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ordinary(error) => write!(formatter, "Windows launch failed: {error}"),
+            Self::CleanupUncertain(error) => {
+                write!(formatter, "Windows launch cleanup is uncertain: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WindowsLaunchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Ordinary(error) | Self::CleanupUncertain(error) => Some(error),
+        }
+    }
+}
+
+impl From<PlatformError> for WindowsLaunchError {
+    fn from(error: PlatformError) -> Self {
+        Self::Ordinary(error)
+    }
+}
+
 /// Handles held for the complete owner lifetime so the approved executable
 /// bytes and its release directory cannot be replaced or modified underneath
 /// a running process.  The directory handle also protects DLL lookup files in
@@ -489,23 +525,16 @@ pub enum StopOutcome {
 #[derive(Debug)]
 pub struct WindowsProcessLauncher {
     config: WindowsPlatformConfig,
-    allowlist_guards: BTreeMap<crate::contract::ComponentKind, Arc<IntegrityGuards>>,
 }
 
 impl WindowsProcessLauncher {
     /// Validate configuration before any SCM, token, or process call.
     pub fn new(config: WindowsPlatformConfig) -> Result<Self, PlatformError> {
         config.validate()?;
-        let mut allowlist_guards = BTreeMap::new();
-        for (component, path) in &config.allowlisted_executables {
-            let executable = canonicalize_executable(path)?;
-            let guard = IntegrityGuards::open(&executable)?;
-            allowlist_guards.insert(*component, Arc::new(guard));
-        }
-        Ok(Self {
-            config,
-            allowlist_guards,
-        })
+        // Integrity guards are opened at launch time for the selected role.
+        // Recovery of a prepared named Job has no executable identity yet and
+        // must remain available when an unrelated configured role is absent.
+        Ok(Self { config })
     }
 
     /// Reopen and terminate one exact planned Job Object without a process
@@ -532,80 +561,106 @@ impl WindowsProcessLauncher {
     }
 
     /// Launch a direct executable with Job Object assignment before resume.
+    #[allow(clippy::too_many_lines)]
     pub fn launch(
         &self,
         specification: &WindowsLaunchSpec,
-    ) -> Result<JobOwnedProcess, PlatformError> {
-        specification.validate(&self.config)?;
-        validate_nonce(&specification.launch_nonce)?;
+    ) -> Result<JobOwnedProcess, WindowsLaunchError> {
+        specification
+            .validate(&self.config)
+            .map_err(WindowsLaunchError::Ordinary)?;
+        validate_nonce(&specification.launch_nonce).map_err(WindowsLaunchError::Ordinary)?;
         let approved = self
             .config
             .allowlisted_executables
             .get(&specification.component)
-            .ok_or_else(|| PlatformError::Unsupported("component is not allowlisted".to_owned()))?;
-        let executable = canonicalize_executable(&specification.executable)?;
-        let approved = canonicalize_executable(approved)?;
+            .ok_or_else(|| PlatformError::Unsupported("component is not allowlisted".to_owned()))
+            .map_err(WindowsLaunchError::Ordinary)?;
+        let executable = canonicalize_executable(&specification.executable)
+            .map_err(WindowsLaunchError::Ordinary)?;
+        let approved = canonicalize_executable(approved).map_err(WindowsLaunchError::Ordinary)?;
         if normalize_path(&executable) != normalize_path(&approved) {
-            return Err(PlatformError::IdentityMismatch(
-                "requested executable is outside the role allowlist".to_owned(),
+            return Err(WindowsLaunchError::Ordinary(
+                PlatformError::IdentityMismatch(
+                    "requested executable is outside the role allowlist".to_owned(),
+                ),
             ));
         }
-        let integrity = self
-            .allowlist_guards
-            .get(&specification.component)
-            .ok_or_else(|| {
-                PlatformError::Unsupported("component has no integrity guard".to_owned())
-            })?;
+        let integrity =
+            Arc::new(IntegrityGuards::open(&executable).map_err(WindowsLaunchError::Ordinary)?);
         if normalize_path(integrity.path()) != normalize_path(&executable) {
-            return Err(PlatformError::IdentityMismatch(
-                "integrity guard path differs from requested executable".to_owned(),
+            return Err(WindowsLaunchError::Ordinary(
+                PlatformError::IdentityMismatch(
+                    "integrity guard path differs from requested executable".to_owned(),
+                ),
             ));
         }
-        integrity.verify_path_barrier()?;
+        integrity
+            .verify_path_barrier()
+            .map_err(WindowsLaunchError::Ordinary)?;
         let session_id = match specification.session {
             SessionSelector::ActiveUser => match select_active_session() {
                 ActiveSession::Available(session) => session,
                 ActiveSession::WaitingForSession => {
-                    return Err(PlatformError::Unavailable(
+                    return Err(WindowsLaunchError::Ordinary(PlatformError::Unavailable(
                         "WAITING_FOR_SESSION: no active interactive user session".to_owned(),
-                    ));
+                    )));
                 }
             },
             SessionSelector::CurrentService | SessionSelector::Explicit(0) => {
-                current_process_session()?
+                current_process_session().map_err(WindowsLaunchError::Ordinary)?
             }
             SessionSelector::Explicit(session) => session,
         };
-        let job_name = job_name(&specification.launch_nonce)?;
-        let job = create_job(&job_name, self.config.max_processes)?;
+        let job_name =
+            job_name(&specification.launch_nonce).map_err(WindowsLaunchError::Ordinary)?;
+        let job = create_job(&job_name, self.config.max_processes)
+            .map_err(WindowsLaunchError::Ordinary)?;
         // A service normally runs in session 0.  Use the current token only
         // when the selected session is the caller's session (which keeps
         // unprivileged synthetic tests useful); otherwise obtain the target
         // interactive user's token through WTS.  HostBroker always follows
         // the same explicit session policy.
-        let caller_session = current_process_session()?;
+        let caller_session = current_process_session().map_err(WindowsLaunchError::Ordinary)?;
         let token = if caller_session == session_id {
             None
         } else {
-            Some(query_user_token(session_id)?)
+            Some(query_user_token(session_id).map_err(WindowsLaunchError::Ordinary)?)
         };
         let process = spawn_suspended_with_job(
             token.as_ref().map(OwnedHandle::raw),
             &job,
             &executable,
             specification,
-        )?;
+        )
+        .map_err(WindowsLaunchError::Ordinary)?;
         let (process_handle, thread_handle, pid) = process;
         if let Err(error) = integrity.verify_path_barrier() {
-            let _ = unsafe { TerminateJobObject(job.raw(), 1) };
-            return Err(error);
+            return Err(classify_spawn_cleanup(
+                &job,
+                launch_force_timeout(specification),
+                error,
+            ));
         }
         let resumed = unsafe { ResumeThread(thread_handle.raw()) };
         if resumed == u32::MAX {
-            let _ = unsafe { TerminateJobObject(job.raw(), 1) };
-            return Err(last_error("ResumeThread"));
+            return Err(classify_spawn_cleanup(
+                &job,
+                launch_force_timeout(specification),
+                last_error("ResumeThread"),
+            ));
         }
-        let creation_time = process_creation_time(process_handle.raw())?;
+        let creation_time = match process_creation_time(process_handle.raw()) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(classify_spawn_cleanup(
+                    &job,
+                    launch_force_timeout(specification),
+                    error,
+                ));
+            }
+        };
+        let force_timeout = launch_force_timeout(specification);
         let identity = ProcessIdentity {
             pid,
             creation_time_100ns: creation_time,
@@ -618,27 +673,73 @@ impl WindowsProcessLauncher {
             identity,
             process: process_handle,
             job,
-            integrity: Arc::clone(integrity),
+            integrity: Arc::clone(&integrity),
             graceful_timeout: Duration::from_millis(u64::from(specification.graceful_timeout_ms)),
             force_timeout: Duration::from_millis(u64::from(specification.force_timeout_ms)),
         };
         if let Err(error) = owner.verify_identity() {
-            let _ = owner.force_stop();
-            return Err(error);
+            return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
         }
-        if process_session(pid)? != session_id {
-            let _ = owner.force_stop();
-            return Err(PlatformError::IdentityMismatch(
-                "spawned process session differs from the selected session".to_owned(),
+        let observed_session = match process_session(pid) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
+            }
+        };
+        if observed_session != session_id {
+            return Err(classify_spawn_cleanup(
+                &owner.job,
+                force_timeout,
+                PlatformError::IdentityMismatch(
+                    "spawned process session differs from the selected session".to_owned(),
+                ),
             ));
         }
-        if !owner.is_member_running(pid)? {
-            let _ = owner.force_stop();
-            return Err(PlatformError::IdentityMismatch(
-                "spawned process is not a member of its Job Object".to_owned(),
+        let member = match owner.is_member_running(pid) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
+            }
+        };
+        if !member {
+            return Err(classify_spawn_cleanup(
+                &owner.job,
+                force_timeout,
+                PlatformError::IdentityMismatch(
+                    "spawned process is not a member of its Job Object".to_owned(),
+                ),
             ));
         }
         Ok(owner)
+    }
+}
+
+fn launch_force_timeout(specification: &WindowsLaunchSpec) -> Duration {
+    Duration::from_millis(u64::from(specification.force_timeout_ms))
+}
+
+/// Keep the exact Job handle authoritative while translating a post-spawn
+/// failure.  A failed terminate request or an unproved wait is explicitly
+/// uncertain; callers must retain the durable launch intent for reconciliation.
+fn classify_spawn_cleanup(
+    job: &OwnedHandle,
+    force_timeout: Duration,
+    launch_error: PlatformError,
+) -> WindowsLaunchError {
+    match terminate_job_and_wait(job, force_timeout) {
+        Ok(StopOutcome::Exited | StopOutcome::AlreadyExited) => {
+            WindowsLaunchError::Ordinary(launch_error)
+        }
+        Ok(StopOutcome::TimedOut) => {
+            WindowsLaunchError::CleanupUncertain(PlatformError::Timeout(format!(
+                "post-spawn launch validation failed ({launch_error}); exact Job cleanup timed out"
+            )))
+        }
+        Err(cleanup_error) => {
+            WindowsLaunchError::CleanupUncertain(PlatformError::Unavailable(format!(
+                "post-spawn launch validation failed ({launch_error}); exact Job cleanup failed: {cleanup_error}"
+            )))
+        }
     }
 }
 
@@ -2790,6 +2891,49 @@ mod tests {
         drop(job);
         assert_eq!(
             launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(1))?,
+            StopOutcome::AlreadyExited
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn planned_job_recovery_does_not_open_unrelated_allowlist_entries() -> Result<(), PlatformError>
+    {
+        let executable = std::env::current_exe()
+            .map_err(|error| PlatformError::Io(format!("current test executable: {error}")))?;
+        let nonce = format!(
+            "planned-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        );
+        let missing = std::env::temp_dir().join(format!("ascension-watchdog-missing-{nonce}.exe"));
+        assert!(!missing.exists(), "test fixture path unexpectedly exists");
+        let mut allowlisted_executables = BTreeMap::new();
+        allowlisted_executables.insert(
+            crate::contract::ComponentKind::Synthetic,
+            executable.clone(),
+        );
+        allowlisted_executables.insert(crate::contract::ComponentKind::Gateway, missing);
+        let launcher = WindowsProcessLauncher::new(WindowsPlatformConfig {
+            service_name: SERVICE_NAME.to_owned(),
+            pipe_name: format!(r"\\.\pipe\ascension-watchdog-test-{nonce}"),
+            allowlisted_executables,
+            authorized_peer_executable: executable,
+            max_arguments: 8,
+            max_environment: 8,
+            max_processes: 8,
+        })?;
+
+        // No named object exists for this fresh nonce. The exact planned-job
+        // recovery path must be independently idempotent; an unrelated
+        // missing executable must not be opened or block that conclusion.
+        assert_eq!(
+            launcher.force_cleanup_planned_containment(
+                &format!("{PLANNED_JOB_PREFIX}{nonce}"),
+                Duration::from_secs(1),
+            )?,
             StopOutcome::AlreadyExited
         );
         Ok(())
