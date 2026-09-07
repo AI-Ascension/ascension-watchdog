@@ -150,6 +150,16 @@ impl Supervisor {
         Ok(supervisor)
     }
 
+    /// Persist the operator's stop intent before the service performs any
+    /// corresponding cleanup. Windows SCM delivers stop on a control thread;
+    /// the owning reconciliation loop calls this method before its next
+    /// observation so a restart cannot mistake an interrupted stop for a
+    /// request to relaunch children.
+    pub(crate) fn request_stop(&mut self, now_ms: u64) -> Result<()> {
+        self.acquire_lock()?;
+        self.store.set_desired_mode_at(DesiredMode::Stopped, now_ms)
+    }
+
     fn from_store(store: Store, config: WatchdogConfig) -> Self {
         let policy = SupervisorPolicy::from_config(&config);
         let process_manager = RuntimeProcessManager::new(&config);

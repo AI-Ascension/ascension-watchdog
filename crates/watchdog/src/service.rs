@@ -8,7 +8,9 @@ use crate::config::DesiredMode;
 use crate::error::{Result, WatchdogError};
 use crate::runtime::{ReconcileReport, Supervisor};
 use crate::storage::now_unix_ms;
-use std::time::Duration;
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Owns the controller and its monotonic sequence of completed loop iterations.
 pub struct ServiceLoop {
@@ -98,6 +100,24 @@ impl ServiceLoop {
     /// the operator can inspect or start the deployment. Notifications reflect
     /// successful reconciliation on this same thread, never a transport worker.
     pub fn run_until_stopped(&mut self) -> Result<()> {
+        self.run_until_stopped_with(|| false)
+    }
+
+    /// Run the loop while observing an OS-service stop request.
+    ///
+    /// The platform callback only publishes the bounded stop signal. This
+    /// method turns that signal into durable `Stopped` intent on the owning
+    /// reconciliation thread before the next reconciliation can stop any
+    /// child. The flag is deliberately not itself treated as cleanup proof.
+    #[cfg(windows)]
+    pub fn run_until_stopped_with_scm_stop(&mut self, stop: &Arc<Mutex<bool>>) -> Result<()> {
+        self.run_until_stopped_with(|| stop.lock().map(|value| *value).unwrap_or(true))
+    }
+
+    fn run_until_stopped_with<F>(&mut self, mut stop_requested: F) -> Result<()>
+    where
+        F: FnMut() -> bool,
+    {
         let admin = self
             .supervisor
             .admin_configuration()
@@ -130,9 +150,18 @@ impl ServiceLoop {
                 "probe interval must be below half the systemd watchdog deadline".to_owned(),
             ));
         }
+        let mut stop_committed = false;
         loop {
-            if let Some((queue, _server)) = &admin {
-                self.drain_admin(queue, now_unix_ms());
+            if stop_requested() && !stop_committed {
+                // This transaction is intentionally ahead of the first
+                // reconciliation that can perform process cleanup.
+                self.supervisor.request_stop(now_unix_ms())?;
+                stop_committed = true;
+            }
+            if !stop_committed {
+                if let Some((queue, _server)) = &admin {
+                    self.drain_admin(queue, now_unix_ms());
+                }
             }
             let report = self.reconcile(now_unix_ms())?;
             #[cfg(target_os = "linux")]
@@ -142,7 +171,7 @@ impl ServiceLoop {
                     &format!("watchdog_loop={:?}", self.health.snapshot().phase),
                 )
                 .map_err(WatchdogError::InvalidInput)?;
-            if admin.is_none()
+            if (admin.is_none() || stop_committed)
                 && report.desired_mode == DesiredMode::Stopped
                 && self.supervisor.has_no_owned_children()
                 && report.quarantined.is_empty()
@@ -152,7 +181,45 @@ impl ServiceLoop {
                 notifier.stopping().map_err(WatchdogError::InvalidInput)?;
                 return Ok(());
             }
-            std::thread::sleep(self.probe_interval);
+            // Keep the configured reconciliation cadence while polling the
+            // bounded SCM flag often enough that a long (but valid) probe
+            // interval cannot consume the service stop deadline.
+            let deadline = Instant::now() + self.probe_interval;
+            while Instant::now() < deadline {
+                if stop_requested() {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(remaining.min(Duration::from_millis(250)));
+            }
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::{DesiredMode, Supervisor, WatchdogConfig};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn scm_stop_is_persisted_before_a_stopped_reconciliation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = WatchdogConfig {
+            database: directory.path().join("watchdog.sqlite3"),
+            desired_mode: DesiredMode::Running,
+            ..WatchdogConfig::default()
+        };
+        let supervisor = Supervisor::initialize(config)?;
+        let mut service = ServiceLoop::new(supervisor, Duration::from_millis(1))?;
+        let stop = Arc::new(Mutex::new(true));
+
+        service.run_until_stopped_with_scm_stop(&stop)?;
+
+        assert_eq!(
+            service.supervisor.status()?.desired_mode,
+            DesiredMode::Stopped
+        );
+        Ok(())
     }
 }

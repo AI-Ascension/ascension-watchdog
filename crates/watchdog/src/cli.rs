@@ -52,6 +52,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "backup"
                 | "daemon"
                 | "run"
+                | "service"
                 | "job"
                 | "attempt"
                 | "help"
@@ -68,6 +69,17 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
     if args[0] == "--version" || args[0] == "version" {
         return Ok(Some(env!("CARGO_PKG_VERSION").to_string()));
     }
+    #[cfg(windows)]
+    if args.first().is_some_and(|arg| arg == "service")
+        && args
+            .iter()
+            .position(|arg| arg == "--config")
+            .is_some_and(|index| index + 1 >= args.len())
+    {
+        return Err(WatchdogError::InvalidInput(
+            "service --config requires an absolute path".to_owned(),
+        ));
+    }
     let config_path = take_option(&mut args, "--config")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
@@ -82,6 +94,12 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
             operator_command(&command, &mut args, &config_path)
         }
         "daemon" | "run" => daemon_command(&mut args, &config_path),
+        #[cfg(windows)]
+        "service" => crate::windows_service::service_command(&mut args, &config_path),
+        #[cfg(not(windows))]
+        "service" => Err(WatchdogError::Unsupported(
+            "Windows service commands are unavailable on this target".to_owned(),
+        )),
         "job" => job_command(&mut args, &config_path),
         "attempt" => attempt_command(&mut args, &config_path),
         other => Err(WatchdogError::InvalidInput(format!(
@@ -723,5 +741,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

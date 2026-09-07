@@ -79,6 +79,9 @@ const MAX_IMAGE_PATH: usize = 32_768;
 const JOB_NAME_PREFIX: &str = r"Local\ascension-watchdog-";
 const PIPE_NAME_PREFIX: &str = r"\\.\pipe\ascension-watchdog-";
 const SERVICE_NAME: &str = "ascension-watchdog";
+const SERVICE_CONFIG_ARGUMENT: &str = "--config";
+const SERVICE_SWITCH_ARGUMENT: &str = "--service";
+const DEFAULT_SERVICE_CONFIG: &str = r"C:\ProgramData\Ascension\Watchdog\watchdog.json";
 const HEALTH_STALE_AFTER: Duration = Duration::from_secs(90);
 const SERVICE_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1735,12 +1738,29 @@ impl ServiceInstallPlan {
         account_name: &str,
         account_password: Option<&str>,
     ) -> Result<(), PlatformError> {
+        self.install_as_with_config(
+            account_name,
+            account_password,
+            Path::new(DEFAULT_SERVICE_CONFIG),
+        )
+    }
+
+    /// Install with an explicit, non-secret configuration path. The service
+    /// command line remains closed and bounded; credentials are never accepted
+    /// as launch arguments.
+    pub fn install_as_with_config(
+        &self,
+        account_name: &str,
+        account_password: Option<&str>,
+        config_path: &Path,
+    ) -> Result<(), PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
                 "service name is not the fixed ascension-watchdog name".to_owned(),
             ));
         }
         validate_service_account(account_name)?;
+        validate_service_config_path(config_path)?;
         let executable = canonicalize_executable(&self.executable)?;
         let manager = ServiceManager::local_computer(
             None::<&str>,
@@ -1754,7 +1774,12 @@ impl ServiceInstallPlan {
             start_type: windows_service::service::ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: executable,
-            launch_arguments: vec!["daemon".into()],
+            launch_arguments: vec![
+                "daemon".into(),
+                SERVICE_SWITCH_ARGUMENT.into(),
+                SERVICE_CONFIG_ARGUMENT.into(),
+                config_path.as_os_str().to_owned(),
+            ],
             dependencies: Vec::new(),
             account_name: Some(account_name.into()),
             account_password: account_password.map(Into::into),
@@ -1812,6 +1837,58 @@ impl ServiceInstallPlan {
         }
         Ok(())
     }
+
+    /// Stop the fixed service if present, wait for SCM's stopped state, and
+    /// mark it for deletion. State and releases are intentionally outside this
+    /// operation and remain on disk for a later explicit data-removal step.
+    pub fn uninstall(&self) -> Result<(), PlatformError> {
+        if self.service_name != SERVICE_NAME {
+            return Err(PlatformError::Invalid(
+                "service name is not the fixed ascension-watchdog name".to_owned(),
+            ));
+        }
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(service_error("OpenSCManager(uninstall)"))?;
+        let service = match manager.open_service(
+            &self.service_name,
+            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+        ) {
+            Ok(service) => service,
+            Err(error) if service_missing(&error) => return Ok(()),
+            Err(error) => return Err(service_error("OpenService(uninstall)")(error)),
+        };
+        let status = service
+            .query_status()
+            .map_err(service_error("QueryServiceStatus(uninstall)"))?;
+        if status.current_state != ServiceState::Stopped
+            && status.current_state != ServiceState::StopPending
+        {
+            service
+                .stop()
+                .map_err(service_error("ControlService(stop uninstall)"))?;
+        }
+        if status.current_state != ServiceState::Stopped {
+            wait_for_service_state(&service, ServiceState::Stopped, SERVICE_STOP_TIMEOUT)?;
+        }
+        service
+            .delete()
+            .map_err(service_error("DeleteService(uninstall)"))
+    }
+}
+
+fn validate_service_config_path(path: &Path) -> Result<(), PlatformError> {
+    let text = path.to_string_lossy();
+    if !path.is_absolute()
+        || text.is_empty()
+        || text.len() > 512
+        || text.contains('\0')
+        || text.chars().any(char::is_control)
+    {
+        return Err(PlatformError::Invalid(
+            "Windows service config must be an absolute bounded path".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_service_account(account_name: &str) -> Result<(), PlatformError> {
@@ -2861,6 +2938,16 @@ fn service_exists(error: &windows_service::Error) -> bool {
         error,
         windows_service::Error::Winapi(error)
             if error.raw_os_error() == Some(ERROR_SERVICE_EXISTS.cast_signed())
+    )
+}
+
+fn service_missing(error: &windows_service::Error) -> bool {
+    matches!(
+        error,
+        windows_service::Error::Winapi(error)
+            if error.raw_os_error() == Some(
+                windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST.cast_signed(),
+            )
     )
 }
 

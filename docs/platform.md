@@ -52,6 +52,20 @@ added. No background thread fabricates liveness.
 
 ## Windows and WSL requirements
 
+The Windows service is entered by `watchdog.exe daemon --service` through the
+existing `ServiceRuntime` SCM dispatcher. Its readiness witness opens the
+owner-local store and completes one real `ServiceLoop::reconcile` before SCM
+receives `Running`. SCM stop is first converted to durable `Stopped` intent on
+the reconciliation thread; only subsequent iterations perform child cleanup.
+The service command line is closed and bounded to the fixed marker plus one
+absolute `--config` path. Credentials are never command-line arguments.
+
+`watchdog service install` calls the native `ServiceInstallPlan` API, registers
+automatic start and bounded failure actions, and does not start or initialize
+the service. `deploy/windows/uninstall.ps1` removes only the SCM definition by
+default; state and releases remain unless an operator supplies the explicit
+data-removal switch and exact path.
+
 The Windows service must be registered with SCM automatic start and bounded
 failure actions. The graphical host broker must select an explicitly approved
 active user session, authenticate a local named pipe with an owner-only ACL,

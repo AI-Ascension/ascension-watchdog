@@ -32,6 +32,8 @@ pub mod release;
 pub mod runtime;
 pub mod service;
 pub mod storage;
+#[cfg(windows)]
+pub mod windows_service;
 
 pub use config::{ComponentConfig, DesiredMode, WatchdogConfig};
 pub use error::{Result, WatchdogError};
