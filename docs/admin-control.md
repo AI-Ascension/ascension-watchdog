@@ -129,6 +129,15 @@ job. A replayed idempotency key returns the retained response without
 reapplying the transition. This is a watchdog disposition only; it does not
 cancel, settle, or retry a gateway, host, provider, or gameplay operation.
 
+Operational limitation: the current claim helper accepts a worker identifier
+from its caller. Automatic scheduler-to-harness binding and authenticated worker
+completion/recovery are not integrated yet. This reservation therefore protects
+the persisted identifier; it is not proof that a running harness is paused,
+terminated, or unable to obtain a different caller-supplied identifier. A
+quarantine receipt confirms the durable watchdog disposition only. Use the
+separate exact-process stop authority when operational quiescence is required,
+and retain uncertainty if cleanup cannot be confirmed.
+
 Duplicate JSON member names are rejected recursively before typed decoding.
 Unknown fields, unknown command kinds, invalid UUIDs, unsafe identifiers,
 invalid digest values, and restore without rekey fail closed. Request and
