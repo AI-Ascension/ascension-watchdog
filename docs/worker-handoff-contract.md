@@ -23,6 +23,24 @@ Only a verified live worker from the configured component may receive dispatch.
 The single-instance deployment has one durable worker reservation, including
 unknown attempts. A new worker boot does not free that reservation.
 
+The optional watchdog `worker` object provides `component_id`, `endpoint`,
+`credential_path`, `allowed_peer_sid`, `worker_profile_digest`, `release_digest`,
+`worker_config_digest`, `schema_digest`, and `timeout_ms`. It binds the configured
+`harness` component and requires its executable hash even in synthetic mode.
+The schema digest must equal this frozen worker contract; the other digests are
+lowercase SHA-256 values. The relative request deadline is 1..5000 milliseconds.
+Missing `worker` remains disabled and is omitted from serialized configuration,
+preserving existing configuration digests. New worker configuration is rejected
+by older closed-config consumers rather than silently ignored.
+
+Configuration validation is pure: it does not open secrets, bind endpoints,
+claim jobs or grant authority. Worker endpoints and credential references must
+be distinct from operator-control references. Native peer/process authentication,
+protected-handle checks and actual file-identity separation are required again
+when the client opens them; lexical path checks are not filesystem security.
+No boot, lease or authority generation may be supplied in this object. Those
+identities come from the current live authenticated worker and durable owner.
+
 ## Durable identity
 
 The logical identity is the complete tuple:

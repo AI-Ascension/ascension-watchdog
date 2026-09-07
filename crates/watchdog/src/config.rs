@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 #[path = "config_file.rs"]
 mod config_file;
 
+#[path = "config_worker.rs"]
+mod config_worker;
+pub use config_worker::WorkerConfig;
+
 const MAX_COMPONENTS: usize = 16;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 8 * 1024;
@@ -238,6 +242,9 @@ pub struct WatchdogConfig {
     /// Explicit local authenticated control endpoint and protected credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminConfig>,
+    /// Explicit immutable harness-worker binding. Absence leaves scheduling disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerConfig>,
     /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
     /// its digest; the Linux launch helper uses it only as a protected,
@@ -269,6 +276,7 @@ impl Default for WatchdogConfig {
             components: Vec::new(),
             allow_synthetic_children: false,
             admin: None,
+            worker: None,
             source_path: None,
         }
     }
@@ -307,6 +315,9 @@ impl WatchdogConfig {
     pub fn validate(&self) -> Result<()> {
         if let Some(admin) = &self.admin {
             admin.validate()?;
+        }
+        if let Some(worker) = &self.worker {
+            worker.validate(self)?;
         }
         if self.schema_version != 1 {
             return Err(WatchdogError::InvalidInput(format!(
