@@ -1852,8 +1852,9 @@ impl ServiceInstallPlan {
 
     /// Bind the fixed service's SCM command line before opening the owner
     /// store or writing a stop intent. A missing service is an idempotent
-    /// no-op; an existing service returns an opaque concrete binding that must
-    /// be supplied to both the bounded stop and deletion operations.
+    /// no-op; an existing service returns an opaque concrete binding for the
+    /// bounded stop operation, whose native witness is then consumed by
+    /// deletion.
     pub fn bind_installed_service(
         &self,
         config_path: &Path,
@@ -1883,10 +1884,16 @@ impl ServiceInstallPlan {
         }))
     }
 
-    /// Stop a previously bound service and wait for SCM's stopped state. This
-    /// operation never deletes the service; the caller must verify the bound
-    /// owner store after the service's authenticated stop callback completes.
-    pub fn stop_bound_service(&self, binding: &ServiceBinding) -> Result<(), PlatformError> {
+    /// Stop a previously bound service and wait for SCM's stopped state.
+    ///
+    /// The returned opaque witness proves only the native SCM state for this
+    /// exact binding. It does not prove the watchdog owner store has durable
+    /// `Stopped` intent; the owner boundary must establish that separately
+    /// before consuming the witness for deletion.
+    pub fn stop_bound_service(
+        &self,
+        binding: &ServiceBinding,
+    ) -> Result<StoppedServiceWitness, PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
                 "service name is not the fixed ascension-watchdog name".to_owned(),
@@ -1946,15 +1953,26 @@ impl ServiceInstallPlan {
             .query_config()
             .map_err(service_error("QueryServiceConfig(after stop)"))?;
         validate_installed_service_config(&service_config, &binding.executable, &binding.config)?;
-        Ok(())
+        let status = service
+            .query_status()
+            .map_err(service_error("QueryServiceStatus(after stop)"))?;
+        if status.current_state != ServiceState::Stopped {
+            return Err(PlatformError::Unavailable(
+                "SCM service was not stopped after bounded stop".to_owned(),
+            ));
+        }
+        Ok(StoppedServiceWitness {
+            binding: binding.clone(),
+        })
     }
 
-    /// Delete a concrete bound service only after it is stopped and the
-    /// command line has been re-queried. A missing service is idempotent once
-    /// the earlier stop witness was established.
+    /// Delete a concrete bound service only after consuming the opaque native
+    /// stop witness. The installed command line and SCM state are re-queried
+    /// immediately before deletion. A missing service is idempotent once the
+    /// witness has been established.
     pub fn delete_bound_stopped_service(
         &self,
-        binding: &ServiceBinding,
+        stopped: StoppedServiceWitness,
     ) -> Result<(), PlatformError> {
         if self.service_name != SERVICE_NAME {
             return Err(PlatformError::Invalid(
@@ -1971,6 +1989,7 @@ impl ServiceInstallPlan {
             Err(error) if service_missing(&error) => return Ok(()),
             Err(error) => return Err(service_error("OpenService(delete uninstall)")(error)),
         };
+        let StoppedServiceWitness { binding } = stopped;
         let service_config = service
             .query_config()
             .map_err(service_error("QueryServiceConfig(delete uninstall)"))?;
@@ -2009,6 +2028,27 @@ impl ServiceBinding {
     #[must_use]
     pub fn config_path(&self) -> &Path {
         &self.config
+    }
+}
+
+/// Opaque native SCM stop witness.
+///
+/// This type has no public constructor or mutable fields. It proves only that
+/// [`ServiceInstallPlan::stop_bound_service`] revalidated this exact binding
+/// and observed SCM `Stopped`; it is not a proof of durable owner-store intent
+/// or reconciliation.
+#[derive(Debug)]
+pub struct StoppedServiceWitness {
+    binding: ServiceBinding,
+}
+
+impl StoppedServiceWitness {
+    /// Return the exact binding captured when SCM stop completed. This is
+    /// useful for an owner boundary to compare its durable-store witness
+    /// before consuming this token for deletion.
+    #[must_use]
+    pub fn binding(&self) -> &ServiceBinding {
+        &self.binding
     }
 }
 

@@ -13,7 +13,9 @@ use crate::error::{Result, WatchdogError};
 use crate::runtime::Supervisor;
 use crate::service::ServiceLoop;
 use crate::storage::now_unix_ms;
-use ascension_platform_windows::{PlatformError, ServiceInstallPlan, ServiceRuntime};
+use ascension_platform_windows::{
+    PlatformError, ServiceBinding, ServiceInstallPlan, ServiceRuntime, StoppedServiceWitness,
+};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -114,34 +116,26 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
                     .to_string(),
                 ));
             };
-            // Use the canonical path captured from SCM. Re-resolving the
-            // operator's input here could follow a changed symlink to an
-            // alternate owner store after binding succeeded.
-            let config_path = binding.config_path().to_owned();
+            // The owner boundary below uses the canonical config path captured
+            // from SCM. Re-resolving the operator's input could follow a
+            // changed symlink to an alternate owner store after binding.
             // A running service receives the authenticated SCM stop first. Its
             // reconciliation thread persists Stopped and drains owned work;
-            // this command does not race its singleton store.
-            plan.stop_bound_service(&binding)
+            // this command does not race its singleton store. The returned
+            // witness proves only native SCM state; the owner-store witness
+            // below remains a separate required capability.
+            let native_stop = plan
+                .stop_bound_service(&binding)
                 .map_err(|error| platform_error(&error))?;
-            // Once SCM is stopped, reopen the exact bound store and verify its
-            // durable stop state before any service deletion. If the service
-            // was already stopped, persist and reconcile the stop locally.
-            let config = WatchdogConfig::from_file(&config_path)?;
-            let mut supervisor = Supervisor::open(config)?;
-            if supervisor.status()?.desired_mode != DesiredMode::Stopped {
-                supervisor.request_stop(now_unix_ms())?;
-            }
-            let report = supervisor.reconcile_once(now_unix_ms())?;
-            if report.desired_mode != DesiredMode::Stopped
-                || !report.errors.is_empty()
-                || !report.quarantined.is_empty()
-            {
-                return Err(WatchdogError::Conflict(
-                    "bound watchdog store did not reach a clean Stopped reconciliation".to_owned(),
-                ));
-            }
-            plan.delete_bound_stopped_service(&binding)
-                .map_err(|error| platform_error(&error))?;
+            // Once SCM is stopped, reopen the exact bound store and mint the
+            // private durable owner witness only after Stopped intent and a
+            // clean persistent reconciliation are observed. Deletion consumes
+            // both this witness and the native SCM witness.
+            delete_durably_stopped_service(
+                &plan,
+                native_stop,
+                mint_durably_stopped_deployment(&binding),
+            )?;
             Ok(Some(
                 json!({
                     "uninstalled": true,
@@ -155,6 +149,72 @@ pub fn service_command(args: &mut Vec<String>, global_config: &Path) -> Result<O
             "unknown service command {other}"
         ))),
     }
+}
+
+/// Private owner-store capability issued only after the binding's config has
+/// opened the matching watchdog store, durable `Stopped` intent has been
+/// persisted, and a clean reconciliation has completed. The platform-native
+/// SCM witness is intentionally separate because this crate owns the store
+/// semantics while the platform crate owns SCM.
+#[derive(Debug)]
+struct DurablyStoppedDeployment {
+    binding: ServiceBinding,
+}
+
+fn mint_durably_stopped_deployment(binding: &ServiceBinding) -> Result<DurablyStoppedDeployment> {
+    let config_path = binding.config_path().to_owned();
+    let config = WatchdogConfig::from_file(&config_path)?;
+    let mut supervisor = Supervisor::open(config)?;
+    if supervisor.status()?.desired_mode != DesiredMode::Stopped {
+        supervisor.request_stop(now_unix_ms())?;
+    }
+    let report = supervisor.reconcile_once(now_unix_ms())?;
+    if report.desired_mode != DesiredMode::Stopped
+        || !report.errors.is_empty()
+        || !report.quarantined.is_empty()
+    {
+        return Err(WatchdogError::Conflict(
+            "bound watchdog store did not reach a clean Stopped reconciliation".to_owned(),
+        ));
+    }
+    let persisted = supervisor.status()?;
+    if persisted.desired_mode != DesiredMode::Stopped {
+        return Err(WatchdogError::Conflict(
+            "bound watchdog store did not persist Stopped intent".to_owned(),
+        ));
+    }
+    Ok(DurablyStoppedDeployment {
+        binding: binding.clone(),
+    })
+}
+
+/// Keep the owner witness check ahead of the native deletion seam. This
+/// generic helper is deliberately small so a failed owner proof can be tested
+/// without installing or deleting an SCM service.
+fn with_durably_stopped_deployment<F>(
+    owner_stop: Result<DurablyStoppedDeployment>,
+    delete: F,
+) -> Result<()>
+where
+    F: FnOnce(DurablyStoppedDeployment) -> Result<()>,
+{
+    delete(owner_stop?)
+}
+
+fn delete_durably_stopped_service(
+    plan: &ServiceInstallPlan,
+    native_stop: StoppedServiceWitness,
+    owner_stop: Result<DurablyStoppedDeployment>,
+) -> Result<()> {
+    with_durably_stopped_deployment(owner_stop, |owner_stop| {
+        if native_stop.binding() != &owner_stop.binding {
+            return Err(WatchdogError::Conflict(
+                "native SCM stop witness does not match durable owner deployment".to_owned(),
+            ));
+        }
+        plan.delete_bound_stopped_service(native_stop)
+            .map_err(|error| platform_error(&error))
+    })
 }
 
 fn run_service(config_path: &Path) -> Result<()> {
@@ -344,5 +404,21 @@ mod tests {
         })?;
         assert_eq!(parsed, std::fs::canonicalize(configured)?);
         Ok(())
+    }
+
+    #[test]
+    fn failed_owner_witness_does_not_call_native_delete_seam() {
+        let mut called = false;
+        let result = with_durably_stopped_deployment(
+            Err(WatchdogError::Conflict(
+                "owner reconciliation was not durable".to_owned(),
+            )),
+            |_owner| {
+                called = true;
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!called);
     }
 }
