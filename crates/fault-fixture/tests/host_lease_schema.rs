@@ -488,6 +488,20 @@ fn validate_bound_grant(value: &Value, principal: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_successful_renew_ack(ack: &Map<String, Value>) -> Result<(), String> {
+    if ack["renew_sequence"]
+        .as_u64()
+        .is_none_or(|sequence| sequence == 0 || sequence > MAX_SAFE_INTEGER)
+        || ack["expires_at"].as_str().is_none()
+    {
+        return Err("renew acknowledgment must echo sequence and expiry".to_owned());
+    }
+    timestamp(
+        ack["expires_at"].as_str().ok_or("renew expiry missing")?,
+        "ack.expires_at",
+    )
+}
+
 fn validate_ack(value: &Value, kind: &str) -> Result<(), String> {
     let ack = exact_object(
         value,
@@ -569,13 +583,7 @@ fn validate_ack(value: &Value, kind: &str) -> Result<(), String> {
     }
     timestamp(string(ack, "recorded_at", "ack")?, "ack.recorded_at")?;
     if kind == "lease_renew_response" && success {
-        if ack["renew_sequence"].as_u64().is_none() || ack["expires_at"].as_str().is_none() {
-            return Err("renew acknowledgment must echo sequence and expiry".to_owned());
-        }
-        timestamp(
-            ack["expires_at"].as_str().ok_or("renew expiry missing")?,
-            "ack.expires_at",
-        )?;
+        validate_successful_renew_ack(ack)?;
     } else if success {
         if !ack["renew_sequence"].is_null() {
             return Err("non-renew acknowledgment must not echo a renewal sequence".to_owned());
@@ -1009,6 +1017,9 @@ impl ReferenceHost {
             }
             return ReferenceStatus::Conflict;
         }
+        if self.lease_installations.contains_key(&prepared.lease_id) {
+            return ReferenceStatus::Conflict;
+        }
         let ttl = request
             .pointer("/payload/grant/lease/ttl_seconds")
             .and_then(Value::as_u64)
@@ -1017,9 +1028,6 @@ impl ReferenceHost {
         else {
             return ReferenceStatus::Expired;
         };
-        if self.lease_installations.contains_key(&prepared.lease_id) {
-            return ReferenceStatus::Conflict;
-        }
         let stored = StoredInstallation {
             initial_grant_digest: prepared.grant_digest.clone(),
             initial_persisted_grant: prepared.persisted_grant.clone(),
@@ -1350,6 +1358,28 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         ReferenceStatus::Conflict
     );
 
+    let mut same_lease = ReferenceHost::default();
+    assert_eq!(
+        same_lease.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
+        ReferenceStatus::Installed
+    );
+    assert_eq!(
+        same_lease.install(
+            &changed_installation,
+            "2026-09-07T00:00:02Z",
+            monotonic_seconds(100),
+        ),
+        ReferenceStatus::Conflict
+    );
+    assert_eq!(
+        same_lease.install(
+            &changed_installation,
+            "2026-09-07T00:00:31Z",
+            monotonic_seconds(131),
+        ),
+        ReferenceStatus::Conflict
+    );
+
     let mut missing_host = ReferenceHost::default();
     assert_eq!(
         missing_host.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
@@ -1383,6 +1413,10 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         restarted.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
         ReferenceStatus::Installed
     );
+    assert_eq!(
+        restarted.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
+        ReferenceStatus::Renewed
+    );
     assert!(restarted.deadline(installation_id).is_some());
     restarted.restart();
     assert!(restarted.deadline(installation_id).is_none());
@@ -1390,6 +1424,8 @@ fn protected_persistence_and_reference_lifecycle_are_stateful()
         restarted.renew(&renew, "2026-09-07T00:00:10Z", monotonic_seconds(110),),
         ReferenceStatus::Conflict
     );
+    assert!(!restarted.installations[installation_id].active);
+    assert!(restarted.deadline(installation_id).is_none());
     assert_eq!(
         restarted.install(&install, "2026-09-07T00:00:02Z", monotonic_seconds(100),),
         ReferenceStatus::Conflict
@@ -1513,6 +1549,14 @@ fn timestamp_and_semantic_identity_checks_are_strict() -> Result<(), Box<dyn std
     let mut wrong_sequence = read_json("fixtures/valid/lease-renew-request.json")?;
     wrong_sequence["payload"]["renew_sequence"] = Value::Number((MAX_SAFE_INTEGER + 1).into());
     assert!(validate_frame(&wrong_sequence, "lease_renew_request").is_err());
+
+    let mut zero_renew_ack = read_json("fixtures/valid/lease-renew-response.json")?;
+    zero_renew_ack["payload"]["ack"]["renew_sequence"] = Value::Number(0.into());
+    assert!(validate_frame(&zero_renew_ack, "lease_renew_response").is_err());
+    let mut oversized_renew_ack = read_json("fixtures/valid/lease-renew-response.json")?;
+    oversized_renew_ack["payload"]["ack"]["renew_sequence"] =
+        Value::Number((MAX_SAFE_INTEGER + 1).into());
+    assert!(validate_frame(&oversized_renew_ack, "lease_renew_response").is_err());
 
     let mut duplicate_status = read_json("fixtures/valid/lease-install-response.json")?;
     duplicate_status["payload"]["ack"]["result"]["status"] = Value::String("RENEWED".to_owned());
@@ -1642,6 +1686,34 @@ fn valid_lifecycle_fixtures_are_closed_bound_and_semantically_coherent()
             install_ack["payload"]["ack"][field], duplicate_ack["payload"]["ack"][field],
             "duplicate changed {field}"
         );
+    }
+    let renew_ack = read_json("fixtures/valid/lease-renew-response.json")?;
+    let renew_duplicate_ack = read_json("fixtures/valid/lease-renew-duplicate-response.json")?;
+    let revoke_ack = read_json("fixtures/valid/lease-revoke-response.json")?;
+    let revoke_duplicate_ack = read_json("fixtures/valid/lease-revoke-duplicate-response.json")?;
+    for (label, original, duplicate) in [
+        ("renew", &renew_ack, &renew_duplicate_ack),
+        ("revoke", &revoke_ack, &revoke_duplicate_ack),
+    ] {
+        for field in [
+            "installation_id",
+            "grant_digest",
+            "boot_id",
+            "instance_incarnation",
+            "host_fence_id",
+            "fence_generation",
+            "lease_id",
+            "lease_epoch",
+            "host_install_generation",
+            "recorded_at",
+            "renew_sequence",
+            "expires_at",
+        ] {
+            assert_eq!(
+                original["payload"]["ack"][field], duplicate["payload"]["ack"][field],
+                "{label} duplicate changed {field}"
+            );
+        }
     }
     Ok(())
 }
