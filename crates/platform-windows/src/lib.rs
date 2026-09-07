@@ -11,8 +11,8 @@
 
 mod contract;
 pub use contract::{
-    ComponentKind, LifecycleRequest, PlatformError, ProcessIdentity, SessionSelector,
-    WindowsLaunchSpec, WindowsPlatformConfig,
+    ComponentKind, LifecycleCapability, LifecycleFrame, LifecycleRequest, PlatformError,
+    ProcessIdentity, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,
 };
 
 #[cfg(windows)]

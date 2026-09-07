@@ -11,6 +11,7 @@ const MAX_ENVIRONMENT_BYTES: usize = 8 * 1024;
 const MAX_PIPE_NAME_BYTES: usize = 192;
 const MAX_COMMAND_LINE_UNITS: usize = 32_767;
 const MAX_ENVIRONMENT_UNITS: usize = 32_767;
+const MAX_LIFECYCLE_NONCE_BYTES: usize = 96;
 
 /// Fixed roles the broker is allowed to supervise.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -53,7 +54,160 @@ pub enum LifecycleRequest {
     },
 }
 
+/// Capability carried by a lifecycle frame.  The capability is deliberately
+/// tied to the closed request kind; it is not an arbitrary string that a
+/// caller can smuggle through the pipe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifecycleCapability {
+    Start,
+    Stop,
+    Heartbeat,
+}
+
+impl LifecycleCapability {
+    fn code(self) -> u8 {
+        match self {
+            Self::Start => 1,
+            Self::Stop => 2,
+            Self::Heartbeat => 3,
+        }
+    }
+
+    fn from_code(code: u8) -> Result<Self, PlatformError> {
+        match code {
+            1 => Ok(Self::Start),
+            2 => Ok(Self::Stop),
+            3 => Ok(Self::Heartbeat),
+            _ => Err(PlatformError::Invalid(
+                "unknown lifecycle capability".to_owned(),
+            )),
+        }
+    }
+}
+
+/// Authenticated lifecycle frame metadata.
+///
+/// The request payload alone is not a transport authorization.  The native
+/// pipe requires this envelope after peer authentication and checks the
+/// configured nonce/epoch plus a strictly increasing sequence before exposing
+/// the request to a caller.  A new durable epoch or nonce is required after
+/// authority replacement; a reconnect cannot reset the sequence window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LifecycleFrame {
+    pub nonce: String,
+    pub epoch: u64,
+    pub sequence: u64,
+    pub capability: LifecycleCapability,
+    pub request: LifecycleRequest,
+}
+
+impl LifecycleFrame {
+    const MAGIC: [u8; 4] = *b"AWLF";
+    const VERSION: u8 = 1;
+
+    /// Construct a frame with the capability derived from its request.
+    pub fn new(
+        nonce: impl Into<String>,
+        epoch: u64,
+        sequence: u64,
+        request: LifecycleRequest,
+    ) -> Self {
+        let capability = request.capability();
+        Self {
+            nonce: nonce.into(),
+            epoch,
+            sequence,
+            capability,
+            request,
+        }
+    }
+
+    /// Validate the replay and capability fields before transport.
+    pub fn validate(&self) -> Result<(), PlatformError> {
+        validate_lifecycle_nonce(&self.nonce)?;
+        if self.epoch == 0 || self.sequence == 0 {
+            return Err(PlatformError::Invalid(
+                "lifecycle epoch and sequence must be non-zero".to_owned(),
+            ));
+        }
+        if self.capability != self.request.capability() {
+            return Err(PlatformError::IdentityMismatch(
+                "lifecycle capability does not match request kind".to_owned(),
+            ));
+        }
+        self.request.validate()
+    }
+
+    /// Encode the authenticated envelope as one complete bounded payload.
+    pub fn encode_payload(&self) -> Result<Vec<u8>, PlatformError> {
+        self.validate()?;
+        let request = self.request.encode_payload()?;
+        let mut bytes = Vec::with_capacity(32 + self.nonce.len() + request.len());
+        bytes.extend_from_slice(&Self::MAGIC);
+        bytes.push(Self::VERSION);
+        bytes.push(self.capability.code());
+        bytes.extend_from_slice(&self.epoch.to_le_bytes());
+        bytes.extend_from_slice(&self.sequence.to_le_bytes());
+        put_lifecycle_nonce(&mut bytes, &self.nonce)?;
+        let request_len = u16::try_from(request.len()).map_err(|_| {
+            PlatformError::Invalid("lifecycle request exceeds frame bounds".to_owned())
+        })?;
+        bytes.extend_from_slice(&request_len.to_le_bytes());
+        bytes.extend_from_slice(&request);
+        if bytes.len() > MAX_ENVIRONMENT_BYTES {
+            return Err(PlatformError::Invalid(
+                "lifecycle frame exceeds bounds".to_owned(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// Decode one complete authenticated envelope.
+    pub fn decode_payload(payload: &[u8]) -> Result<Self, PlatformError> {
+        let mut cursor = Cursor::new(payload);
+        let magic = [
+            cursor.byte()?,
+            cursor.byte()?,
+            cursor.byte()?,
+            cursor.byte()?,
+        ];
+        if magic != Self::MAGIC || cursor.byte()? != Self::VERSION {
+            return Err(PlatformError::Invalid(
+                "lifecycle frame version is unsupported".to_owned(),
+            ));
+        }
+        let capability = LifecycleCapability::from_code(cursor.byte()?)?;
+        let epoch = cursor.u64()?;
+        let sequence = cursor.u64()?;
+        let nonce = cursor.lifecycle_nonce()?;
+        let request_len = usize::from(u16::from_le_bytes([cursor.byte()?, cursor.byte()?]));
+        let request = cursor.bytes(request_len)?;
+        if !cursor.is_empty() {
+            return Err(PlatformError::Invalid(
+                "lifecycle frame contains trailing bytes".to_owned(),
+            ));
+        }
+        let request = LifecycleRequest::decode_payload(request)?;
+        let frame = Self {
+            nonce,
+            epoch,
+            sequence,
+            capability,
+            request,
+        };
+        frame.validate()?;
+        Ok(frame)
+    }
+}
+
 impl LifecycleRequest {
+    pub(crate) fn capability(&self) -> LifecycleCapability {
+        match self {
+            Self::Start { .. } => LifecycleCapability::Start,
+            Self::Stop { .. } => LifecycleCapability::Stop,
+            Self::Heartbeat { .. } => LifecycleCapability::Heartbeat,
+        }
+    }
     /// Validate the closed, bounded request surface.
     ///
     /// # Errors
@@ -185,6 +339,36 @@ pub struct ProcessIdentity {
     /// SHA-256 of the immutable executable file held by the owner.
     pub executable_sha256: String,
     pub session_id: u32,
+}
+
+impl ProcessIdentity {
+    /// Validate a persisted Windows process identity before reopening its
+    /// named Job Object.  This is intentionally portable so a watchdog can
+    /// reject malformed storage before any Win32 handle is opened.
+    pub fn validate(&self) -> Result<(), PlatformError> {
+        validate_id("launch nonce", &self.launch_nonce)?;
+        if self.pid == 0 || self.creation_time_100ns == 0 || self.session_id == u32::MAX {
+            return Err(PlatformError::Invalid(
+                "Windows process identity contains an invalid creation/session token".to_owned(),
+            ));
+        }
+        if !self.executable.is_absolute() || self.executable.as_os_str().is_empty() {
+            return Err(PlatformError::Invalid(
+                "Windows process identity executable must be absolute".to_owned(),
+            ));
+        }
+        if self.executable_sha256.len() != 64
+            || !self
+                .executable_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(PlatformError::Invalid(
+                "Windows process identity executable digest is invalid".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Direct process launch request.  The native implementation never interprets
@@ -433,6 +617,29 @@ fn validate_id(label: &str, value: &str) -> Result<(), PlatformError> {
     Ok(())
 }
 
+fn validate_lifecycle_nonce(value: &str) -> Result<(), PlatformError> {
+    if value.is_empty()
+        || value.len() > MAX_LIFECYCLE_NONCE_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(PlatformError::Invalid(
+            "lifecycle nonce is outside bounds".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn put_lifecycle_nonce(bytes: &mut Vec<u8>, nonce: &str) -> Result<(), PlatformError> {
+    validate_lifecycle_nonce(nonce)?;
+    let length = u8::try_from(nonce.len())
+        .map_err(|_| PlatformError::Invalid("lifecycle nonce exceeds bounds".to_owned()))?;
+    bytes.push(length);
+    bytes.extend_from_slice(nonce.as_bytes());
+    Ok(())
+}
+
 fn put_string(bytes: &mut Vec<u8>, value: &str) -> Result<(), PlatformError> {
     validate_id("lifecycle", value)?;
     let length = u16::try_from(value.len())
@@ -513,6 +720,28 @@ impl<'a> Cursor<'a> {
         Ok(value.to_owned())
     }
 
+    fn lifecycle_nonce(&mut self) -> Result<String, PlatformError> {
+        let length = usize::from(self.byte()?);
+        let slice = self.bytes(length)?;
+        let value = std::str::from_utf8(slice)
+            .map_err(|_| PlatformError::Invalid("lifecycle nonce is not UTF-8".to_owned()))?;
+        validate_lifecycle_nonce(value)?;
+        Ok(value.to_owned())
+    }
+
+    fn bytes(&mut self, length: usize) -> Result<&'a [u8], PlatformError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or_else(|| PlatformError::Invalid("lifecycle frame offset overflow".to_owned()))?;
+        let slice = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or_else(|| PlatformError::Invalid("lifecycle frame is truncated".to_owned()))?;
+        self.offset = end;
+        Ok(slice)
+    }
+
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
@@ -538,5 +767,39 @@ mod tests {
     fn arbitrary_component_and_trailing_bytes_are_rejected() {
         assert!(component_from_code(99).is_err());
         assert!(LifecycleRequest::decode_payload(&[1, 1, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn lifecycle_envelope_binds_capability_epoch_nonce_and_sequence() -> Result<(), PlatformError> {
+        let request = LifecycleRequest::Stop {
+            component: ComponentKind::Gateway,
+            instance_id: "instance-1".to_owned(),
+            incarnation: "incarnation-1".to_owned(),
+        };
+        let frame = LifecycleFrame::new("session-nonce", 4, 9, request.clone());
+        let encoded = frame.encode_payload()?;
+        assert_eq!(LifecycleFrame::decode_payload(&encoded)?, frame);
+
+        let mut wrong_capability = frame.clone();
+        wrong_capability.capability = LifecycleCapability::Start;
+        assert!(wrong_capability.encode_payload().is_err());
+
+        let mut replayable = frame;
+        replayable.sequence = 0;
+        assert!(replayable.encode_payload().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn process_identity_rejects_untrusted_persisted_values() {
+        let identity = ProcessIdentity {
+            pid: 1,
+            creation_time_100ns: 1,
+            launch_nonce: "nonce".to_owned(),
+            executable: PathBuf::from("relative.exe"),
+            executable_sha256: "0".repeat(64),
+            session_id: 1,
+        };
+        assert!(identity.validate().is_err());
     }
 }
