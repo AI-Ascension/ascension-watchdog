@@ -27,6 +27,8 @@ use std::collections::BTreeMap;
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
+use std::io::Read;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -198,12 +200,37 @@ impl RuntimeProcessManager {
             .ensure_native(config)
             .map_err(RuntimeLaunchError::Ordinary)?
             .launch(specification, planned_containment)?;
-        let (portable_identity, ownership) = native
-            .identity(intent_id, specification, planned_containment, now_ms)
-            .map_err(RuntimeLaunchError::Ordinary)?;
+        self.finish_native_launch(native, |native| {
+            native.identity(intent_id, specification, planned_containment, now_ms)
+        })
+    }
+
+    fn finish_native_launch<F>(
+        &mut self,
+        mut native: NativeChild,
+        identify: F,
+    ) -> std::result::Result<RuntimeChild, RuntimeLaunchError>
+    where
+        F: FnOnce(&NativeChild) -> Result<(ProcessIdentity, OwnershipProof)>,
+    {
+        let (portable_identity, ownership) = match identify(&native) {
+            Ok(value) => value,
+            Err(identity_error) => {
+                let cleanup = self.backend.as_mut().map_or_else(
+                    || {
+                        Err(WatchdogError::Conflict(
+                            "native process backend disappeared while proving launch cleanup"
+                                .to_owned(),
+                        ))
+                    },
+                    |backend| backend.stop(&mut native),
+                );
+                return Err(classify_native_identity_failure(identity_error, cleanup));
+            }
+        };
         Ok(RuntimeChild {
             portable_identity,
-            intent_id: intent_id.to_owned(),
+            intent_id: ownership.intent_id.clone(),
             ownership,
             handle: RuntimeChildHandle::Native(native),
         })
@@ -401,6 +428,27 @@ impl std::fmt::Display for RuntimeLaunchError {
 
 impl std::error::Error for RuntimeLaunchError {}
 
+fn classify_native_identity_failure(
+    identity_error: WatchdogError,
+    cleanup: Result<RuntimeStopOutcome>,
+) -> RuntimeLaunchError {
+    match cleanup {
+        Ok(RuntimeStopOutcome::Exited(_) | RuntimeStopOutcome::AlreadyExited) => {
+            RuntimeLaunchError::Ordinary(identity_error)
+        }
+        Ok(RuntimeStopOutcome::TimedOut) => {
+            RuntimeLaunchError::CleanupUncertain(WatchdogError::Conflict(format!(
+                "native launch identity proof failed ({identity_error}); exact native cleanup timed out"
+            )))
+        }
+        Err(cleanup_error) => {
+            RuntimeLaunchError::CleanupUncertain(WatchdogError::Conflict(format!(
+                "native launch identity proof failed ({identity_error}); exact native cleanup failed: {cleanup_error}"
+            )))
+        }
+    }
+}
+
 impl RuntimeProcessManager {
     fn ensure_native(&mut self, config: &WatchdogConfig) -> Result<&mut NativeBackend> {
         if self.backend.is_none() {
@@ -426,6 +474,7 @@ impl NativeBackend {
             let launcher = match &config.source_path {
                 Some(path) => launcher
                     .with_protected_config_path(path)
+                    .and_then(|launcher| launcher.with_delegated_cgroup_root(&root))
                     .map_err(map_adapter_error)?,
                 None => launcher,
             };
@@ -464,8 +513,6 @@ impl NativeBackend {
         specification: &LaunchSpec,
         planned_containment: &str,
     ) -> std::result::Result<NativeChild, RuntimeLaunchError> {
-        #[cfg(windows)]
-        let _ = planned_containment;
         match self {
             #[cfg(target_os = "linux")]
             Self::Linux(adapter) => {
@@ -484,6 +531,15 @@ impl NativeBackend {
             }
             #[cfg(windows)]
             Self::Windows(backend) => {
+                let expected = format!("windows-job:{}", specification.launch_nonce);
+                if planned_containment != expected {
+                    return Err(RuntimeLaunchError::Ordinary(
+                        WatchdogError::IdentityMismatch(
+                            "planned Windows Job authority differs from the launch nonce"
+                                .to_owned(),
+                        ),
+                    ));
+                }
                 let windows_spec =
                     windows_launch_spec(specification).map_err(RuntimeLaunchError::Ordinary)?;
                 backend
@@ -512,9 +568,21 @@ impl NativeBackend {
                     .map_err(map_adapter_error)
             }
             #[cfg(windows)]
-            Self::Windows(_) => Err(WatchdogError::Unsupported(
-                "Windows prepared launch intents require a persisted Job authority".to_owned(),
-            )),
+            Self::Windows(backend) => backend
+                .launcher
+                .force_cleanup_planned_containment(planned_containment, NATIVE_FORCE_TIMEOUT)
+                .map(|outcome| match outcome {
+                    ascension_platform_windows::StopOutcome::Exited => {
+                        RuntimeStopOutcome::Exited(None)
+                    }
+                    ascension_platform_windows::StopOutcome::AlreadyExited => {
+                        RuntimeStopOutcome::AlreadyExited
+                    }
+                    ascension_platform_windows::StopOutcome::TimedOut => {
+                        RuntimeStopOutcome::TimedOut
+                    }
+                })
+                .map_err(map_windows_error),
         }
     }
 
@@ -1092,8 +1160,7 @@ fn authorize_linux_helper(
     request: &crate::platform::LinuxHelperRequest,
     bootstrap: &crate::platform::LinuxHelperBootstrap,
 ) -> std::result::Result<crate::platform::LinuxHelperAuthorization, AdapterError> {
-    let config = WatchdogConfig::from_file(bootstrap.protected_config_path())
-        .map_err(watchdog_to_adapter_error)?;
+    let config = protected_config_from_bootstrap(bootstrap)?;
     let store =
         Store::open_read_only(&config.database, &config).map_err(watchdog_to_adapter_error)?;
     let status = store.status().map_err(watchdog_to_adapter_error)?;
@@ -1166,7 +1233,12 @@ fn authorize_linux_helper(
         ));
     }
     validate_planned_cgroup_leaf(&request.cgroup_path, planned.as_str())?;
-    verify_current_cgroup_full_path(&request.cgroup_path)?;
+    let delegated_root = bootstrap.delegated_cgroup_root_path().ok_or_else(|| {
+        AdapterError::IdentityMismatch(
+            "Linux helper has no trusted delegated cgroup root bootstrap".to_owned(),
+        )
+    })?;
+    verify_current_cgroup_full_path(&request.cgroup_path, delegated_root)?;
     if !request.cgroup_path.is_absolute() {
         return Err(AdapterError::IdentityMismatch(
             "Linux helper cgroup path is not absolute".to_owned(),
@@ -1208,8 +1280,36 @@ fn validate_planned_cgroup_leaf(
 }
 
 #[cfg(target_os = "linux")]
+fn protected_config_from_bootstrap(
+    bootstrap: &crate::platform::LinuxHelperBootstrap,
+) -> std::result::Result<WatchdogConfig, AdapterError> {
+    let mut bytes = Vec::new();
+    bootstrap
+        .protected_config_file()?
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            AdapterError::Io(format!("Linux protected config read failed: {error}"))
+        })?;
+    if bytes.len() > 65_536 {
+        return Err(AdapterError::Invalid(
+            "Linux protected config exceeds the bounded read size".to_owned(),
+        ));
+    }
+    let mut config: WatchdogConfig = serde_json::from_slice(&bytes).map_err(|error| {
+        AdapterError::Invalid(format!("Linux protected config is invalid: {error}"))
+    })?;
+    config.source_path = Some(bootstrap.protected_config_path().to_path_buf());
+    config.validate().map_err(watchdog_to_adapter_error)?;
+    Ok(config)
+}
+
+#[cfg(target_os = "linux")]
 /// Also verify actual membership using the complete cgroup path.
-fn verify_current_cgroup_full_path(requested: &Path) -> std::result::Result<(), AdapterError> {
+fn verify_current_cgroup_full_path(
+    requested: &Path,
+    delegated_root: &Path,
+) -> std::result::Result<(), AdapterError> {
     if !requested.is_absolute() {
         return Err(AdapterError::Invalid(
             "Linux helper cgroup path must be absolute".to_owned(),
@@ -1233,11 +1333,7 @@ fn verify_current_cgroup_full_path(requested: &Path) -> std::result::Result<(), 
     let mountpoint = cgroup_v2_mountpoint()?;
     let relative = current_relative.trim_start_matches('/');
     let current = mountpoint.join(relative);
-    let expected = fs::canonicalize(requested).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux authorized cgroup path cannot be resolved: {error}"
-        ))
-    })?;
+    let expected = validate_exact_cgroup_child(requested, delegated_root)?;
     let actual = fs::canonicalize(&current).map_err(|error| {
         AdapterError::Unavailable(format!(
             "Linux current cgroup path cannot be resolved: {error}"
@@ -1249,6 +1345,29 @@ fn verify_current_cgroup_full_path(requested: &Path) -> std::result::Result<(), 
         ));
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_exact_cgroup_child(
+    requested: &Path,
+    delegated_root: &Path,
+) -> std::result::Result<PathBuf, AdapterError> {
+    let expected = fs::canonicalize(requested).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux authorized cgroup path cannot be resolved: {error}"
+        ))
+    })?;
+    let trusted_root = fs::canonicalize(delegated_root).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux delegated cgroup root cannot be resolved: {error}"
+        ))
+    })?;
+    if expected != requested || expected.parent() != Some(trusted_root.as_path()) {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper cgroup is not the exact child of the trusted delegated root".to_owned(),
+        ));
+    }
+    Ok(expected)
 }
 
 #[cfg(target_os = "linux")]
@@ -1329,6 +1448,9 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    use tempfile::tempdir;
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn helper_membership_cannot_substitute_another_planned_containment() {
         assert!(
@@ -1344,6 +1466,25 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn same_leaf_under_a_sibling_root_is_rejected()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let trusted = directory.path().join("trusted");
+        let sibling = directory.path().join("sibling");
+        fs::create_dir(&trusted)?;
+        fs::create_dir(&sibling)?;
+        let trusted_leaf = trusted.join("cgroup-v2-owned");
+        let sibling_leaf = sibling.join("cgroup-v2-owned");
+        fs::create_dir(&trusted_leaf)?;
+        fs::create_dir(&sibling_leaf)?;
+
+        assert!(validate_exact_cgroup_child(&trusted_leaf, &trusted).is_ok());
+        assert!(validate_exact_cgroup_child(&sibling_leaf, &trusted).is_err());
+        Ok(())
+    }
+
     #[test]
     fn incarnation_requires_positive_generation() {
         assert_eq!(
@@ -1351,5 +1492,42 @@ mod tests {
             "watchdog-generation-7"
         );
         assert!(runtime_incarnation(0).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn injected_native_identity_proof_failure_is_cleanup_uncertain_without_backend() {
+        let mut manager = RuntimeProcessManager {
+            synthetic: false,
+            backend: None,
+        };
+        let native = NativeChild::Linux(OwnedProcess {
+            identity: PlatformProcessIdentity {
+                deployment_id: "deployment".to_owned(),
+                instance_id: "gateway".to_owned(),
+                component: PlatformComponentKind::Gateway,
+                incarnation: "watchdog-generation-1".to_owned(),
+                launch_nonce: "nonce".to_owned(),
+                creation: ProcessCreation {
+                    token: "boot:1".to_owned(),
+                    pid: 1,
+                },
+                executable: PathBuf::from("/bin/true"),
+                executable_sha256: "a".repeat(64),
+                containment: ContainmentId::new("cgroup-v2:fixture".to_owned())
+                    .expect("fixture containment"),
+                session: None,
+            },
+        });
+        let result = manager.finish_native_launch(native, |_| {
+            Err(WatchdogError::IdentityMismatch(
+                "injected proof failure".to_owned(),
+            ))
+        });
+        assert!(matches!(
+            result,
+            Err(RuntimeLaunchError::CleanupUncertain(WatchdogError::Conflict(message)))
+                if message.contains("injected proof failure")
+        ));
     }
 }
