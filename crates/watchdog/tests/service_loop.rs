@@ -102,7 +102,8 @@ fn persistence_failure_cannot_advance_completed_loop_health()
     service.reconcile(1_000)?;
     let fault = rusqlite::Connection::open(fault_connection)?;
     fault.execute_batch(
-        "CREATE TRIGGER test_fail_audit BEFORE INSERT ON audit
+        "CREATE TRIGGER test_fail_progress BEFORE UPDATE ON metadata
+         WHEN NEW.key='reconciliation_sequence'
          BEGIN SELECT RAISE(ABORT, 'test persistence outage'); END;",
     )?;
     assert!(service.reconcile(1_020).is_err());
@@ -110,5 +111,47 @@ fn persistence_failure_cannot_advance_completed_loop_health()
     assert_eq!(health.heartbeat_seq, 1);
     assert_eq!(health.phase, MainLoopPhase::Blocked);
     assert!(!health.ready);
+    Ok(())
+}
+
+#[test]
+fn idle_loop_progress_exceeds_audit_capacity_without_evicting_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Paused,
+        ..WatchdogConfig::default()
+    };
+    let database = config.database.clone();
+    let supervisor = Supervisor::initialize(config.clone())?;
+    let mut service = ServiceLoop::new(supervisor, Duration::from_millis(20))?;
+    let inspection = rusqlite::Connection::open(&database)?;
+    // Initial reconciliation legitimately audits boot/ownership recovery.
+    service.reconcile(20)?;
+    let before: i64 = inspection.query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))?;
+    let rounds = ascension_watchdog::storage::MAX_AUDIT_RECORDS + 10;
+    for sequence in 2..=rounds {
+        service.reconcile(u64::try_from(sequence)? * 20)?;
+    }
+    assert_eq!(
+        service.health().snapshot().heartbeat_seq,
+        u64::try_from(rounds)?
+    );
+    assert!(service.health().snapshot().ready);
+    let after: i64 = inspection.query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))?;
+    assert_eq!(
+        before, after,
+        "idle progress changed historical audit retention"
+    );
+    drop(service);
+    let mut reopened = ServiceLoop::new(Supervisor::open(config)?, Duration::from_millis(20))?;
+    reopened.reconcile(100_000)?;
+    let stored: String = inspection.query_row(
+        "SELECT value FROM metadata WHERE key='reconciliation_sequence'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(stored.parse::<i64>()?, rounds + 1);
     Ok(())
 }

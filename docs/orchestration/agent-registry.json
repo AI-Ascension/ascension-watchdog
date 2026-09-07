@@ -17,8 +17,8 @@
       {"path":"/root/gateway_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G4R"},
       {"path":"/root/native_runtime","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P7"},
       {"path":"/root/fixture_review","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"V19"},
-      {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"G3R"},
-      {"path":"/root/linux_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P6L"},
+      {"path":"/root/host_finish","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P9"},
+      {"path":"/root/linux_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"P8"},
       {"path":"/root/windows_boundary","depth":1,"requested_model":"gpt-5.6-luna","requested_reasoning_effort":"max","task":"A7"}
     ]
   },

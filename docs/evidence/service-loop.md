@@ -34,3 +34,22 @@ No OS service was installed or restarted. The datagram receiver is a test of
 the actual daemon notification path, not proof of systemd recovery or a soak.
 Authenticated admin dispatch and native process adapter integration are separate
 gates still being implemented. Foreground daemon exit-on-stop behavior is retained.
+# Bounded durable progress follow-up
+
+The loop now updates two fixed metadata entries for completed reconciliation
+sequence and audit timestamp instead of appending an audit event on every
+heartbeat. Historical lifecycle and operator events remain append-only and
+backpressured. This does not implement their still-required archival operation.
+The progress sequence is not mutation authority, a lease epoch, or a budget.
+
+Confirmed synthetic validation: `cargo test --locked -p ascension-watchdog
+--test service_loop --test storage_progress -- --test-threads=1` passed five
+service-loop tests and two storage-progress tests. The accelerated paused-loop
+case performs 4,106 reconciliations and reopens the supervisor, verifies the
+durable sequence continues, and checks that idle work consumes no historical
+audit rows after initial boot reconciliation. The service-loop suite took
+72.94 seconds; this is not a 24-hour soak or installed-service test.
+
+Injected second-write failure rolls back the progress sequence. Malformed,
+missing-half, and exhausted markers fail rather than resetting. A progress
+persistence failure does not advance completed-loop readiness or heartbeat.

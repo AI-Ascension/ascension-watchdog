@@ -218,11 +218,7 @@ impl Supervisor {
             self.store
                 .set_desired_mode_at(DesiredMode::Stopped, now_ms)?;
         }
-        self.store.audit(
-            "reconciler_progress",
-            &format!("mode={desired_mode:?};children={}", self.children.len()),
-            now_ms,
-        )?;
+        self.store.record_reconciliation_progress(now_ms)?;
         Ok(report)
     }
 

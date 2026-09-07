@@ -2047,6 +2047,49 @@ impl Store {
         metadata_from_conn(&self.conn, key)
     }
 
+    /// Commit a fixed-size loop-progress projection without consuming the
+    /// retention budget for historical state transitions and operator actions.
+    pub fn record_reconciliation_progress(&mut self, now_ms: u64) -> Result<()> {
+        let timestamp = sqlite_timestamp(now_ms)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let sequence = metadata_from_conn(&tx, "reconciliation_sequence")?;
+        let previous_time = metadata_from_conn(&tx, "last_reconciled_at_ms")?;
+        if sequence.is_some() != previous_time.is_some() {
+            return Err(WatchdogError::Conflict(
+                "incomplete reconciliation progress marker".to_owned(),
+            ));
+        }
+        if let Some(value) = previous_time {
+            let value = value.parse::<u64>().map_err(|_| {
+                WatchdogError::Conflict("invalid reconciliation timestamp".to_owned())
+            })?;
+            sqlite_timestamp(value)?;
+        }
+        let initialized = sequence.is_some();
+        let previous = sequence
+            .map(|value| value.parse::<u64>())
+            .transpose()
+            .map_err(|_| WatchdogError::Conflict("invalid reconciliation sequence".to_owned()))?
+            .unwrap_or(0);
+        if initialized && previous == 0 {
+            return Err(WatchdogError::Conflict(
+                "invalid zero reconciliation sequence".to_owned(),
+            ));
+        }
+        let next = previous
+            .checked_add(1)
+            .filter(|value| i64::try_from(*value).is_ok())
+            .ok_or_else(|| {
+                WatchdogError::Conflict("reconciliation sequence exhausted".to_owned())
+            })?;
+        upsert_metadata_tx(&tx, "reconciliation_sequence", &next.to_string())?;
+        upsert_metadata_tx(&tx, "last_reconciled_at_ms", &timestamp.to_string())?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn job_count(&self, status: JobStatus) -> Result<u64> {
         u64::try_from(self.conn.query_row::<i64, _, _>(
             "SELECT COUNT(*) FROM jobs WHERE status=?",
