@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Protected worker bootstrap v1 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "launch_nonce", "watchdog_boot_id", "component_id", "expected_peer"],
+  "properties": {
+    "version": {"const": 1},
+    "launch_nonce": {"$ref": "#/$defs/uuid4"},
+    "watchdog_boot_id": {"$ref": "#/$defs/uuid4"},
+    "component_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$", "not": {"enum": [".", ".."]}},
+    "expected_peer": {"oneOf": [{"$ref": "#/$defs/linux"}, {"$ref": "#/$defs/windows"}]}
+  },
+  "$defs": {
+    "uuid4": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "u32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "pid": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "creation": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$", "$comment": "Codec additionally checks the numeric u64 bound."},
+    "linux": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "pid", "creation_token", "executable", "executable_sha256", "uid", "gid"],
+      "properties": {
+        "platform": {"const": "linux"},
+        "pid": {"$ref": "#/$defs/pid"},
+        "creation_token": {"$ref": "#/$defs/creation"},
+        "executable": {"type": "string", "maxLength": 4096, "pattern": "^/[^\u0000]*$", "$comment": "Codec additionally bounds UTF-8 bytes."},
+        "executable_sha256": {"$ref": "#/$defs/digest"},
+        "uid": {"$ref": "#/$defs/u32"},
+        "gid": {"$ref": "#/$defs/u32"}
+      }
+    },
+    "windows": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "pid", "creation_token", "executable", "executable_sha256", "session_id", "sid"],
+      "properties": {
+        "platform": {"const": "windows"},
+        "pid": {"$ref": "#/$defs/pid"},
+        "creation_token": {"$ref": "#/$defs/creation"},
+        "executable": {"type": "string", "maxLength": 4096, "pattern": "^[A-Za-z]:\\\\[^\u0000]*$", "$comment": "Codec additionally bounds UTF-8 bytes."},
+        "executable_sha256": {"$ref": "#/$defs/digest"},
+        "session_id": {"$ref": "#/$defs/u32"},
+        "sid": {"type": "string", "maxLength": 184, "pattern": "^S-1-(0|[1-9][0-9]*)(-(0|[1-9][0-9]*)){1,15}$", "$comment": "Codec additionally checks authority and subauthority numeric bounds."}
+      }
+    }
+  }
+}
