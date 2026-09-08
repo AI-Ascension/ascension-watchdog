@@ -15,7 +15,7 @@ fn local(name: &str) -> PathBuf {
 
 fn endpoint() -> PathBuf {
     if cfg!(windows) {
-        PathBuf::from(r"\\.\pipe\ascension-watchdog-worker-fixture")
+        PathBuf::from(r"\\.\pipe\ascension-worker-12345678-1234-4234-8234-123456789abc")
     } else {
         local("worker.sock")
     }
@@ -56,6 +56,28 @@ fn absent_worker_remains_disabled_and_does_not_change_serialized_defaults() {
     let decoded: WatchdogConfig = serde_json::from_value(encoded).unwrap();
     assert!(decoded.worker.is_none());
     assert!(decoded.worker_binding().unwrap().is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn worker_config_and_transport_share_exact_pipe_namespace() {
+    let mut config = configured();
+    config.validate().unwrap();
+    let name = config.worker.as_ref().unwrap().endpoint.to_str().unwrap();
+    ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(name).unwrap();
+    for rejected in [
+        r"\\.\pipe\ascension-watchdog-worker-fixture",
+        r"\\.\pipe\ascension-worker-12345678-1234-3234-8234-123456789abc",
+        r"\\.\pipe\ascension-worker-12345678-1234-4234-7234-123456789abc",
+        r"\\.\pipe\ascension-worker-12345678-1234-4234-8234-123456789abc\extra",
+    ] {
+        config.worker.as_mut().unwrap().endpoint = PathBuf::from(rejected);
+        assert!(config.validate().is_err(), "accepted {rejected}");
+        assert!(
+            ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(rejected)
+                .is_err()
+        );
+    }
 }
 
 #[test]

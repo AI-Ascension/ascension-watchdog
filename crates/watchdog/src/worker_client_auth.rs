@@ -6,8 +6,12 @@
 
 use crate::config::validate_digest;
 use crate::error::{Result, WatchdogError};
+#[cfg(target_os = "linux")]
 use sha2::{Digest, Sha256};
-use std::fs::{self, File};
+use std::fs;
+#[cfg(not(windows))]
+use std::fs::File;
+#[cfg(not(windows))]
 use std::io::{ErrorKind, Read};
 #[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
@@ -19,6 +23,7 @@ use zeroize::Zeroizing;
 
 const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
+#[cfg(target_os = "linux")]
 const MAX_PEER_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Immutable identity of the supervised worker process.
@@ -688,6 +693,7 @@ fn process_start_token(pid: u32, deadline: Instant) -> Result<String> {
         })
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn hash_file_until(file: &mut File, deadline: Option<Instant>) -> Result<String> {
     let mut hasher = Sha256::new();
     // A larger bounded read keeps the per-call IPC deadline meaningful on

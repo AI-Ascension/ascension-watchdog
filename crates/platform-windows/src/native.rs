@@ -215,7 +215,7 @@ impl From<PlatformError> for WindowsLaunchError {
 /// running process.  The directory handle protects the directory object from
 /// removal or rename; it does not hash or pin dependent DLL contents.
 #[derive(Debug)]
-struct IntegrityGuards {
+pub(crate) struct IntegrityGuards {
     // These handles are retained for their no-share lifetime; the fields are
     // intentionally not otherwise read after the initial hash.
     #[allow(dead_code)]
@@ -238,7 +238,12 @@ struct FileIdentity {
 }
 
 impl IntegrityGuards {
-    fn open(path: &Path) -> Result<Self, PlatformError> {
+    pub(crate) fn open(path: &Path) -> Result<Self, PlatformError> {
+        Self::open_until(path, None)
+    }
+
+    pub(crate) fn open_until(path: &Path, limit: Option<Instant>) -> Result<Self, PlatformError> {
+        check_image_deadline(limit)?;
         let parent = path.parent().ok_or_else(|| {
             PlatformError::Invalid("approved executable has no release directory".to_owned())
         })?;
@@ -255,7 +260,7 @@ impl IntegrityGuards {
             "CreateFileW(executable)",
         )?;
         let protected_identity = file_identity(&executable)?;
-        let digest = hash_immutable_file(&executable)?;
+        let digest = hash_immutable_file_until(&executable, limit)?;
         if file_identity(&executable)? != protected_identity {
             return Err(PlatformError::IdentityMismatch(
                 "approved executable changed while its protected handle was opened".to_owned(),
@@ -274,7 +279,7 @@ impl IntegrityGuards {
         &self.path
     }
 
-    fn digest(&self) -> &str {
+    pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
 
@@ -2761,6 +2766,23 @@ fn file_identity(file: &OwnedHandle) -> Result<FileIdentity, PlatformError> {
 }
 
 fn hash_immutable_file(file: &OwnedHandle) -> Result<String, PlatformError> {
+    hash_immutable_file_until(file, None)
+}
+
+fn check_image_deadline(limit: Option<Instant>) -> Result<(), PlatformError> {
+    if limit.is_some_and(|limit| Instant::now() >= limit) {
+        return Err(PlatformError::Timeout(
+            "worker image validation deadline expired".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn hash_immutable_file_until(
+    file: &OwnedHandle,
+    limit: Option<Instant>,
+) -> Result<String, PlatformError> {
+    check_image_deadline(limit)?;
     let mut file_size = 0_i64;
     let ok = unsafe { GetFileSizeEx(file.raw(), &raw mut file_size) };
     if ok == 0 {
@@ -2782,6 +2804,7 @@ fn hash_immutable_file(file: &OwnedHandle) -> Result<String, PlatformError> {
     let mut buffer = vec![0_u8; HASH_READ_BYTES];
     let mut total = 0_u64;
     while total < expected_size {
+        check_image_deadline(limit)?;
         let remaining = expected_size.saturating_sub(total);
         let count = usize::try_from(remaining.min(u64::try_from(buffer.len()).map_err(|_| {
             PlatformError::Invalid("immutable hash buffer size overflow".to_owned())
@@ -2824,6 +2847,7 @@ fn hash_immutable_file(file: &OwnedHandle) -> Result<String, PlatformError> {
             "immutable executable changed while it was being hashed".to_owned(),
         ));
     }
+    check_image_deadline(limit)?;
     Ok(digest.hex())
 }
 

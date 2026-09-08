@@ -121,15 +121,8 @@ impl WorkerConfig {
             let Some(endpoint) = self.endpoint.to_str() else {
                 return invalid("worker pipe name must be Unicode");
             };
-            let prefix = r"\\.\pipe\ascension-watchdog-worker-";
-            let Some(name) = endpoint.strip_prefix(prefix) else {
-                return invalid("worker pipe must use its dedicated local namespace");
-            };
-            if name.is_empty()
-                || endpoint.len() > 240
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            if ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(endpoint)
+                .is_err()
             {
                 return invalid("worker pipe name is invalid");
             }

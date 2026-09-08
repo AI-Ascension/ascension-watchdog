@@ -7,6 +7,7 @@ use super::auth::{WorkerPeerIdentity, read_credential};
 use crate::admin::validate_endpoint_path;
 use crate::error::{Result, WatchdogError};
 use crate::worker_protocol::{Frame, MAX_FRAME_BYTES, decode_response, encode_frame};
+#[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::io::{ErrorKind, Write};
@@ -393,11 +394,7 @@ fn exchange_named_pipe(
             "worker named-pipe peer process identity is not approved".to_owned(),
         ));
     }
-    let mut executable_file = fs::File::open(pipe.server_executable()).map_err(|_| {
-        WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
-    })?;
-    let actual_digest = super::auth::hash_file_until(&mut executable_file, Some(deadline))?;
-    if actual_digest != peer.executable_sha256 {
+    if pipe.worker_image_digest() != Some(peer.executable_sha256.as_str()) {
         return Err(WatchdogError::Unauthorized(
             "worker peer executable digest is not approved".to_owned(),
         ));
@@ -418,7 +415,7 @@ fn exchange_named_pipe(
         .map_err(|error| WatchdogError::Io(std::io::Error::other(error.to_string())))?;
     let remaining = deadline.saturating_duration_since(Instant::now());
     let response = pipe
-        .read_frame(remaining)
+        .read_frame_bounded(remaining, MAX_FRAME_BYTES)
         .map_err(|error| WatchdogError::Io(std::io::Error::other(error.to_string())))?;
     decode_response(&response).map_err(|error| WatchdogError::InvalidInput(error.to_string()))
 }

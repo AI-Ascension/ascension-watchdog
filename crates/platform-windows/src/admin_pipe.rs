@@ -482,6 +482,9 @@ pub struct AdminPipeClient {
     server_process_id: u32,
     server_creation_time: u64,
     server_executable: PathBuf,
+    server_image_guard: Option<crate::native::IntegrityGuards>,
+    _server_image_ancestors: Vec<OwnedHandle>,
+    _server_image_leaf: Option<OwnedHandle>,
 }
 
 impl std::fmt::Debug for AdminPipeClient {
@@ -496,6 +499,11 @@ impl std::fmt::Debug for AdminPipeClient {
 }
 
 impl AdminPipeClient {
+    /// Validate the exact local worker namespace without opening any handles.
+    pub fn validate_worker_endpoint(name: &str) -> Result<(), PlatformError> {
+        validate_worker_pipe_name(name)
+    }
+
     /// Connect to a local named pipe and verify the exact server process.  The
     /// expected executable is mandatory; its canonical path must match the
     /// path observed through the held server process handle.
@@ -525,6 +533,7 @@ impl AdminPipeClient {
         worker: bool,
     ) -> Result<Self, PlatformError> {
         validate_timeout(timeout)?;
+        let connection_deadline = deadline(timeout);
         let expected_server_executable = expected_server_executable.ok_or_else(|| {
             PlatformError::Invalid(
                 "admin pipe clients must configure the expected server executable".to_owned(),
@@ -535,6 +544,19 @@ impl AdminPipeClient {
         } else {
             validate_pipe_name(&name)?;
         }
+        // Protect the original configured path before canonicalization can
+        // resolve away a reparse component. Retain all guards through exchange.
+        let server_image_ancestors = if worker {
+            validate_local_protected_path(expected_server_executable)?;
+            open_protected_ancestors(expected_server_executable)?
+        } else {
+            Vec::new()
+        };
+        let server_image_leaf = if worker {
+            Some(open_worker_image_leaf(expected_server_executable)?)
+        } else {
+            None
+        };
         let wide_name = wide(&name)?;
         let timeout_ms = timeout_millis(timeout)?;
         let waited = unsafe {
@@ -595,6 +617,14 @@ impl AdminPipeClient {
             ));
         }
         let server_creation_time = process_creation_time(server_process.raw())?;
+        let server_image_guard = if worker {
+            Some(crate::native::IntegrityGuards::open_until(
+                &expected,
+                Some(connection_deadline),
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
             handle,
             _name: name,
@@ -602,6 +632,9 @@ impl AdminPipeClient {
             server_process_id,
             server_creation_time,
             server_executable,
+            server_image_guard,
+            _server_image_ancestors: server_image_ancestors,
+            _server_image_leaf: server_image_leaf,
         })
     }
 
@@ -617,22 +650,67 @@ impl AdminPipeClient {
         self.server_creation_time
     }
 
+    /// Observed account from the held process; callers must compare trusted policy.
+    pub fn server_user_sid(&self) -> Result<String, PlatformError> {
+        self.verify_server_identity()?;
+        process_user_sid(self.server_process.raw())
+    }
+
+    /// Observed server session from the connected pipe; not authorization itself.
+    pub fn server_session_id(&self) -> Result<u32, PlatformError> {
+        self.verify_server_identity()?;
+        let mut session_id = 0_u32;
+        // SAFETY: the connected owned pipe and output remain live for this call.
+        if unsafe {
+            windows_sys::Win32::System::Pipes::GetNamedPipeServerSessionId(
+                self.handle.raw(),
+                &raw mut session_id,
+            )
+        } == 0
+        {
+            return Err(last_error("GetNamedPipeServerSessionId"));
+        }
+        Ok(session_id)
+    }
+
     /// Exact image path observed while the server process handle was held.
     #[must_use]
     pub fn server_executable(&self) -> &Path {
         &self.server_executable
     }
 
+    /// Digest of the worker image held against write/delete for this connection.
+    /// Admin-mode clients have no worker image guard and return `None`.
+    pub fn worker_image_digest(&self) -> Option<&str> {
+        self.server_image_guard
+            .as_ref()
+            .map(crate::native::IntegrityGuards::digest)
+    }
+
     /// Read one complete bounded admin frame.
     pub fn read_frame(&mut self, timeout: Duration) -> Result<Vec<u8>, PlatformError> {
+        self.read_frame_bounded(timeout, MAX_ADMIN_PIPE_FRAME)
+    }
+
+    /// Read a frame with a caller-selected stricter bound before allocation.
+    pub fn read_frame_bounded(
+        &mut self,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, PlatformError> {
         validate_timeout(timeout)?;
         self.verify_server_identity()?;
+        if max_bytes == 0 || max_bytes > MAX_ADMIN_PIPE_FRAME {
+            return Err(PlatformError::Invalid(
+                "invalid client frame bound".to_owned(),
+            ));
+        }
         let deadline = deadline(timeout);
         let mut length = [0_u8; 4];
         read_exact_poll(self.handle.raw(), &mut length, deadline)?;
         let length = usize::try_from(u32::from_be_bytes(length))
             .map_err(|_| PlatformError::Invalid("admin frame length overflow".to_owned()))?;
-        if length == 0 || length > MAX_ADMIN_PIPE_FRAME {
+        if length == 0 || length > max_bytes {
             return Err(PlatformError::Invalid(
                 "admin frame exceeds the fixed bound".to_owned(),
             ));
@@ -801,6 +879,37 @@ fn validate_local_protected_path(path: &Path) -> Result<(), PlatformError> {
     Ok(())
 }
 
+fn open_worker_image_leaf(path: &Path) -> Result<OwnedHandle, PlatformError> {
+    let wide = wide_path(path)?;
+    // SAFETY: the terminated path is live for this call; the resulting owned
+    // handle is retained through exchange and denies write/delete sharing.
+    let raw = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        )
+    };
+    let handle = OwnedHandle::new(raw, "CreateFileW(worker image leaf)")?;
+    let mut information =
+        windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: handle and output structure remain live for the call.
+    if unsafe { GetFileInformationByHandle(handle.raw(), &raw mut information) } == 0 {
+        return Err(last_error("GetFileInformationByHandle(worker image leaf)"));
+    }
+    if information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0
+    {
+        return Err(PlatformError::IdentityMismatch(
+            "worker image leaf must be a regular non-reparse file".to_owned(),
+        ));
+    }
+    Ok(handle)
+}
+
 fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformError> {
     let components = path.components().collect::<Vec<_>>();
     let mut current = PathBuf::new();
@@ -819,7 +928,9 @@ fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformErr
                 let raw = unsafe {
                     CreateFileW(
                         wide.as_ptr(),
-                        FILE_READ_ATTRIBUTES | READ_CONTROL,
+                        windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY
+                            | FILE_READ_ATTRIBUTES
+                            | READ_CONTROL,
                         // Retain read sharing only: write access could change
                         // reparse metadata after this ancestor was validated.
                         FILE_SHARE_READ,
@@ -1647,6 +1758,10 @@ mod ancestor_lock_tests {
             .map_err(|_| PlatformError::Invalid("test executable unavailable".to_owned()))?;
         let mut client =
             AdminPipeClient::connect_worker(&name, &executable, Duration::from_secs(2))?;
+        let expected_digest = crate::native::executable_sha256(&executable)?;
+        assert_eq!(client.worker_image_digest(), Some(expected_digest.as_str()));
+        assert_eq!(client.server_user_sid()?, current_user_sid()?);
+        let _observed_session = client.server_session_id()?;
         client.write_frame(b"request", Duration::from_secs(2))?;
         let mut received = [0_u8; 11];
         read_exact_poll(
@@ -1661,6 +1776,16 @@ mod ancestor_lock_tests {
             deadline(Duration::from_secs(2)),
         )?;
         assert_eq!(client.read_frame(Duration::from_secs(2))?, b"ok");
+        // Send only an oversized header: rejection must not wait for a body.
+        write_all_poll(
+            server.raw(),
+            &65_537_u32.to_be_bytes(),
+            deadline(Duration::from_secs(2)),
+        )?;
+        assert!(matches!(
+            client.read_frame_bounded(Duration::from_secs(2), 65_536),
+            Err(PlatformError::Invalid(_))
+        ));
         Ok(())
     }
 
@@ -1673,6 +1798,54 @@ mod ancestor_lock_tests {
         assert!(validate_worker_pipe_name(&worker.replace("4234", "3234")).is_err());
         assert!(validate_worker_pipe_name(&worker.replace("8234", "7234")).is_err());
         assert!(validate_worker_pipe_name(&format!("{worker}\\extra")).is_err());
+    }
+
+    #[test]
+    fn worker_image_expired_budget_rejects_before_path_access() {
+        assert!(matches!(
+            crate::native::IntegrityGuards::open_until(Path::new("unused"), Some(Instant::now())),
+            Err(PlatformError::Timeout(_))
+        ));
+    }
+
+    #[test]
+    fn worker_image_leaf_rejects_directory() -> Result<(), PlatformError> {
+        let executable =
+            std::env::current_exe().map_err(|error| PlatformError::Io(error.to_string()))?;
+        let parent = executable
+            .parent()
+            .ok_or_else(|| PlatformError::Invalid("test executable has no parent".to_owned()))?;
+        assert!(matches!(
+            open_worker_image_leaf(parent),
+            Err(PlatformError::IdentityMismatch(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Windows symlink creation privilege or Developer Mode"]
+    fn worker_image_leaf_rejects_real_symlink() -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "watchdog-leaf-symlink-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path)?;
+        let directory = TestDirectory(path);
+        let link = directory.0.join("worker.exe");
+        let executable = std::env::current_exe()?;
+        std::os::windows::fs::symlink_file(&executable, &link)?;
+        assert_eq!(
+            std::fs::canonicalize(&link)?,
+            std::fs::canonicalize(&executable)?
+        );
+        assert!(matches!(
+            open_worker_image_leaf(&link),
+            Err(PlatformError::IdentityMismatch(_))
+        ));
+        Ok(())
     }
 
     struct TestDirectory(PathBuf);
