@@ -13,14 +13,18 @@
 //! there is no second target process or post-spawn PID move to authorize.
 
 use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+use crate::worker_bootstrap::{ExpectedPeer, WorkerBootstrapLaunch};
+use rustix::fs::{
+    MemfdFlags, OFlags, SealFlags, fcntl_add_seals, fcntl_getfl, fcntl_setfl, fstatfs, memfd_create,
+};
+use rustix::pipe::{PipeFlags, pipe_with};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -28,6 +32,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+use uuid::{Uuid, Version};
 
 const FRAME_MAGIC: &[u8; 8] = b"ASC-LNX1";
 const FRAME_VERSION: u8 = 1;
@@ -37,6 +42,9 @@ const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
 const PARENT_BOOTSTRAP_PID_ARGUMENT: &str = "--ascension-linux-parent-bootstrap-pid";
 const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
 const DELEGATED_CGROUP_ROOT_ARGUMENT: &str = "--ascension-linux-delegated-cgroup-root";
+const WORKER_PIPE_ARGUMENT: &str = "--ascension-linux-worker-pipe";
+const WORKER_BOOT_ID_ARGUMENT: &str = "--ascension-linux-worker-boot-id";
+const WORKER_FRAME_SHA256_ARGUMENT: &str = "--ascension-linux-worker-frame-sha256";
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_FIELD_BYTES: usize = 16 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -71,6 +79,9 @@ pub struct LinuxHelperBootstrap {
     delegated_cgroup_root_path: Option<PathBuf>,
     delegated_cgroup_root: Option<Arc<File>>,
     delegated_cgroup_root_identity: Option<ProtectedFileIdentity>,
+    worker_boot_id: Option<String>,
+    worker_frame_sha256: Option<String>,
+    worker_reader: Option<Arc<File>>,
 }
 
 impl PartialEq for LinuxHelperBootstrap {
@@ -79,6 +90,8 @@ impl PartialEq for LinuxHelperBootstrap {
             && self.protected_config_identity == other.protected_config_identity
             && self.delegated_cgroup_root_path == other.delegated_cgroup_root_path
             && self.delegated_cgroup_root_identity == other.delegated_cgroup_root_identity
+            && self.worker_boot_id == other.worker_boot_id
+            && self.worker_frame_sha256 == other.worker_frame_sha256
     }
 }
 
@@ -111,6 +124,9 @@ impl LinuxHelperBootstrap {
             delegated_cgroup_root_path: None,
             delegated_cgroup_root: None,
             delegated_cgroup_root_identity: None,
+            worker_boot_id: None,
+            worker_frame_sha256: None,
+            worker_reader: None,
         })
     }
 
@@ -119,6 +135,9 @@ impl LinuxHelperBootstrap {
         config_fd: RawFd,
         root_fd: RawFd,
         ready_fd: RawFd,
+        worker_fd: Option<RawFd>,
+        worker_boot_id: Option<String>,
+        worker_frame_sha256: Option<String>,
     ) -> Result<(Self, HelperReadyChannel), AdapterError> {
         let actual_parent_pid =
             rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_pid()).ok());
@@ -133,6 +152,9 @@ impl LinuxHelperBootstrap {
             || config_fd == root_fd
             || config_fd == ready_fd
             || root_fd == ready_fd
+            || worker_fd.is_some_and(|fd| {
+                fd < MIN_INHERITED_FD || fd == config_fd || fd == root_fd || fd == ready_fd
+            })
         {
             return Err(AdapterError::Invalid(
                 "Linux helper bootstrap descriptors are invalid".to_owned(),
@@ -188,6 +210,24 @@ impl LinuxHelperBootstrap {
                 )));
             }
         }
+        let worker_reader = match worker_fd {
+            None if worker_boot_id.is_none() && worker_frame_sha256.is_none() => None,
+            Some(fd) if worker_boot_id.is_some() && worker_frame_sha256.is_some() => {
+                let boot_id = worker_boot_id.as_deref().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
+                })?;
+                let frame_sha256 = worker_frame_sha256.as_deref().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker frame metadata is missing".to_owned())
+                })?;
+                validate_worker_boot_metadata(boot_id, frame_sha256)?;
+                Some(Arc::new(open_parent_worker_descriptor(parent_pid, fd)?))
+            }
+            _ => {
+                return Err(AdapterError::Invalid(
+                    "Linux worker pipe metadata must be supplied as one complete set".to_owned(),
+                ));
+            }
+        };
         Ok((
             Self {
                 protected_config_path: config_path,
@@ -196,6 +236,9 @@ impl LinuxHelperBootstrap {
                 delegated_cgroup_root_path: Some(root_path),
                 delegated_cgroup_root: Some(Arc::new(root)),
                 delegated_cgroup_root_identity: Some(root_identity),
+                worker_boot_id,
+                worker_frame_sha256,
+                worker_reader,
             },
             HelperReadyChannel { file: ready },
         ))
@@ -205,6 +248,26 @@ impl LinuxHelperBootstrap {
     #[must_use]
     pub fn protected_config_path(&self) -> &Path {
         &self.protected_config_path
+    }
+
+    /// Return the worker watchdog boot UUID supplied in the helper metadata,
+    /// when this invocation carries a dedicated worker bootstrap pipe.
+    #[must_use]
+    pub fn worker_boot_id(&self) -> Option<&str> {
+        self.worker_boot_id.as_deref()
+    }
+
+    /// Return the exact SHA-256 digest of the worker bootstrap frame supplied
+    /// in the helper metadata, when present.
+    #[must_use]
+    pub fn worker_frame_sha256(&self) -> Option<&str> {
+        self.worker_frame_sha256.as_deref()
+    }
+
+    /// Alias naming the frame represented by [`Self::worker_frame_sha256`].
+    #[must_use]
+    pub fn worker_bootstrap_frame_sha256(&self) -> Option<&str> {
+        self.worker_frame_sha256()
     }
 
     /// Attach the exact delegated cgroup root used by the parent adapter.
@@ -239,7 +302,23 @@ impl LinuxHelperBootstrap {
         })
     }
 
-    fn parent_descriptors(&self) -> Result<ParentBootstrap, AdapterError> {
+    fn worker_pipe_file(&self) -> Result<Option<File>, AdapterError> {
+        self.worker_reader
+            .as_ref()
+            .map(|file| {
+                file.try_clone().map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux worker pipe descriptor cannot be cloned: {error}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn parent_descriptors(
+        &self,
+        worker: Option<&WorkerBootstrapLaunch>,
+    ) -> Result<ParentBootstrap, AdapterError> {
         let Some(root) = self.delegated_cgroup_root.as_ref() else {
             return Err(AdapterError::Invalid(
                 "Linux helper requires an exact delegated cgroup root bootstrap".to_owned(),
@@ -276,6 +355,39 @@ impl LinuxHelperBootstrap {
                 "Linux helper bootstrap descriptor is reserved for stdio".to_owned(),
             ));
         }
+        let (worker_reader, worker_writer, worker_reader_fd) = if let Some(worker) = worker {
+            if !matches!(worker.bootstrap().expected_peer, ExpectedPeer::Linux(_)) {
+                return Err(AdapterError::Unsupported(
+                    "Linux worker bootstrap requires a Linux expected peer".to_owned(),
+                ));
+            }
+            let (reader, writer) =
+                pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux worker bootstrap pipe cannot be created: {error}"
+                    ))
+                })?;
+            let reader = File::from(reader);
+            let writer = File::from(writer);
+            let reader_fd = reader.as_raw_fd();
+            if reader_fd < MIN_INHERITED_FD
+                || reader_fd == config_fd
+                || reader_fd == root_fd
+                || reader_fd == ready_fd
+                || writer.as_raw_fd() < MIN_INHERITED_FD
+                || writer.as_raw_fd() == config_fd
+                || writer.as_raw_fd() == root_fd
+                || writer.as_raw_fd() == ready_fd
+                || writer.as_raw_fd() == reader_fd
+            {
+                return Err(AdapterError::Unavailable(
+                    "Linux worker bootstrap descriptor is reserved for stdio".to_owned(),
+                ));
+            }
+            (Some(reader), Some(writer), Some(reader_fd))
+        } else {
+            (None, None, None)
+        };
         Ok(ParentBootstrap {
             config,
             config_fd,
@@ -283,6 +395,9 @@ impl LinuxHelperBootstrap {
             root_fd,
             ready,
             ready_fd,
+            worker_reader,
+            worker_reader_fd,
+            worker_writer,
         })
     }
 }
@@ -296,6 +411,9 @@ struct ParentBootstrap {
     root_fd: RawFd,
     ready: File,
     ready_fd: RawFd,
+    worker_reader: Option<File>,
+    worker_reader_fd: Option<RawFd>,
+    worker_writer: Option<File>,
 }
 
 impl std::fmt::Debug for ParentBootstrap {
@@ -308,6 +426,9 @@ impl std::fmt::Debug for ParentBootstrap {
             .field("root_fd", &self.root_fd)
             .field("ready", &self.ready)
             .field("ready_fd", &self.ready_fd)
+            .field("worker_reader", &self.worker_reader)
+            .field("worker_reader_fd", &self.worker_reader_fd)
+            .field("worker_writer", &self.worker_writer)
             .finish_non_exhaustive()
     }
 }
@@ -764,6 +885,8 @@ pub(crate) struct PendingLaunch {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     parent_bootstrap: Option<ParentBootstrap>,
+    worker_writer: Option<File>,
+    worker_launch: Option<WorkerBootstrapLaunch>,
     launch_nonce: String,
     timeout: Duration,
     released: bool,
@@ -806,6 +929,9 @@ impl PendingLaunch {
         }
         if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
             bootstrap.wait_for_ready(&self.launch_nonce, self.timeout)?;
+            // READY proves the helper owns its duplicate. Keeping our reader
+            // would conceal a rejected/exited helper from the bounded writer.
+            bootstrap.worker_reader.take();
         }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(AdapterError::Invalid(
@@ -818,6 +944,19 @@ impl PendingLaunch {
             .map_err(|error| {
                 AdapterError::Io(format!("Linux helper GO handoff failed: {error}"))
             })?;
+        if let Some(worker_launch) = self.worker_launch.as_ref() {
+            let Some(worker_writer) = self.worker_writer.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux worker bootstrap writer is unavailable".to_owned(),
+                ));
+            };
+            write_worker_frame(
+                worker_writer,
+                worker_launch.frame(),
+                self.timeout.min(Duration::from_secs(5)),
+            )?;
+            self.worker_writer.take();
+        }
         self.released = true;
         Ok(())
     }
@@ -838,6 +977,7 @@ impl PendingLaunch {
             ));
         }
         self.stdin.take();
+        self.worker_writer.take();
         // The helper parsed and opened both parent descriptors before it could
         // read the frame or accept GO, so the parent-side keepalive can close
         // before returning the target handle.  The target never inherited
@@ -852,6 +992,15 @@ impl PendingLaunch {
 impl Drop for PendingLaunch {
     fn drop(&mut self) {
         self.stdin.take();
+        // Close both ends of the dedicated worker handoff before attempting
+        // bounded helper termination.  Otherwise a pending writer/reader can
+        // keep the pipe alive while the helper is being reaped and obscure a
+        // failed or cancelled launch from any peer that is still probing it.
+        self.worker_writer.take();
+        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
+            bootstrap.worker_reader.take();
+            bootstrap.worker_writer.take();
+        }
         if let Some(child) = self.child.as_mut() {
             terminate_child_bounded(child, CHILD_CLEANUP_TIMEOUT);
         }
@@ -1022,6 +1171,47 @@ impl TrustedLinuxLauncher {
         specification: &LaunchSpec,
         cgroup_path: &Path,
     ) -> Result<PendingLaunch, AdapterError> {
+        self.prepare_inner(specification, cgroup_path, None)
+    }
+
+    /// Spawn a helper with a dedicated Linux worker bootstrap pipe.
+    ///
+    /// The worker frame is retained immutably until the parent has sent GO;
+    /// its bytes never enter the helper control pipe, command line, or
+    /// environment.  The protected helper bootstrap must be configured for
+    /// this overload so the helper can bind and validate the pipe descriptor.
+    pub(crate) fn prepare_with_worker_bootstrap(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        worker: &WorkerBootstrapLaunch,
+    ) -> Result<PendingLaunch, AdapterError> {
+        if specification.component != ComponentKind::Harness {
+            return Err(AdapterError::Unsupported(
+                "Linux worker bootstrap is only valid for the Harness role".to_owned(),
+            ));
+        }
+        if worker.bootstrap().launch_nonce.to_string() != specification.launch_nonce
+            || worker.bootstrap().component_id != specification.instance_id
+        {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux worker bootstrap differs from the launch identity".to_owned(),
+            ));
+        }
+        if self.bootstrap.is_none() {
+            return Err(AdapterError::Invalid(
+                "Linux worker bootstrap requires a protected helper bootstrap".to_owned(),
+            ));
+        }
+        self.prepare_inner(specification, cgroup_path, Some(worker))
+    }
+
+    fn prepare_inner(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        worker: Option<&WorkerBootstrapLaunch>,
+    ) -> Result<PendingLaunch, AdapterError> {
         specification.validate()?;
         let frame = encode_frame(specification, cgroup_path)?;
         // Open and hash the helper through one file descriptor immediately
@@ -1033,8 +1223,8 @@ impl TrustedLinuxLauncher {
         let mut command = Command::new(&helper_fd_path);
         command.arg0(&self.helper_executable);
         command.arg(&self.helper_argument);
-        let parent_bootstrap = if let Some(bootstrap) = &self.bootstrap {
-            let parent = bootstrap.parent_descriptors()?;
+        let mut parent_bootstrap = if let Some(bootstrap) = &self.bootstrap {
+            let parent = bootstrap.parent_descriptors(worker)?;
             command
                 .arg(PARENT_BOOTSTRAP_PID_ARGUMENT)
                 .arg(std::process::id().to_string())
@@ -1043,6 +1233,20 @@ impl TrustedLinuxLauncher {
                 .arg(DELEGATED_CGROUP_ROOT_ARGUMENT)
                 .arg(parent.root_fd.to_string())
                 .arg(parent.ready_fd.to_string());
+            if let Some(worker) = worker {
+                let worker_fd = parent.worker_reader_fd.ok_or_else(|| {
+                    AdapterError::Unavailable(
+                        "Linux worker bootstrap reader was not created".to_owned(),
+                    )
+                })?;
+                command
+                    .arg(WORKER_PIPE_ARGUMENT)
+                    .arg(worker_fd.to_string())
+                    .arg(WORKER_BOOT_ID_ARGUMENT)
+                    .arg(worker.bootstrap().watchdog_boot_id.to_string())
+                    .arg(WORKER_FRAME_SHA256_ARGUMENT)
+                    .arg(worker.frame_sha256());
+            }
             Some(parent)
         } else {
             None
@@ -1068,10 +1272,15 @@ impl TrustedLinuxLauncher {
                 "Linux helper request handoff failed: {error}"
             )));
         }
+        let worker_writer = parent_bootstrap
+            .as_mut()
+            .and_then(|parent| parent.worker_writer.take());
         Ok(PendingLaunch {
             child: Some(child),
             stdin: Some(stdin),
             parent_bootstrap,
+            worker_writer,
+            worker_launch: worker.cloned(),
             launch_nonce: specification.launch_nonce.clone(),
             timeout: self.timeout,
             released: false,
@@ -1091,7 +1300,12 @@ pub fn helper_invocation_requested() -> bool {
 
 fn parse_helper_bootstrap()
 -> Result<Option<(LinuxHelperBootstrap, HelperReadyChannel)>, AdapterError> {
-    let mut arguments = env::args();
+    parse_helper_bootstrap_arguments(env::args())
+}
+
+fn parse_helper_bootstrap_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<Option<(LinuxHelperBootstrap, HelperReadyChannel)>, AdapterError> {
     let _ = arguments.next();
     let Some(argument) = arguments.next() else {
         return Ok(None);
@@ -1171,12 +1385,67 @@ fn parse_helper_bootstrap()
         .map_err(|_| {
             AdapterError::Invalid("Linux helper readiness descriptor is invalid".to_owned())
         })?;
-    if arguments.next().is_some() {
-        return Err(AdapterError::Invalid(
-            "Linux helper invocation has unexpected arguments".to_owned(),
-        ));
-    }
-    LinuxHelperBootstrap::from_parent_fds(parent_pid, config_fd, root_fd, ready_fd).map(Some)
+    let (worker_fd, worker_boot_id, worker_frame_sha256) =
+        if let Some(worker_argument) = arguments.next() {
+            if worker_argument != WORKER_PIPE_ARGUMENT {
+                return Err(AdapterError::Invalid(
+                    "Linux helper invocation has an invalid worker pipe argument".to_owned(),
+                ));
+            }
+            let worker_fd = arguments
+                .next()
+                .ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker pipe descriptor is missing".to_owned())
+                })?
+                .parse::<RawFd>()
+                .map_err(|_| {
+                    AdapterError::Invalid("Linux worker pipe descriptor is invalid".to_owned())
+                })?;
+            let boot_argument = arguments.next().ok_or_else(|| {
+                AdapterError::Invalid("Linux worker boot metadata argument is missing".to_owned())
+            })?;
+            if boot_argument != WORKER_BOOT_ID_ARGUMENT {
+                return Err(AdapterError::Invalid(
+                    "Linux helper invocation has an invalid worker boot argument".to_owned(),
+                ));
+            }
+            let worker_boot_id = arguments.next().ok_or_else(|| {
+                AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
+            })?;
+            let digest_argument = arguments.next().ok_or_else(|| {
+                AdapterError::Invalid("Linux worker frame digest argument is missing".to_owned())
+            })?;
+            if digest_argument != WORKER_FRAME_SHA256_ARGUMENT {
+                return Err(AdapterError::Invalid(
+                    "Linux helper invocation has an invalid worker frame argument".to_owned(),
+                ));
+            }
+            let worker_frame_sha256 = arguments.next().ok_or_else(|| {
+                AdapterError::Invalid("Linux worker frame digest is missing".to_owned())
+            })?;
+            if arguments.next().is_some() {
+                return Err(AdapterError::Invalid(
+                    "Linux helper invocation has unexpected arguments".to_owned(),
+                ));
+            }
+            (
+                Some(worker_fd),
+                Some(worker_boot_id),
+                Some(worker_frame_sha256),
+            )
+        } else {
+            (None, None, None)
+        };
+    LinuxHelperBootstrap::from_parent_fds(
+        parent_pid,
+        config_fd,
+        root_fd,
+        ready_fd,
+        worker_fd,
+        worker_boot_id,
+        worker_frame_sha256,
+    )
+    .map(Some)
 }
 
 /// Run the hidden helper after root code has authorized its frame.
@@ -1203,7 +1472,7 @@ where
             "Linux helper protected bootstrap requires the bootstrap authorizer API".to_owned(),
         ));
     }
-    run_hidden_helper_core(None, authorizer)
+    run_hidden_helper_core(None, None, authorizer)
 }
 
 /// Run the hidden helper with the separately supplied protected-config
@@ -1227,11 +1496,15 @@ where
             "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
         )
     })?;
-    run_hidden_helper_core(Some(ready), |request| authorizer(request, &bootstrap))
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    run_hidden_helper_core(Some(ready), worker_reader, |request| {
+        authorizer(request, &bootstrap)
+    })
 }
 
 fn run_hidden_helper_core<F>(
     mut ready: Option<HelperReadyChannel>,
+    worker_reader: Option<File>,
     authorizer: F,
 ) -> Result<i32, AdapterError>
 where
@@ -1240,12 +1513,17 @@ where
     let (frame_rx, go_rx) = spawn_protocol_reader();
     let started = Instant::now();
     let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    if worker_reader.is_some() && request.specification.component != ComponentKind::Harness {
+        return Err(AdapterError::Unsupported(
+            "Linux worker bootstrap pipe requires the Harness role".to_owned(),
+        ));
+    }
     if let Some(channel) = ready.as_mut() {
         channel.send(&request.specification.launch_nonce)?;
     }
     let authorization = authorize_after_release(&request, &go_rx, started, authorizer)?;
     verify_current_cgroup(&authorization.cgroup_path)?;
-    spawn_authorized_target(&authorization).map(|()| 0)
+    spawn_authorized_target(&authorization, worker_reader).map(|()| 0)
 }
 
 fn authorize_after_release<F>(
@@ -1378,6 +1656,129 @@ fn read_go(reader: &mut impl Read) -> Result<String, AdapterError> {
         ));
     }
     read_string(reader, MAX_FIELD_BYTES)
+}
+
+fn validate_worker_boot_metadata(boot_id: &str, frame_sha256: &str) -> Result<(), AdapterError> {
+    let boot = Uuid::parse_str(boot_id).map_err(|_| {
+        AdapterError::Invalid("Linux worker boot metadata is not a UUIDv4".to_owned())
+    })?;
+    if boot.is_nil()
+        || boot.get_version() != Some(Version::Random)
+        || boot.get_variant() != uuid::Variant::RFC4122
+        || boot.to_string() != boot_id
+    {
+        return Err(AdapterError::Invalid(
+            "Linux worker boot metadata is not a canonical UUIDv4".to_owned(),
+        ));
+    }
+    if frame_sha256.len() != 64
+        || !frame_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(AdapterError::Invalid(
+            "Linux worker frame metadata is not a lowercase SHA-256".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn open_parent_worker_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent worker pipe cannot be opened: {error}"
+            ))
+        })?;
+    validate_worker_pipe_handle(&file)?;
+    Ok(file)
+}
+
+fn validate_worker_pipe_handle(file: &File) -> Result<(), AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe metadata failed: {error}"))
+    })?;
+    if !metadata.file_type().is_fifo() {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap descriptor is not a FIFO".to_owned(),
+        ));
+    }
+    let filesystem = fstatfs(file).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux worker pipe filesystem metadata failed: {error}"
+        ))
+    })?;
+    // Linux UAPI PIPEFS_MAGIC, compared in the platform field's native type.
+    if filesystem.f_type != 0x5049_5045 {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap descriptor is not a kernel pipe".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn set_worker_reader_blocking(file: &File) -> Result<(), AdapterError> {
+    let mut flags = fcntl_getfl(file).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe flags cannot be read: {error}"))
+    })?;
+    flags.remove(OFlags::NONBLOCK);
+    fcntl_setfl(file, flags).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe cannot become blocking: {error}"))
+    })
+}
+
+fn write_worker_frame(
+    writer: &mut File,
+    frame: &[u8],
+    timeout: Duration,
+) -> Result<(), AdapterError> {
+    if frame.is_empty() || frame.len() > crate::worker_bootstrap::MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap frame exceeds bounds".to_owned(),
+        ));
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut written = 0_usize;
+    while written < frame.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(
+                "Linux worker bootstrap pipe write timed out".to_owned(),
+            ));
+        }
+        match writer.write(&frame[written..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(
+                    "Linux worker bootstrap pipe closed before frame completion".to_owned(),
+                ));
+            }
+            Ok(count) => {
+                written = written.checked_add(count).ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker frame write overflow".to_owned())
+                })?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(AdapterError::Timeout(
+                        "Linux worker bootstrap pipe write timed out".to_owned(),
+                    ));
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!(
+                    "Linux worker bootstrap frame handoff failed: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn encode_frame(specification: &LaunchSpec, cgroup_path: &Path) -> Result<Vec<u8>, AdapterError> {
@@ -1597,7 +1998,10 @@ fn authorize_request(
     Ok(())
 }
 
-fn spawn_authorized_target(authorization: &LinuxHelperAuthorization) -> Result<(), AdapterError> {
+fn spawn_authorized_target(
+    authorization: &LinuxHelperAuthorization,
+    worker_reader: Option<File>,
+) -> Result<(), AdapterError> {
     let specification = &authorization.specification;
     if specification.component == ComponentKind::HostBroker {
         return Err(AdapterError::Unsupported(
@@ -1634,6 +2038,9 @@ fn spawn_authorized_target(authorization: &LinuxHelperAuthorization) -> Result<(
     }
     let (executable_file, executable_fd_path) =
         open_verified_executable(&approved, &specification.executable_sha256)?;
+    if let Some(reader) = worker_reader.as_ref() {
+        set_worker_reader_blocking(reader)?;
+    }
     let mut command = Command::new(&executable_fd_path);
     command.arg0(&specification.executable);
     command.args(&specification.arguments).env_clear().envs(
@@ -1642,6 +2049,11 @@ fn spawn_authorized_target(authorization: &LinuxHelperAuthorization) -> Result<(
             .iter()
             .map(|(name, value)| (name, value)),
     );
+    // Preserve the pre-bootstrap stream inheritance for ordinary launches.
+    // A worker alone reserves stdin for its dedicated startup frame.
+    if let Some(reader) = worker_reader {
+        command.stdin(Stdio::from(reader));
+    }
     if let Some(path) = specification.working_directory.as_deref() {
         let canonical = fs::canonicalize(path).map_err(|error| {
             AdapterError::Invalid(format!(
@@ -2187,7 +2599,7 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let parent = bootstrap.parent_descriptors()?;
+        let parent = bootstrap.parent_descriptors(None)?;
         assert!(rustix::io::fcntl_getfd(&parent.config)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(rustix::io::fcntl_getfd(&parent.root)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(rustix::io::fcntl_getfd(&parent.ready)?.contains(rustix::io::FdFlags::CLOEXEC));
@@ -2224,32 +2636,32 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let (config_fd, root_fd, ready_fd, config_target, root_target, ready_target) = {
-            let parent = bootstrap.parent_descriptors()?;
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.config_fd)).exists());
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.root_fd)).exists());
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.ready_fd)).exists());
-            (
-                parent.config_fd,
-                parent.root_fd,
-                parent.ready_fd,
-                fs::read_link(format!("/proc/self/fd/{}", parent.config_fd))?,
-                fs::read_link(format!("/proc/self/fd/{}", parent.root_fd))?,
-                fs::read_link(format!("/proc/self/fd/{}", parent.ready_fd))?,
-            )
+        let identities = {
+            let parent = bootstrap.parent_descriptors(None)?;
+            let mut identities = Vec::new();
+            for (file, fd) in [
+                (&parent.config, parent.config_fd),
+                (&parent.root, parent.root_fd),
+                (&parent.ready, parent.ready_fd),
+            ] {
+                let metadata = file.metadata()?;
+                identities.push((fd, metadata.dev(), metadata.ino()));
+            }
+            identities
         };
-        assert_ne!(
-            fs::read_link(format!("/proc/self/fd/{config_fd}")).ok(),
-            Some(config_target)
-        );
-        assert_ne!(
-            fs::read_link(format!("/proc/self/fd/{root_fd}")).ok(),
-            Some(root_target)
-        );
-        assert_ne!(
-            fs::read_link(format!("/proc/self/fd/{ready_fd}")).ok(),
-            Some(ready_target)
-        );
+        for (fd, device, inode) in identities {
+            // Parallel tests may immediately reuse a released descriptor number.
+            // Only retaining the original unique resource indicates a leaked handle.
+            match fs::metadata(format!("/proc/self/fd/{fd}")) {
+                Ok(replacement) => assert_ne!(
+                    (replacement.dev(), replacement.ino()),
+                    (device, inode),
+                    "original bootstrap resource remains open at descriptor {fd}"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
     }
 
@@ -2265,6 +2677,9 @@ mod tests {
             root_fd: 1,
             ready,
             ready_fd,
+            worker_reader: None,
+            worker_reader_fd: None,
+            worker_writer: None,
         };
         let mut delayed_helper = Command::new("/bin/sh")
             .args([
@@ -2292,6 +2707,9 @@ mod tests {
             root_fd: 1,
             ready_fd: ready.as_raw_fd(),
             ready,
+            worker_reader: None,
+            worker_reader_fd: None,
+            worker_writer: None,
         };
         assert!(matches!(
             parent.wait_for_ready("x", Duration::from_millis(10)),
@@ -2405,5 +2823,187 @@ mod tests {
         });
         assert!(matches!(result, Err(AdapterError::IdentityMismatch(_))));
         assert!(!queried);
+    }
+
+    #[test]
+    fn worker_bootstrap_launch_keeps_exact_frame_and_digest() {
+        let peer =
+            crate::worker_bootstrap::LinuxPeer::new(1, "1", "/bin/true", "a".repeat(64), 0, 0)
+                .expect("valid Linux peer");
+        let bootstrap = crate::worker_bootstrap::WorkerBootstrap::linux(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "harness",
+            peer,
+        )
+        .expect("valid worker bootstrap");
+        let launch = WorkerBootstrapLaunch::new(bootstrap).expect("encodable worker bootstrap");
+        assert_eq!(
+            launch.frame_sha256(),
+            crate::config::hex_digest(launch.frame())
+        );
+        assert_eq!(launch.bootstrap().component_id, "harness");
+    }
+
+    #[test]
+    fn worker_bootstrap_identity_mismatch_is_rejected_before_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let peer =
+            crate::worker_bootstrap::LinuxPeer::new(1, "1", "/bin/true", "a".repeat(64), 0, 0)?;
+        let frame = crate::worker_bootstrap::WorkerBootstrap::linux(
+            nonce,
+            Uuid::new_v4(),
+            "harness",
+            peer,
+        )?;
+        let worker = WorkerBootstrapLaunch::new(frame)?;
+        let launcher = TrustedLinuxLauncher::new("/bin/true")?;
+        let mut spec = specification();
+        spec.component = ComponentKind::Harness;
+        spec.instance_id = "harness".to_owned();
+        spec.launch_nonce = Uuid::new_v4().to_string();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+        spec.launch_nonce = nonce.to_string();
+        spec.instance_id = "different".to_owned();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+        spec.instance_id = "harness".to_owned();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::Invalid(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn worker_pipe_is_nonblocking_cloexec_and_writes_exact_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (reader_fd, writer_fd) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader_fd);
+        let mut writer = File::from(writer_fd);
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&writer)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&writer)?.contains(OFlags::NONBLOCK));
+        let frame = b"ASC-WB01-worker-frame";
+        write_worker_frame(&mut writer, frame, Duration::from_secs(1))?;
+        drop(writer);
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received)?;
+        assert_eq!(received, frame);
+        Ok(())
+    }
+
+    #[test]
+    fn worker_pipe_rejects_regular_descriptors_and_bad_metadata() {
+        assert!(matches!(
+            validate_worker_pipe_handle(&File::open("/dev/null").expect("/dev/null")),
+            Err(AdapterError::Invalid(_))
+        ));
+        let boot_id = Uuid::new_v4().to_string();
+        assert!(validate_worker_boot_metadata(&boot_id, &"a".repeat(64)).is_ok());
+        assert!(validate_worker_boot_metadata(&boot_id.to_uppercase(), &"a".repeat(64)).is_err());
+        assert!(validate_worker_boot_metadata(&boot_id, &"A".repeat(64)).is_err());
+        assert!(
+            validate_worker_boot_metadata("12345678-1234-4234-7234-123456789abc", &"a".repeat(64))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn expired_worker_write_cannot_emit_even_immediately_available_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        assert!(matches!(
+            write_worker_frame(&mut writer, b"frame", Duration::ZERO),
+            Err(AdapterError::Timeout(_))
+        ));
+        let mut byte = [0_u8; 1];
+        assert_eq!(
+            reader
+                .read(&mut byte)
+                .expect_err("no bytes admitted")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stalled_worker_reader_cannot_extend_write_deadline() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let _reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let mut saturated = false;
+        for _ in 0..1024 {
+            match writer.write(&[0_u8; 4096]) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    saturated = true;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        assert!(saturated, "test pipe must reach backpressure");
+        let start = Instant::now();
+        assert!(matches!(
+            write_worker_frame(&mut writer, b"frame", Duration::from_millis(20)),
+            Err(AdapterError::Timeout(_))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[test]
+    fn helper_reader_duplicate_is_anonymous_cloexec_and_independently_owned()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let mut duplicate = open_parent_worker_descriptor(std::process::id(), reader.as_raw_fd())?;
+        assert!(rustix::io::fcntl_getfd(&duplicate)?.contains(rustix::io::FdFlags::CLOEXEC));
+        drop(reader);
+        write_worker_frame(&mut writer, b"frame", Duration::from_secs(1))?;
+        let mut bytes = [0_u8; 5];
+        duplicate.read_exact(&mut bytes)?;
+        assert_eq!(&bytes, b"frame");
+        drop(duplicate);
+        assert!(write_worker_frame(&mut writer, b"frame", Duration::from_secs(1)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_bare_helper_invocation_requires_parent_bootstrap() {
+        let result = parse_helper_bootstrap_arguments(
+            ["watchdog".to_owned(), HELPER_ARGUMENT.to_owned()].into_iter(),
+        );
+        assert!(matches!(
+            result,
+            Err(AdapterError::Invalid(message))
+                if message == "Linux helper parent bootstrap process identifier is missing"
+        ));
+    }
+
+    #[test]
+    fn unprotected_helper_mode_still_requires_exact_parent_prefix() {
+        let result = parse_helper_bootstrap_arguments(
+            [
+                "watchdog".to_owned(),
+                HELPER_ARGUMENT.to_owned(),
+                PARENT_BOOTSTRAP_PID_ARGUMENT.to_owned(),
+                "1".to_owned(),
+            ]
+            .into_iter(),
+        );
+        assert!(matches!(result, Ok(None)));
     }
 }
