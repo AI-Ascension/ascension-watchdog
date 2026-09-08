@@ -1067,9 +1067,19 @@ impl Supervisor {
 
         let prior = self.store.component(&component.id)?;
         let is_running = self.children.contains_key(&component.id);
+        let retained_quarantine = is_running
+            && prior
+                .as_ref()
+                .is_some_and(|record| record.state == ComponentState::Quarantined);
+        let stop_requested = desired_mode.stops_children() || desired_mode == DesiredMode::Draining;
         let observation = ComponentObservation {
             component_id: component.id.clone(),
-            state: if is_running {
+            // A live owned child does not erase a durable quarantine. In
+            // particular, a timed-out/error stop must not be reclassified as
+            // healthy merely because the next probe can still see the handle.
+            state: if retained_quarantine {
+                ComponentState::Quarantined
+            } else if is_running {
                 ComponentState::Running
             } else {
                 prior
@@ -1098,7 +1108,20 @@ impl Supervisor {
             restart_count,
             prior.as_ref().and_then(|record| record.last_restart_at_ms),
         );
-        if is_running && decision.action == ReconcileAction::Start {
+        if retained_quarantine && !stop_requested {
+            // Running or Paused intent cannot authorize revival or erase the
+            // exact cleanup error. A stop/drain request still reaches the
+            // normal authority-aware stop path above.
+            decision.action = ReconcileAction::Quarantine;
+            decision.resulting_state = ComponentState::Quarantined;
+            if let Some(error) = prior.as_ref().and_then(|record| record.last_error.clone()) {
+                decision.reason = error;
+            } else {
+                "owned process remains quarantined pending authority-aware recovery"
+                    .clone_into(&mut decision.reason);
+            }
+            decision.retry_at_ms = None;
+        } else if is_running && decision.action == ReconcileAction::Start {
             // Never overwrite a still-owned child with a replacement merely
             // because a deadline or health observation became suspect.
             // Authority-aware drain/cleanup must complete before relaunch.
@@ -1138,7 +1161,11 @@ impl Supervisor {
                         last_restart_at_ms: prior
                             .as_ref()
                             .and_then(|record| record.last_restart_at_ms),
-                        last_error: Some(decision.reason.clone()),
+                        last_error: if retained_quarantine {
+                            prior.as_ref().and_then(|record| record.last_error.clone())
+                        } else {
+                            Some(decision.reason.clone())
+                        },
                     },
                     now_ms,
                 )?;
@@ -1988,6 +2015,10 @@ impl RuntimeAdapter for DirectRuntimeAdapter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_stop_uncertainty_tests.rs"]
+mod runtime_stop_uncertainty_tests;
 
 #[cfg(test)]
 mod tests {
