@@ -314,6 +314,11 @@ fn reject_existing_link_components(path: &Path, name: &str) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows drive/verbatim prefix alone is not a rooted directory.
+        // Inspect it only after RootDir has completed the volume root.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) => reject_link_or_reparse(&metadata, name)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,

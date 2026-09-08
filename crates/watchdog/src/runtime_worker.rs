@@ -400,6 +400,21 @@ impl Supervisor {
         }
         let identity = child.identity().clone();
         let peer = WorkerPeerIdentity::from_process_identity(&identity)?;
+        #[cfg(windows)]
+        let peer = {
+            let (account, session) = child.worker_account_identity()?;
+            if worker
+                .allowed_peer_sid
+                .as_ref()
+                .is_some_and(|allowed| allowed != &account)
+            {
+                return Err(WatchdogError::IdentityMismatch(
+                    "owned worker account does not match configured SID".to_owned(),
+                )
+                .into());
+            }
+            peer.with_windows_account(account, session)?
+        };
         let binding = self.config.worker_binding()?.ok_or_else(|| {
             WatchdogError::Conflict("worker configuration disappeared".to_owned())
         })?;

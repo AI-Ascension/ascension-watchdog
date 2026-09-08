@@ -5,6 +5,98 @@
 //! for the unit-test build; production binaries always use the platform
 //! authority in `runtime_process`.
 
+#[cfg(windows)]
+mod windows_tests {
+    use super::super::*;
+    use crate::config::{ComponentConfig, WorkerConfig, hex_digest};
+    use std::collections::BTreeMap;
+
+    #[test]
+    #[ignore = "owned subprocess fixture"]
+    fn fixture_child() {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn identity_rejection_and_stop_timeout_retain_exact_child_for_retry()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let executable = std::env::current_exe()?;
+        let digest = hex_digest(&std::fs::read(&executable)?);
+        let config = WatchdogConfig {
+            database: directory.path().join("watchdog.sqlite"),
+            desired_mode: DesiredMode::Running,
+            allow_synthetic_children: true,
+            components: vec![ComponentConfig {
+                id: "harness".to_owned(),
+                executable,
+                executable_sha256: Some(digest),
+                args: vec![
+                    "--exact".to_owned(),
+                    "runtime::runtime_stop_uncertainty_tests::windows_tests::fixture_child"
+                        .to_owned(),
+                    "--ignored".to_owned(),
+                ],
+                cwd: None,
+                environment: BTreeMap::new(),
+                restart: true,
+            }],
+            worker: Some(WorkerConfig {
+                component_id: "harness".to_owned(),
+                endpoint: std::path::PathBuf::from(format!(
+                    r"\\.\pipe\ascension-worker-{}",
+                    uuid::Uuid::new_v4()
+                )),
+                credential_path: directory.path().join("credential"),
+                allowed_peer_sid: None,
+                worker_profile_digest: "b".repeat(64),
+                release_digest: "c".repeat(64),
+                worker_config_digest: "d".repeat(64),
+                schema_digest: crate::worker_protocol::SCHEMA_DIGEST.to_owned(),
+                timeout_ms: 5000,
+            }),
+            ..WatchdogConfig::default()
+        };
+        let mut supervisor = Supervisor::initialize(config)?;
+        assert!(matches!(
+            supervisor.reconcile_once(1000),
+            Err(WatchdogError::IdentityMismatch(_))
+        ));
+        let identity = supervisor
+            .child_identity("harness")
+            .ok_or("missing child")?
+            .clone();
+        supervisor.request_stop(1001)?;
+        supervisor
+            .process_manager
+            .inject_stop_result(Ok(RuntimeStopOutcome::TimedOut));
+        let report = supervisor.reconcile_once(1002)?;
+        assert!(report.started.is_empty());
+        assert!(report.stopped.is_empty());
+        assert_eq!(supervisor.child_identity("harness"), Some(&identity));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.starts_with("worker identity blocked during stop:"))
+        );
+        let retry = supervisor.reconcile_once(1003)?;
+        assert!(retry.started.is_empty());
+        assert!(supervisor.child_identity("harness").is_none());
+        assert_eq!(supervisor.store.desired_mode()?, DesiredMode::Stopped);
+        assert_eq!(
+            supervisor
+                .store
+                .component("harness")?
+                .ok_or("missing durable component")?
+                .state,
+            crate::policy::ComponentState::Stopped,
+        );
+        assert!(supervisor.store.unsettled_launch_intents()?.is_empty());
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 use super::*;
 

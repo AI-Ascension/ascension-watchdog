@@ -127,3 +127,66 @@ and a different session each return identity mismatch. The exchange test passed
 calls this same check before credential access. This closes the local mismatch
 predicate test gap, but does not prove distinct-process credential non-disclosure
 or trusted supervisor policy propagation.
+
+## Integrated supervisor propagation
+
+Existing runtime commits were integrated as `9962fd1b36c8f0ae92f6b6ece4f602c4455024a3`
+and `f2ca63bea43e12e9f6432f112b0b15cdc3de276c`. The follow-up runtime patch obtains
+SID/session only from a verified native owned child, rejects a configured SID
+mismatch, and supplies that policy to the client before connecting. Synthetic
+Windows children cannot supply native account authority.
+
+Independent source review found no new concrete defect in this trust path.
+Linux `runtime_worker` passed six tests (exit 0, 2.22s); Windows-target strict
+Clippy passed after repairing imported Debug/test-helper lint failures.
+Native runtime launch, cross-process credential non-disclosure, configured SID
+mismatch through the supervisor, and persisted-proof reopen remain unverified.
+The Windows runtime fixture now selects the shared pipe namespace rather than
+a Unix socket path. Its native build succeeded, but execution failed all five
+tests with Windows I/O error 1 (`Incorrect function`), exit 101, 0.01s. No Windows
+runtime test passed. The common initialization failure requires diagnosis before
+these tests can establish runtime propagation evidence.
+
+The common Windows initialization failure was traced to querying metadata for
+an incomplete drive/verbatim prefix. Storage now waits for the root separator
+before inspecting the volume root; normal component reparse checks remain.
+The imported `timeout.exe` fixture was replaced by an explicitly invoked sleeping
+test child. Its deliberate lack of native worker identity exposed a stop-ordering
+defect: worker identity rejection could prevent durable operator stop cleanup.
+Only during `Stopped`, that rejection is now reported while independently owned
+component cleanup proceeds; other failures retain their previous handling.
+
+Native runtime tests then passed five tests with one intentionally ignored child
+fixture (exit 0, 4.14s). The Windows test explicitly checks authentication failure
+followed by durable stop and removal of both owned children. It does not claim a
+successful native worker endpoint connection. Linux runtime-worker six tests and
+storage regression five tests subsequently passed; Windows strict Clippy passed.
+The temporary diagnostic lock setup was removed after diagnosis, requiring a
+final native rerun from fresh state before commit.
+
+The final fresh-state native rerun passed five tests, one child-fixture test
+ignored at the top level, exit 0, 3.96s. Test executable SHA-256:
+`0144b9c7326b13a397a90d04dad971a480c90c4f4f01d72d406781f13e99a89e`.
+This supersedes the diagnostic-setup run for the tested stop/storage boundaries.
+
+Independent stop-path review found an additional retained-child case: after a
+cleanup timeout, post-component worker reconciliation could repeat the same
+identity failure and abort the loop. The candidate now skips that post phase
+when the pre-phase identity was already rejected during durable `Stopped`.
+Other modes/errors are unchanged. A retained-child timeout regression and final
+rerun are required before closing this follow-up finding; earlier test passes
+do not cover this newer adjustment.
+
+The native Windows unit regression
+`identity_rejection_and_stop_timeout_retain_exact_child_for_retry` now passed
+(exit 0, 1.96s). It uses a real owned synthetic child and a test-only injected
+stop timeout: the first stop loop retains the exact identity, the next removes
+that child without launching a replacement. Injection is excluded from production.
+This covers the retained-child post-phase finding, not native worker authentication.
+The earlier full Linux workspace/all-target/all-feature run completed with exit 0;
+it predates this final adjustment and is not evidence for the new stop test.
+
+Independent follow-up review closed the post-phase finding. The strengthened
+native regression also asserts durable desired/component state `Stopped` and no
+unsettled launch intents after retry; it passed with exit 0 in 2.02s. Strict
+Linux and Windows-target Clippy passed on the integrated production changes.

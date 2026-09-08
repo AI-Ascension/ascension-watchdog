@@ -183,6 +183,7 @@ impl fmt::Debug for WorkerClient {
             .debug_struct("WorkerClient")
             .field("config", &self.config)
             .field("watchdog_boot_id", &self.watchdog_boot_id)
+            .field("deadline", &self.deadline)
             .finish()
     }
 }

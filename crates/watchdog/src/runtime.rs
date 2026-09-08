@@ -291,7 +291,28 @@ impl Supervisor {
         };
         // Existing live harnesses must receive the freshly observed durable
         // desired mode before component stop/cleanup can run.
-        self.reconcile_worker_before_components(desired_mode, now_ms, worker_budget, &mut report)?;
+        let worker_identity_blocked = match self.reconcile_worker_before_components(
+            desired_mode,
+            now_ms,
+            worker_budget,
+            &mut report,
+        ) {
+            Err(WatchdogError::IdentityMismatch(message))
+                if desired_mode == DesiredMode::Stopped =>
+            {
+                // Failed worker authentication cannot veto durable operator stop.
+                // Only the independently owned process authority performs cleanup;
+                // pending handoffs remain unresolved and no worker command is sent.
+                report
+                    .errors
+                    .push(format!("worker identity blocked during stop: {message}"));
+                true
+            }
+            result => {
+                result?;
+                false
+            }
+        };
         for component in self.config.components.clone() {
             let decision =
                 self.reconcile_component(&component, desired_mode, now_ms, &mut report)?;
@@ -299,7 +320,14 @@ impl Supervisor {
         }
         // Repeat control/recovery after a possible new launch.  Claims are
         // admitted only by this post-scheduling Running phase.
-        self.reconcile_worker_after_components(desired_mode, now_ms, worker_budget, &mut report)?;
+        if !worker_identity_blocked {
+            self.reconcile_worker_after_components(
+                desired_mode,
+                now_ms,
+                worker_budget,
+                &mut report,
+            )?;
+        }
         if desired_mode == DesiredMode::Draining
             && self.children.is_empty()
             && self.worker_drain_complete()?

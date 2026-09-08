@@ -146,7 +146,7 @@ impl RuntimeProcessManager {
     /// Inject one bounded stop result for the in-crate supervision regression
     /// tests. This hook is compiled out of production binaries so the runtime
     /// process manager always delegates to the real owned-child authority.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn inject_stop_result(
         &mut self,
         result: std::result::Result<RuntimeStopOutcome, String>,
@@ -389,6 +389,18 @@ impl RuntimeProcessManager {
 }
 
 impl RuntimeChild {
+    #[cfg(windows)]
+    pub(crate) fn worker_account_identity(&self) -> Result<(String, u32)> {
+        match &self.handle {
+            RuntimeChildHandle::Native(NativeChild::Windows(process)) => process
+                .account_identity()
+                .map_err(|error| WatchdogError::IdentityMismatch(error.to_string())),
+            RuntimeChildHandle::Synthetic(_) => Err(WatchdogError::IdentityMismatch(
+                "Windows worker requires a native owned account identity".to_owned(),
+            )),
+        }
+    }
+
     pub(crate) fn identity(&self) -> &ProcessIdentity {
         &self.portable_identity
     }
