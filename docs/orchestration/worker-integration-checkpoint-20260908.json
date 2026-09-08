@@ -9,6 +9,8 @@
     "ascension-watchdog": {
       "revision": "2c1d87e9df28f3cc8f3c10abb1cd18aeaa82ad8a",
       "branch": "codex/watchdog-client-process-candidate",
+      "test_repair_revision": "a3b7e0d7a2f7f2f72351063a25769665ea175bc4",
+      "test_repair_check": {"command": "cargo test --locked --offline -p ascension-watchdog --test job_submission_process", "exit_code": 0, "passed": 4, "note": "Authenticated readiness wait integrated; first build failed from ENOSPC, then passed after obsolete task build outputs were reclaimed."},
       "checks": [
         {"command": "cargo test --locked --offline -p ascension-watchdog --test worker_config --test worker_storage", "exit_code": 0, "passed": 25},
         {"command": "cargo test --locked --offline -p ascension-watchdog --test worker_client", "exit_code": 0, "passed": 11},
@@ -19,30 +21,32 @@
       "independent_review": "H90: digest separation and immutable binding accepted; production wiring must derive bindings from validated configuration"
     },
     "sts2-harness": {
-      "revision": "d40b8d2787937941f1e8663fc39b496cabaafeeb",
+      "revision": "c28273aface112f097144120d3e1863c3546cf82",
       "branch": "codex/harness-worker-ledger-integration",
       "checks": [
-        {"command": "cargo test --locked --offline -p sts2-harness --bin sts2-harness-runtime", "exit_code": 0, "passed": 145},
+        {"command": "cargo test --locked --offline -p sts2-harness --bin sts2-harness-runtime", "exit_code": 0, "passed": 148},
         {"command": "cargo test --locked --offline --workspace --all-targets --all-features", "exit_code": 0},
-        {"command": "cargo run --locked --offline --package repo-policy -- --strict", "exit_code": 0, "sized_files": 495, "warnings": 0, "errors": 0}
+        {"command": "cargo run --locked --offline --package repo-policy -- --strict", "exit_code": 0, "sized_files": 495, "warnings": 0, "errors": 0},
+        {"command": "cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings", "exit_code": 101, "errors": 24, "finding": "Worker command modules are not connected to the executable; no diagnostic suppression applied."}
       ],
       "independent_review": "H89 snapshot identity accepted; H94 accepted exact quarantine repair 488e6114b824f3fb7e0aea0601a51c63457e27c0 after identifying and repairing cross-episode false acknowledgment. Root integrated both quarantine commits and reran 145 runtime tests.",
-      "strict_clippy": "incomplete: 24 known dead-code diagnostics in unwired worker command modules"
+      "cleanup_review": "H105 accepted c28273a source ordering and error preservation across all five runtime branches; full runtime and workspace checks passed. Actual injected close failure through the full run remains unverified.",
+      "strict_clippy": "failed: 24 dead-code diagnostics in unwired worker command modules"
     }
   },
   "open_work": [
-    {"task": "H99", "owner": "w38_worker_client_lead", "scope": "Independent Windows helper ownership review of 3b62476cef8e2be75d03b867d11d718f12c73f9f; native runtime and packaging remain unverified", "state": "review_in_progress"},
-    {"task": "H96", "owner": "h34_identity_final_review", "scope": "Independent review of Linux verifier 5195bbab95e8d6aa65555b782cdac33b977af34c; dispatcher wiring and integration remain pending", "state": "review_in_progress"},
-    {"task": "H97", "owner": "w39_worker_config_review", "scope": "Repair test startup readiness after H95 diagnosed socket-publication versus first-reconciliation race; retain production deadlines", "state": "implementation_in_progress"},
+    {"task": "H99", "owner": "root", "scope": "Windows helper review found missing Supervisor preparation/polling and release packaging; source ownership checks passed", "state": "integration_pending"},
+    {"task": "H101", "owner": "w37_historical_terminal_repair", "scope": "Repair confirmed Linux retained-owner loss and launch reservation races; preserve one global helper slot and never kill an active helper during another prepare", "state": "implementation_in_progress"},
+    {"task": "H103", "owner": "w39_worker_config_review", "scope": "Identify concrete protected startup handoff slots for fresh authenticated boot identities on Windows and Linux", "state": "investigation_in_progress"},
     {"task": "H91", "owner": "h35_raw_catalog_repair", "scope": "Real harness worker executable and admitted runtime wiring", "state": "implementation_in_progress"},
-    {"task": "H98", "owner": "g64_storage_final_review", "scope": "Independent review of Supervisor worker wiring 51708db212843aa3321fde1d5363d34f6a248791 including transport-error propagation and stop ordering", "state": "review_in_progress"}
+    {"task": "H100", "owner": "g62_allocation_review", "scope": "Repair confirmed worker-fault whole-service teardown and cumulative deadline violations without exhausting audit capacity or weakening persistence failure handling", "state": "implementation_in_progress"}
   ],
   "limitations": [
     "Tests do not establish connected watchdog-to-harness runtime operation.",
     "Windows cross-compilation and portable platform tests are not native Windows execution.",
     "Helper startup and cleanup deadline requirements remain under implementation and review.",
-    "Windows helper startup publication lock repair is committed but independent ownership review remains pending.",
-    "Linux listener 5195bbab95e8d6aa65555b782cdac33b977af34c passed 13 root-run tests; registry contention may still lose retained child authority and acceptance remains withheld.",
+    "Windows helper startup publication repair passed source review; runtime preparation, polling, packaging, and native execution remain incomplete.",
+    "Linux listener 5195bbab95e8d6aa65555b782cdac33b977af34c passed 13 root-run tests; independent review confirmed lost retained child authority and launch races. Acceptance is withheld pending repair.",
     "Supervisor worker-probe errors currently propagate out of the service loop; scoped recovery and durable stop handling remain under review before integration.",
     "A process-local quarantine latch cannot establish crash durability after a failed persistence operation.",
     "Recovery diagnostics do not resolve the previously observed intermittent recovery-test failure's cause.",
