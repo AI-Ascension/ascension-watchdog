@@ -1,0 +1,196 @@
+{
+  "contract": "ascension-worker-endpoint-v1",
+  "owner": "AI-Ascension/ascension-watchdog",
+  "license": "MIT",
+  "cases": [
+    {
+      "id": "linux-normal",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": "/run/worker/ascension-worker-12345678-1234-4234-8234-123456789abc.sock"
+    },
+    {
+      "id": "linux-unicode",
+      "platform": "linux",
+      "namespace": "/run/café",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": "/run/café/ascension-worker-12345678-1234-4234-8234-123456789abc.sock"
+    },
+    {
+      "id": "linux-exact-100-bytes",
+      "platform": "linux",
+      "namespace": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ascension-worker-12345678-1234-4234-8234-123456789abc.sock"
+    },
+    {
+      "id": "linux-101-bytes",
+      "platform": "linux",
+      "namespace": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-0",
+      "platform": "linux",
+      "namespace": "",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-1",
+      "platform": "linux",
+      "namespace": "/",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-2",
+      "platform": "linux",
+      "namespace": "relative",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-3",
+      "platform": "linux",
+      "namespace": "//run",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-4",
+      "platform": "linux",
+      "namespace": "/run/",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-5",
+      "platform": "linux",
+      "namespace": "/run//ipc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-6",
+      "platform": "linux",
+      "namespace": "/run/./ipc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-7",
+      "platform": "linux",
+      "namespace": "/run/../ipc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-8",
+      "platform": "linux",
+      "namespace": "/run\\ipc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-namespace-reject-9",
+      "platform": "linux",
+      "namespace": "/run\nipc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "windows-normal",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": "\\\\.\\pipe\\ascension-worker-12345678-1234-4234-8234-123456789abc"
+    },
+    {
+      "id": "windows-fixed-name-rejected",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-12345678-1234-4234-8234-123456789abc",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "windows-admin-rejected",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-watchdog-",
+      "nonce": "12345678-1234-4234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-nonce-reject-0",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "",
+      "expected": null
+    },
+    {
+      "id": "windows-nonce-reject-0",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "",
+      "expected": null
+    },
+    {
+      "id": "linux-nonce-reject-1",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "12345678-1234-3234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "windows-nonce-reject-1",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "12345678-1234-3234-8234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-nonce-reject-2",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "12345678-1234-4234-7234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "windows-nonce-reject-2",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "12345678-1234-4234-7234-123456789abc",
+      "expected": null
+    },
+    {
+      "id": "linux-nonce-reject-3",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "12345678-1234-4234-8234-123456789ABC",
+      "expected": null
+    },
+    {
+      "id": "windows-nonce-reject-3",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "12345678-1234-4234-8234-123456789ABC",
+      "expected": null
+    },
+    {
+      "id": "linux-nonce-reject-4",
+      "platform": "linux",
+      "namespace": "/run/worker",
+      "nonce": "../escape",
+      "expected": null
+    },
+    {
+      "id": "windows-nonce-reject-4",
+      "platform": "windows",
+      "namespace": "\\\\.\\pipe\\ascension-worker-",
+      "nonce": "../escape",
+      "expected": null
+    }
+  ]
+}
