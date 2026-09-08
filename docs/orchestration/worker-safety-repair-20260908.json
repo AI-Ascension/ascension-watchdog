@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-local-checkpoint-not-a-release",
+  "date": "2026-09-08",
+  "supersedes_status_snapshot": "worker-transport-integration-20260908.json",
+  "primary_candidates_unchanged": true,
+  "integration_authority": "root",
+  "descendant_ceiling": 12,
+  "existing_descendants": 7,
+  "new_child_reservations": 0,
+  "three_descendant_levels_verified": false,
+  "accepted_scoped_reviews": [
+    {"task": "W48", "commit": "1eb4cfb356ca12c48b8f0b576ae761819c160008", "scope": "synthetic reaper correction only"},
+    {"task": "H55", "commit": "7df6c8cb1dd61cfe09e32417bddb90826c68a365", "scope": "worker migration correction only"}
+  ],
+  "rejected_candidates": [
+    {
+      "review": "H49",
+      "commit": "b836363fd022d0302adae8f9a9fdc18bb61c0158",
+      "repair": "H54",
+      "blockers": ["atomic execution winner", "bounded terminal BLOB projection", "terminal reference wire bounds", "failed job state semantics"],
+      "additional_regression": "464f803 proves surviving watchdog cannot authorize restarted worker"
+    },
+    {
+      "review": "W50",
+      "commit": "56777ee82990fc8ec1d13b9e8fcc41b49c7945c9",
+      "repair": "W56",
+      "blockers": ["peer identity lifetime", "loaded image to held file binding", "Windows cancellable credential and image I/O"]
+    },
+    {
+      "review": "H52",
+      "commit": "4ce47b9511eefc97f3a7e97c63e0df52fa0c1682",
+      "repair": "H58",
+      "blockers": ["cancellation completion before buffer release", "first-instance pipe ownership", "active-connection shutdown", "process liveness with exit code 259", "native Windows fault tests"]
+    }
+  ],
+  "active_work": [
+    {"task": "H54", "owner": "h35_raw_catalog_repair", "scope": "isolated ledger safety repair and one-time store-bound permit"},
+    {"task": "H53", "owner": "w37_historical_terminal_repair", "scope": "private command admission; execution depends on H54 permit"},
+    {"task": "W56", "owner": "h34_identity_final_review", "scope": "isolated client peer and bounded-I/O repair"},
+    {"task": "H58", "owner": "w38_worker_client_lead", "scope": "isolated Windows server repair and native test authoring"},
+    {"task": "H59", "owner": "g64_storage_final_review", "scope": "independent Linux transport candidate review"}
+  ],
+  "linux_candidate": {
+    "commit": "eb3e36c",
+    "library_exported": false,
+    "endpoint_enabled": false,
+    "root_tests_passed": 9,
+    "root_test_elapsed_seconds": 21.98,
+    "root_format_passed": true,
+    "strict_policy_sized_files": 466,
+    "strict_policy_warnings": 0,
+    "strict_policy_errors": 0,
+    "review": "H59 pending; image binding and filesystem deadlines remain acceptance questions"
+  },
+  "transport_trust_clarification": "Point-in-time configured process-principal and artifact verification is not continuous loaded-code attestation; this does not waive held-file identity, capability, fencing or bounded-I/O requirements.",
+  "ledger_integration_status": "unaccepted; committed restart regression currently fails until H54 is integrated",
+  "next_integration_order": ["H54 review and combined regression run", "H53 admission integration", "W56 and H58 repair reviews", "H59 resolution", "authenticated endpoint and execution runtime", "exact companion native fault matrix"],
+  "implementation_complete": false,
+  "release_ready": false,
+  "services_installed_this_checkpoint": false,
+  "games_or_providers_launched_this_checkpoint": false,
+  "hosts_rebooted_this_checkpoint": false,
+  "releases_activated_this_checkpoint": false,
+  "remote_writes_this_checkpoint": false
+}
