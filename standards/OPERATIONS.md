@@ -33,4 +33,3 @@ deployment changes as troubleshooting shortcuts.
 accepted product manifest, owner implementation, and deterministic target checks exist. Their
 prompt/configuration files are source-derived planning evidence; they do not authorize service
 installation, game access, or a product workspace.
-

@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "2be70b28a8359caea1c7ce9996a268ce4b278fc4",
-    "bundle_digest": "sha256:5633c46a179b9fd67e6116253e76ee11c142b73ae90a38cb63f0498ac9ecf77f",
+    "commit": "4d774b58c4e18f7090df5a3799703f52940c998d",
+    "bundle_digest": "sha256:0a444bf2404d384aabcef34fee47b7ab73b2735c3210b6852ea4a23f1f60f4f0",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "30c8b0fa3f777794cc6b5fd372d1e55d6bb2db906bfbbd082ccca7484aa263cb",
+  "profile_sha256": "eb42680479af76e173a29426b2d97ec97fc7e7eee8bc4bbcb464efbfa6e029f7",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -17,11 +17,11 @@
     },
     {
       "path": "standards/MANAGED_DOTNET.md",
-      "sha256": "7c96fa93e7980f2075463431bfa05452043b39986399ac5f48f80d1c485d3d21"
+      "sha256": "de8985089054b0a3efcba5c52ab3ff3abb4ceb80d5a847a537dc525f929afcb0"
     },
     {
       "path": "standards/OPERATIONS.md",
-      "sha256": "0307327eee2bf3634380cff51a14c18bf215f33d3ed7e33c56590a08581cfcff"
+      "sha256": "4bd6fa37ce4bff555e3d165ae4717b5dbe889c79357dba9c7c3dacf390cfbc55"
     },
     {
       "path": "standards/RUST.md",
@@ -29,11 +29,11 @@
     },
     {
       "path": "standards/TESTING_AND_CI.md",
-      "sha256": "74e37d7aa82f864b30c0ca04919bfc42f4e942a2ec3e76fc1f6c0685333040b9"
+      "sha256": "4718ecef79968a83e401649ff73cc8f823894827a6593eaf6b5ef328f38356bf"
     },
     {
       "path": "standards/WEB_PHP.md",
-      "sha256": "56e7cb57f5114a469ec5ad0d71ed342440e92c04dbd5b51756b9321870a76264"
+      "sha256": "257711fb51bfa28040272ee0ff56c5f756c2087178c5e50fbf583eeb70067f66"
     },
     {
       "path": "standards/conformance/README.md",
@@ -41,11 +41,11 @@
     },
     {
       "path": "standards/conformance/invalid-exception-broad-path.yaml",
-      "sha256": "615b90901bfcd9d44efdb044eafdda917c64e0cb39f023487051cda3bd0f0830"
+      "sha256": "5a6e15b086ac603a1e4de4ea787859b072ec544a9ef325b3a8c3d581d06dc600"
     },
     {
       "path": "standards/conformance/invalid-exception-pending.yaml",
-      "sha256": "1f8ae0482ca39f687af69a3136d6ec6f174df87fbc57dff431dbdd27a3d10a7e"
+      "sha256": "5a4bd4ad48ca8861f5ba48b7ce68c1a291ffa0d2fdeb909b4a1f578fd8957a71"
     },
     {
       "path": "standards/conformance/invalid-lock-published.json",
@@ -77,7 +77,7 @@
     },
     {
       "path": "standards/conformance/valid-exception.yaml",
-      "sha256": "f61583e1a7c31d7dfce125f1f4ccc51345a7a4160b20af72689cacf40d964884"
+      "sha256": "81aeb709cd6207c8f13c1eb759adebfd6370fea4ee136373115424039e989d2f"
     },
     {
       "path": "standards/conformance/valid-lock.json",

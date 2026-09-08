@@ -30,4 +30,3 @@ real browser keyboard/focus, error, reduced-motion, and responsive behavior wher
 it. Keep fixtures and test reports out of production artifacts. Static recipes remain pinned to
 their exact source revision and checksum. A successful Node test does not establish a deployed
 site, host PHP extensions, mail delivery, or live subscriber behavior.
-

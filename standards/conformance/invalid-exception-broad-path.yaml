@@ -1,6 +1,6 @@
 id: EXC-TEST-003
 rule_ids: [ASC-FMT-001]
-paths: [.] 
+paths: [.]
 owner: test-owner
 rationale: A broad path cannot hide an unbounded operation.
 compensating_tests: [cargo test --locked --package fixture]
@@ -11,4 +11,3 @@ approval:
 reviewed_on: '2026-09-07'
 expires_on: '2026-10-07'
 removal_criteria: Remove after the bounded operation is implemented.
-

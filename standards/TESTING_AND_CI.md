@@ -26,4 +26,3 @@ Record command, exact source commit, tool version, exit code, target/feature set
 prerequisites. Keep raw logs private and put sanitized findings in `docs/standards/`. Source,
 build, CI, adoption, host/runtime, deployment, and release states remain separate. Independent
 review reruns the meaningful checks against the actual diff and cannot approve its own changes.
-

@@ -11,4 +11,3 @@ approval:
 reviewed_on: '2026-09-07'
 expires_on: '2026-10-07'
 removal_criteria: Remove after the boundary error mapper is extracted.
-
