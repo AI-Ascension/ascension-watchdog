@@ -21,6 +21,7 @@ use super::contract::{
     ProcessAdapter, ProcessCreation, ProcessIdentity, SessionSelector, StopOutcome,
 };
 use super::linux_launcher::TrustedLinuxLauncher;
+use crate::worker_bootstrap::WorkerBootstrapLaunch;
 use rustix::fs::{SealFlags, fcntl_get_seals};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 use sha2::{Digest, Sha256};
@@ -239,6 +240,37 @@ impl LinuxProcessAdapter {
         self.launch_with_containment(specification, Some(planned_containment))
     }
 
+    /// Launch a Harness worker with the exact immutable bootstrap frame
+    /// delivered through a dedicated anonymous pipe after helper GO.
+    pub fn launch_with_worker_bootstrap(
+        &mut self,
+        specification: &LaunchSpec,
+        worker: &WorkerBootstrapLaunch,
+    ) -> Result<OwnedProcess, AdapterError> {
+        self.launch_with_containment_and_worker(specification, None, Some(worker))
+    }
+
+    /// Launch a Harness worker with a durable containment identity and the
+    /// exact immutable bootstrap frame delivered through a dedicated pipe.
+    pub fn launch_with_planned_containment_and_worker_bootstrap(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: &ContainmentId,
+        worker: &WorkerBootstrapLaunch,
+    ) -> Result<OwnedProcess, AdapterError> {
+        let expected = Self::planned_containment_for(specification)?;
+        if &expected != planned_containment {
+            return Err(AdapterError::IdentityMismatch(
+                "planned Linux containment does not match the launch identity".to_owned(),
+            ));
+        }
+        self.launch_with_containment_and_worker(
+            specification,
+            Some(planned_containment),
+            Some(worker),
+        )
+    }
+
     fn maybe_cgroup_for_identity(
         &self,
         identity: &ProcessIdentity,
@@ -427,6 +459,15 @@ impl LinuxProcessAdapter {
         specification: &LaunchSpec,
         planned_containment: Option<&ContainmentId>,
     ) -> Result<OwnedProcess, AdapterError> {
+        self.launch_with_containment_and_worker(specification, planned_containment, None)
+    }
+
+    fn launch_with_containment_and_worker(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: Option<&ContainmentId>,
+        worker: Option<&WorkerBootstrapLaunch>,
+    ) -> Result<OwnedProcess, AdapterError> {
         specification.validate()?;
         if self.children.len() >= self.max_children {
             return Err(AdapterError::Unavailable(
@@ -465,7 +506,13 @@ impl LinuxProcessAdapter {
             )));
         }
         let cgroup = self.cgroup_root.create(&name)?;
-        let mut pending = match self.launcher.prepare(specification, cgroup.path()) {
+        let mut pending = match match worker {
+            Some(worker) => {
+                self.launcher
+                    .prepare_with_worker_bootstrap(specification, cgroup.path(), worker)
+            }
+            None => self.launcher.prepare(specification, cgroup.path()),
+        } {
             Ok(pending) => pending,
             Err(error) => {
                 return Err(self.launch_error_after_cleanup(&cgroup, None, error));

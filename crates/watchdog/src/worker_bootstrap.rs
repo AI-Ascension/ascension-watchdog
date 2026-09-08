@@ -12,7 +12,10 @@ use std::fmt;
 use uuid::Uuid;
 
 mod json;
+pub mod launch;
 mod validation;
+
+pub use launch::WorkerBootstrapLaunch;
 
 use self::json::parse_strict_json;
 use self::validation::{
