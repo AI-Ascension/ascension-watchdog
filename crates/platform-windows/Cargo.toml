@@ -15,6 +15,7 @@ name = "platform_synthetic"
 path = "src/bin/platform_synthetic.rs"
 
 [target.'cfg(windows)'.dependencies]
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 windows-service = "0.8.1"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",

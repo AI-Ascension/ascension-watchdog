@@ -37,6 +37,7 @@ version = "0.1.0"
 dependencies = [
  "windows-service",
  "windows-sys",
+ "zeroize",
 ]
 
 [[package]]
