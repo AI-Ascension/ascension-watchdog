@@ -1,0 +1,59 @@
+# Profile classes describe common check families. The generated repository profile
+# is the exact command matrix; owner-specific plans retain existing standalone
+# metadata gates (protocol and MCP) without adding them to other Rust CI matrices.
+schema_version: 1
+profiles:
+  - id: org-governance
+    purpose: Governance, documentation, schema, and workflow source for the canonical standards repository.
+    scopes: [markdown, yaml, json, rust]
+    fast: [git-diff-check, standards-validate]
+    required: [standards-fmt, standards-unit-tests, standards-clippy, standards-conformance]
+    extended: [link-check]
+  - id: rust-pure
+    purpose: Host-independent Rust core or contract repository with frozen artifact checks.
+    scopes: [rust, json, contracts]
+    fast: [git-diff-check, standards-validate, cargo-metadata, cargo-fmt]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests]
+    extended: [artifact-checksums, contract-conformance]
+  - id: rust-service
+    purpose: Rust gateway, MCP adapter, or harness repository with owned lifecycle and transport seams.
+    scopes: [rust, json, contracts]
+    fast: [git-diff-check, standards-validate, cargo-metadata, cargo-fmt]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests]
+    extended: [artifact-checksums, contract-conformance, synthetic-boundary-tests]
+  - id: rust-managed
+    purpose: Rust game-mod repository with a narrow managed/native source-only boundary.
+    scopes: [rust, csharp, shell, powershell, json, contracts]
+    fast: [git-diff-check, standards-validate, cargo-fmt]
+    required: [repo-policy-strict, cargo-clippy-production, cargo-clippy, cargo-test, cargo-doc-tests, managed-source-probes, powershell-syntax, powershell-syntax-negative]
+    extended: [artifact-checksums, managed-bridge-tests, exact-host-build]
+  - id: web-php
+    purpose: Static site with a PHP subscription endpoint and Composer-managed tests.
+    scopes: [html, css, javascript, php]
+    fast: [git-diff-check, standards-validate, composer-validate, composer-lint, npm-format-check, npm-lint, node-tests]
+    required: [phpstan, phpunit, browser-check]
+    extended: [composer-verify]
+  - id: web-static
+    purpose: Static HTML/CSS/vanilla JavaScript documentation site with pinned Rust recipes.
+    scopes: [html, css, javascript, rust]
+    fast: [git-diff-check, standards-validate, npm-format-check, npm-lint, node-tests]
+    required: [browser-check, pinned-gateway-recipe, pinned-mcp-recipe]
+    extended: []
+  - id: operations
+    purpose: Shell, Compose, Dockerfile, systemd, and deployment configuration repository.
+    scopes: [shell, yaml, dockerfile, systemd]
+    fast: [git-diff-check, standards-validate, shellcheck]
+    required: [bootstrap-tests, validation-regressions, compose-policy-regressions, compose-source-regressions, compose-invariants, compose-config, compose-required-settings, compose-structured, dockerfile-mlflow, dockerfile-laminar]
+    extended: []
+  - id: planning-bootstrap
+    purpose: Prompt or bootstrap repository awaiting an accepted product manifest.
+    scopes: [markdown, configuration, rust-tooling]
+    fast: [git-diff-check, standards-validate]
+    required: [bootstrap-sources]
+    extended: []
+  - id: brand-package
+    purpose: Python standard-library prompt package with JSON schemas and offline package checks.
+    scopes: [python, html, json, markdown]
+    fast: [git-diff-check]
+    required: [unit-tests]
+    extended: [package-validation, schema-meta-validation, offline-art-board]

@@ -4,3 +4,6 @@
 *.sqlite-wal
 .env
 /local/
+
+# Generated output of the pinned standards tool only.
+standards/tools/standards-sync/target/

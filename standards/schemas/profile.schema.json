@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.github.io/standards/schemas/profile.schema.json",
+  "title": "AI-Ascension local standards profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_id",
+    "repository",
+    "owner",
+    "source_bundle",
+    "source_commit",
+    "source_digest",
+    "distribution",
+    "scopes",
+    "checks",
+    "evidence",
+    "exceptions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,48}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^AI-Ascension/[A-Za-z0-9._-]+$"
+    },
+    "owner": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,15}$"
+    },
+    "source_bundle": {
+      "const": "AI-Ascension/.github"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "distribution": {
+      "const": "local"
+    },
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]*$"
+      }
+    },
+    "checks": {
+      "$ref": "#/$defs/checks"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime",
+        "deployment",
+        "provider"
+      ],
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/evidence"
+        },
+        "deployment": {
+          "$ref": "#/$defs/evidence"
+        },
+        "provider": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "exceptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "status"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^(|[a-zA-Z0-9._/-]+)$"
+        },
+        "status": {
+          "enum": [
+            "none",
+            "pending",
+            "approved"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "check_list": {
+      "type": "array",
+      "minItems": 0,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._:-]*$"
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fast",
+        "required",
+        "extended",
+        "commands"
+      ],
+      "properties": {
+        "fast": {
+          "$ref": "#/$defs/check_list"
+        },
+        "required": {
+          "$ref": "#/$defs/check_list"
+        },
+        "extended": {
+          "$ref": "#/$defs/check_list"
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9._:-]*$": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "command",
+                "target"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(\\.|[A-Za-z0-9._/-]+)$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "enum": [
+        "confirmed",
+        "source-derived",
+        "proposed",
+        "inferred",
+        "unverified",
+        "unsupported"
+      ]
+    }
+  }
+}

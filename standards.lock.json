@@ -1,0 +1,164 @@
+{
+  "lock_version": 1,
+  "repository": "AI-Ascension/ascension-watchdog",
+  "profile_id": "planning-bootstrap",
+  "source": {
+    "repository": "AI-Ascension/.github",
+    "commit": "eed9921b5c5d5c41380655bded84f9e2d0aab599",
+    "bundle_digest": "sha256:cef00213abf2113a99137411e3eee67dc4ee0dd57c3044b2cd4514854161091d",
+    "distribution": "local",
+    "published": false
+  },
+  "profile_sha256": "83dd00bee69668249266a57281a7b0575bb967b0ec2e63fa7c05fd6179dd16c9",
+  "files": [
+    {
+      "path": "standards/BASELINE.md",
+      "sha256": "2ed13d754614032b08e6767dbc292eb877c252fbe364db09b3d1bf1d15b776f1"
+    },
+    {
+      "path": "standards/MANAGED_DOTNET.md",
+      "sha256": "de8985089054b0a3efcba5c52ab3ff3abb4ceb80d5a847a537dc525f929afcb0"
+    },
+    {
+      "path": "standards/OPERATIONS.md",
+      "sha256": "4bd6fa37ce4bff555e3d165ae4717b5dbe889c79357dba9c7c3dacf390cfbc55"
+    },
+    {
+      "path": "standards/RUST.md",
+      "sha256": "f575bb7af550163dd30513bea0212ff092c2efb2e212c0e1325485a08601a8ca"
+    },
+    {
+      "path": "standards/TESTING_AND_CI.md",
+      "sha256": "4718ecef79968a83e401649ff73cc8f823894827a6593eaf6b5ef328f38356bf"
+    },
+    {
+      "path": "standards/WEB_PHP.md",
+      "sha256": "257711fb51bfa28040272ee0ff56c5f756c2087178c5e50fbf583eeb70067f66"
+    },
+    {
+      "path": "standards/conformance/README.md",
+      "sha256": "989eefc9e18b413ae387a4086fa387188988587c2323bd462c470a808e4f8801"
+    },
+    {
+      "path": "standards/conformance/invalid-exception-broad-path.yaml",
+      "sha256": "5a6e15b086ac603a1e4de4ea787859b072ec544a9ef325b3a8c3d581d06dc600"
+    },
+    {
+      "path": "standards/conformance/invalid-exception-pending.yaml",
+      "sha256": "5a4bd4ad48ca8861f5ba48b7ce68c1a291ffa0d2fdeb909b4a1f578fd8957a71"
+    },
+    {
+      "path": "standards/conformance/invalid-lock-published.json",
+      "sha256": "e6abd7cdcda630549e28cb907434c2707a521d89797d02e666f7423325a91fd3"
+    },
+    {
+      "path": "standards/conformance/invalid-lock-stale-digest.json",
+      "sha256": "784501064fc747dd2bad2a74cb40c9ceaba6694f3f0023b51ca48346e0622837"
+    },
+    {
+      "path": "standards/conformance/invalid-lock-traversal.json",
+      "sha256": "6525e009bbe549a996f15b10755d6201676118d0e5b233070ed5698393103bd7"
+    },
+    {
+      "path": "standards/conformance/invalid-profile-floating.toml",
+      "sha256": "c6d8bfe96c7ab5f250eb147942a1b0d6ba3e5c84e72e2c91ab1e41ce43011122"
+    },
+    {
+      "path": "standards/conformance/invalid-profile-missing-source.toml",
+      "sha256": "3e172c8ef6339296e4e43ab58dac93da9d2ec7bd76dfbbf994e3ece1ca631809"
+    },
+    {
+      "path": "standards/conformance/invalid-schema-missing-required.json",
+      "sha256": "4539afe126e7a0587e725a910e73772f6f12bc9aad8e5eda0276f7a6dfe752cf"
+    },
+    {
+      "path": "standards/conformance/invalid-schema-nonobject.json",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    {
+      "path": "standards/conformance/valid-exception.yaml",
+      "sha256": "81aeb709cd6207c8f13c1eb759adebfd6370fea4ee136373115424039e989d2f"
+    },
+    {
+      "path": "standards/conformance/valid-lock.json",
+      "sha256": "5cd4e6c397f95a373bc872ccb9277d52984e53ef5101da2ad99d77958b44310f"
+    },
+    {
+      "path": "standards/conformance/valid-profile.toml",
+      "sha256": "3f21e693081d8c991a53c091fdb6406b9f33a9bfb9181dfe8d0dcc0c612de8f8"
+    },
+    {
+      "path": "standards/profiles.yaml",
+      "sha256": "f766e00d5c5dd5c36e62309e0a2dba5ccb0677f27d678e592efc186a4c6b7e72"
+    },
+    {
+      "path": "standards/repositories.yaml",
+      "sha256": "92a3fcb513f54dba74ba10a8894274e4a53232d7d6274b277837fb90f94c69cf"
+    },
+    {
+      "path": "standards/rules.yaml",
+      "sha256": "b9de18bd0c2f415f62e2bf0fd68511bb8f5dad91ddf5444431e15035cacba540"
+    },
+    {
+      "path": "standards/schemas/exception.schema.json",
+      "sha256": "94c83f3c0329bf15d4f8b65a8391e47ed5e4e724e31b3ea68f7ede50f4a4e9ae"
+    },
+    {
+      "path": "standards/schemas/lock.schema.json",
+      "sha256": "410fa77fc9b0ccc7f61649f7f6044c3ad4e405074123344634aed9ededac71c6"
+    },
+    {
+      "path": "standards/schemas/profile.schema.json",
+      "sha256": "65cf1bfe8941898880ce816b7b89df396691435083fe84282abdfe9cda16e6ea"
+    },
+    {
+      "path": "standards/schemas/profiles.schema.json",
+      "sha256": "f8df57f60625d05080b4c51af1e4c0f3c4c985f1769538289cf5c5b16e67141d"
+    },
+    {
+      "path": "standards/schemas/repositories.schema.json",
+      "sha256": "5db038a12bc0f29e62359c320ef72237b0f55fbd2cdbf0b35e0406a0c08ef7e4"
+    },
+    {
+      "path": "standards/schemas/rule.schema.json",
+      "sha256": "5a5925aaa6e0e20a9ca7dd4ebc6cca515b3f0e5b88de1a5a520acaef0c6487a9"
+    },
+    {
+      "path": "standards/schemas/rules.schema.json",
+      "sha256": "4aa67fd97a21b87e2c04b23d6aad9512237be3b08a76a0110514a15a6bc2beb3"
+    },
+    {
+      "path": "standards/tools/standards-sync/Cargo.lock",
+      "sha256": "3316fdf0e208f6520f866394580dac5e2024704e690f9fbb850bc97d118b7d16"
+    },
+    {
+      "path": "standards/tools/standards-sync/Cargo.toml",
+      "sha256": "b0616132e337929d8809c5609d0be1939b1c8e982f52270a517e079494ee114a"
+    },
+    {
+      "path": "standards/tools/standards-sync/README.md",
+      "sha256": "180674ca7eed9a3740996d33dbc0ce67562d667a89bd5b32dd9e73c5972eef6f"
+    },
+    {
+      "path": "standards/tools/standards-sync/rust-toolchain.toml",
+      "sha256": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/bootstrap.rs",
+      "sha256": "87f6cd90b0888b5ad5e68298e21e6c629c1f5bdc5917301d4b80a4fd1b8ddbe1"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/conformance_tests.rs",
+      "sha256": "e8f4db8a0eedf0cf974c23b986a418e7d285e9694f175c387f8ac0100b8b00ec"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/main.rs",
+      "sha256": "4f88e99612d88e015a1c192768824fb32ef7d6442495504895d3c9ad935fb714"
+    }
+  ],
+  "protected_paths": [
+    "standards/schemas",
+    "standards/conformance"
+  ],
+  "generated_by": "standards-sync/1"
+}

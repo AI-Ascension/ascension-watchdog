@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.github.io/standards/schemas/rule.schema.json",
+  "title": "AI-Ascension coding rule",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "purpose",
+    "severity",
+    "classification",
+    "scope",
+    "check",
+    "verification",
+    "command",
+    "exception_eligible",
+    "failure_behavior"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(X|RUST|MANAGED|WEB|OPS|DOC|ASC)-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "severity": {
+      "enum": [
+        "mandatory",
+        "advisory"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "blocking",
+        "advisory"
+      ]
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "check": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "verification": {
+      "enum": [
+        "automated",
+        "manual"
+      ]
+    },
+    "command": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "exception_eligible": {
+      "type": "boolean"
+    },
+    "failure_behavior": {
+      "enum": [
+        "reject",
+        "report"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "severity": {
+            "const": "mandatory"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "classification": {
+            "const": "blocking"
+          },
+          "failure_behavior": {
+            "const": "reject"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "classification": {
+            "const": "advisory"
+          },
+          "failure_behavior": {
+            "const": "report"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification": {
+            "const": "automated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification": {
+            "const": "manual"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "command": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "exception_eligible": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "id": {
+            "enum": [
+              "ASC-FMT-001",
+              "ASC-SIZE-001",
+              "ASC-SIZE-002",
+              "ASC-DES-001"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

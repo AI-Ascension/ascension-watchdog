@@ -1,0 +1,42 @@
+schema_version = 1
+profile_id = "planning-bootstrap"
+repository = "AI-Ascension/ascension-watchdog"
+owner = "ARCH"
+source_bundle = "AI-Ascension/.github"
+source_commit = "eed9921b5c5d5c41380655bded84f9e2d0aab599"
+source_digest = "sha256:cef00213abf2113a99137411e3eee67dc4ee0dd57c3044b2cd4514854161091d"
+distribution = "local"
+scopes = [
+    "markdown",
+    "configuration",
+    "rust-tooling",
+]
+
+[checks]
+fast = [
+    "git-diff-check",
+    "standards-validate",
+]
+required = ["bootstrap-sources"]
+extended = []
+
+[checks.commands.bootstrap-sources]
+command = "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- check-bootstrap --root ."
+target = "."
+
+[checks.commands.git-diff-check]
+command = "git diff --check"
+target = "."
+
+[checks.commands.standards-validate]
+command = "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root ."
+target = "."
+
+[evidence]
+runtime = "unverified"
+deployment = "unverified"
+provider = "unverified"
+
+[exceptions]
+file = ""
+status = "none"

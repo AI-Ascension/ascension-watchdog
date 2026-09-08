@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.github.io/standards/schemas/profiles.schema.json",
+  "title": "AI-Ascension profile catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profiles"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profiles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["id", "purpose", "scopes", "fast", "required", "extended"], "properties": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,48}$"}, "purpose": {"type": "string", "minLength": 1}, "scopes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}}, "fast": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"}}, "required": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"}}, "extended": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"}}}}}
+  }
+}
