@@ -7,17 +7,23 @@
 use crate::config::validate_digest;
 use crate::error::{Result, WatchdogError};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
+#[cfg(target_os = "linux")]
+use std::path::Component;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
+#[cfg(target_os = "linux")]
 const MAX_PEER_DIGEST_CACHE_ENTRIES: usize = 128;
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct PeerDigestCacheKey {
     pid: u32,
@@ -25,6 +31,7 @@ struct PeerDigestCacheKey {
     executable: PathBuf,
 }
 
+#[cfg(target_os = "linux")]
 static PEER_DIGEST_CACHE: OnceLock<Mutex<HashMap<PeerDigestCacheKey, String>>> = OnceLock::new();
 
 /// Immutable identity of the supervised worker process.
@@ -195,14 +202,15 @@ pub(crate) fn validate_credential_reference(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_credential(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<Vec<u8>> {
+    ensure_deadline(deadline, "worker credential read")?;
     // Open and validate the exact object before reading it.  The Unix Linux
-    // path uses openat2(2) with RESOLVE_NO_SYMLINKS, which covers ancestors as
-    // well as the final component and closes the metadata/open TOCTOU window.
-    // Windows uses the platform's held-handle ancestor walk for the same
-    // reason.  This function is called only after worker-peer authentication.
+    // path walks held, non-following directory descriptors and opens the final
+    // descriptor with O_NONBLOCK before validating its type.  Windows uses the
+    // platform's held-handle ancestor walk for the same reason.  This function
+    // is called only after worker-peer authentication.
     #[cfg(target_os = "linux")]
-    let mut file = open_linux_credential(path)?;
+    let mut file = open_linux_credential(path, deadline)?;
     #[cfg(windows)]
     let bytes = ascension_platform_windows::read_protected_payload_file(path, MAX_CREDENTIAL_BYTES)
         .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
@@ -214,7 +222,8 @@ pub(crate) fn read_credential(path: &Path) -> Result<Vec<u8>> {
         .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
 
     #[cfg(target_os = "linux")]
-    let bytes = read_bounded_credential(&mut file)?;
+    let bytes = read_bounded_credential(&mut file, deadline)?;
+    ensure_deadline(deadline, "worker credential read")?;
     if bytes.is_empty()
         || bytes.len() > MAX_CREDENTIAL_BYTES
         || bytes.contains(&0)
@@ -229,18 +238,79 @@ pub(crate) fn read_credential(path: &Path) -> Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_linux_credential(path: &Path) -> Result<File> {
-    use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, fstat, openat2};
+fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
+    use rustix::fs::{Mode, OFlags, fstatfs, open, openat};
 
-    let descriptor = openat2(
-        CWD,
-        path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-        ResolveFlags::NO_SYMLINKS,
-    )
-    .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
-    let file: File = descriptor.into();
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(value) => components.push(value),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(WatchdogError::InvalidInput(
+                    "worker credential path contains traversal".to_owned(),
+                ));
+            }
+        }
+    }
+    if !path.is_absolute() || components.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "worker credential path must be an absolute local file".to_owned(),
+        ));
+    }
+    let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+    let mut directory = open("/", flags | OFlags::DIRECTORY, Mode::empty())
+        .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
+    ensure_local_protected_filesystem(
+        fstatfs(&directory)
+            .map_err(|_| {
+                WatchdogError::Unauthorized(
+                    "worker credential filesystem is unavailable".to_owned(),
+                )
+            })?
+            .f_type
+            .cast_unsigned(),
+    )?;
+    for (index, name) in components.iter().enumerate() {
+        ensure_deadline(deadline, "worker credential open")?;
+        let final_component = index + 1 == components.len();
+        let descriptor = openat(
+            &directory,
+            *name,
+            if final_component {
+                flags
+            } else {
+                flags | OFlags::DIRECTORY
+            },
+            Mode::empty(),
+        )
+        .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
+        if final_component {
+            let file: File = descriptor.into();
+            return validate_linux_credential_file(file, deadline);
+        }
+        ensure_local_protected_filesystem(
+            fstatfs(&descriptor)
+                .map_err(|_| {
+                    WatchdogError::Unauthorized(
+                        "worker credential filesystem is unavailable".to_owned(),
+                    )
+                })?
+                .f_type
+                .cast_unsigned(),
+        )?;
+        directory = descriptor;
+    }
+    Err(WatchdogError::Unauthorized(
+        "worker credential is unavailable".to_owned(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_credential_file(file: File, deadline: Instant) -> Result<File> {
+    use rustix::fs::{fstat, fstatfs};
+
+    ensure_deadline(deadline, "worker credential validation")?;
     // fstat is intentionally performed on the held descriptor rather than on
     // the requested path.  `File::metadata` is equivalent but fstat makes the
     // descriptor authority explicit in this security-sensitive path.
@@ -253,16 +323,48 @@ fn open_linux_credential(path: &Path) -> Result<File> {
             "worker credential is not an owner-only regular file".to_owned(),
         ));
     }
+    // A synchronous read cannot be cancelled portably once a regular-file
+    // filesystem blocks in the kernel.  Fail closed for filesystems outside
+    // the explicitly supported local set instead of claiming the transport
+    // deadline covers an unbounded remote/pseudo filesystem read.
+    let filesystem = fstatfs(&file).map_err(|_| {
+        WatchdogError::Unauthorized("worker credential filesystem is unavailable".to_owned())
+    })?;
+    ensure_local_protected_filesystem(filesystem.f_type.cast_unsigned())?;
+    ensure_deadline(deadline, "worker credential validation")?;
     Ok(file)
 }
 
 #[cfg(target_os = "linux")]
-fn read_bounded_credential(file: &mut File) -> Result<Vec<u8>> {
+fn ensure_local_protected_filesystem(filesystem_type: u64) -> Result<()> {
+    if !matches!(
+        filesystem_type,
+        0x0000_ef53 // ext2/ext3/ext4
+            | 0x0102_1994 // tmpfs
+            | 0x794c_7630 // overlayfs
+            | 0x5846_5342 // xfs
+            | 0x9123_683e // btrfs
+            | 0xf2f5_2010 // f2fs
+    ) {
+        return Err(WatchdogError::Unauthorized(
+            "worker credential filesystem is not an approved local protected filesystem".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_bounded_credential(file: &mut File, deadline: Instant) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(64);
     let mut buffer = [0_u8; 256];
     loop {
-        let count = file.read(&mut buffer).map_err(|_| {
-            WatchdogError::Unauthorized("worker credential is unavailable".to_owned())
+        ensure_deadline(deadline, "worker credential read")?;
+        let count = file.read(&mut buffer).map_err(|error| {
+            if error.kind() == ErrorKind::WouldBlock {
+                WatchdogError::Timeout("worker credential read timed out".to_owned())
+            } else {
+                WatchdogError::Unauthorized("worker credential is unavailable".to_owned())
+            }
         })?;
         if count == 0 {
             break;
@@ -275,6 +377,13 @@ fn read_bounded_credential(file: &mut File) -> Result<Vec<u8>> {
         bytes.extend_from_slice(&buffer[..count]);
     }
     Ok(bytes)
+}
+
+fn ensure_deadline(deadline: Instant, phase: &str) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(WatchdogError::Timeout(format!("{phase} timed out")));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -314,19 +423,22 @@ pub(crate) fn authenticate_linux_peer(
     let _pidfd = pidfd_open(process, PidfdFlags::empty()).map_err(|_| {
         WatchdogError::Unauthorized("worker peer process identity is unavailable".to_owned())
     })?;
-    let start_before = process_start_token(pid)?;
+    ensure_deadline(deadline, "worker peer authentication")?;
+    let start_before = process_start_token(pid, deadline)?;
     if start_before != identity.creation_token {
         return Err(WatchdogError::IdentityMismatch(
             "worker peer process creation token is not approved".to_owned(),
         ));
     }
     let proc_executable = PathBuf::from(format!("/proc/{pid}/exe"));
+    ensure_deadline(deadline, "worker peer authentication")?;
     let executable = fs::read_link(&proc_executable).map_err(|_| {
         WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
     })?;
     let expected = fs::canonicalize(identity.executable()).map_err(|_| {
         WatchdogError::Unauthorized("configured worker executable is unavailable".to_owned())
     })?;
+    ensure_deadline(deadline, "worker peer authentication")?;
     if executable != expected {
         return Err(WatchdogError::Unauthorized(
             "worker peer executable is not approved".to_owned(),
@@ -355,7 +467,8 @@ pub(crate) fn authenticate_linux_peer(
         insert_peer_digest(cache_key, digest.clone());
         digest
     };
-    let start_after = process_start_token(pid)?;
+    let start_after = process_start_token(pid, deadline)?;
+    ensure_deadline(deadline, "worker peer authentication")?;
     let executable_after = fs::read_link(&proc_executable).map_err(|_| {
         WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
     })?;
@@ -372,6 +485,7 @@ pub(crate) fn authenticate_linux_peer(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn cached_peer_digest(key: &PeerDigestCacheKey) -> Option<String> {
     PEER_DIGEST_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -405,6 +519,7 @@ fn prime_peer_digest(identity: &WorkerPeerIdentity) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn insert_peer_digest(key: PeerDigestCacheKey, digest: String) {
     if let Ok(mut cache) = PEER_DIGEST_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -418,10 +533,11 @@ fn insert_peer_digest(key: PeerDigestCacheKey, digest: String) {
 }
 
 #[cfg(target_os = "linux")]
-fn process_start_token(pid: u32) -> Result<String> {
+fn process_start_token(pid: u32, deadline: Instant) -> Result<String> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|_| {
         WatchdogError::Unauthorized("worker peer process identity is unavailable".to_owned())
     })?;
+    ensure_deadline(deadline, "worker peer process authentication")?;
     let close = stat.rfind(')').ok_or_else(|| {
         WatchdogError::Unauthorized("worker peer process identity is malformed".to_owned())
     })?;

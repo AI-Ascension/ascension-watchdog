@@ -18,11 +18,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const AUTH_MAGIC: &[u8] = b"ascension-worker-auth-v1\0";
 const WATCHDOG_BOOT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WORKER_BOOT: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const CURRENT_WORKER_BOOT: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const DEPLOYMENT: &str = "watchdog-deployment-1";
 const OWNER: &str = "harness";
 const PROFILE_DIGEST: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -79,6 +81,17 @@ impl Fixture {
         fs::set_permissions(&self.endpoint, fs::Permissions::from_mode(0o600))
             .expect("worker endpoint permissions");
         listener
+    }
+
+    fn client_with_binding(&self, binding: WorkerBinding) -> WorkerClient {
+        let config = WorkerClientConfig::new(
+            self.endpoint.clone(),
+            self.credential.clone(),
+            binding,
+            self.client.config().peer().clone(),
+        )
+        .expect("client config");
+        WorkerClient::new(config, WATCHDOG_BOOT).expect("client")
     }
 }
 
@@ -151,6 +164,26 @@ fn send_response(stream: &mut UnixStream, response: &Frame) {
         &encode_frame(response).expect("worker response encoding"),
     )
     .expect("worker response");
+}
+
+fn send_probe_response(listener: &UnixListener, binding: &WorkerBinding, ready: bool) {
+    let (mut stream, request) = authenticated_request(listener);
+    let Frame::ProbeRequest(request) = request else {
+        panic!("probe request expected");
+    };
+    send_response(
+        &mut stream,
+        &Frame::ProbeResponse(ProbeResponse {
+            header: response_header(&request.header, Some(WORKER_BOOT)),
+            deployment_id: binding.deployment_id.clone(),
+            worker_owner_id: binding.worker_owner_id.clone(),
+            worker_profile_digest: binding.worker_profile_digest.clone(),
+            release_digest: binding.release_digest.clone(),
+            config_digest: binding.config_digest.clone(),
+            ready,
+            admitting: false,
+        }),
+    );
 }
 
 #[test]
@@ -258,8 +291,18 @@ fn store_fixture(fixture: &Fixture) -> (Store, WatchdogConfig, WorkerControlWitn
 fn claim_and_dispatch_marks_before_send_and_admits_real_worker() {
     let fixture = Fixture::new();
     let (mut store, _config, control) = store_fixture(&fixture);
+    let binding = WorkerBinding {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+    };
+    let client = fixture.client_with_binding(binding.clone());
     let listener = fixture.bind();
     let server = thread::spawn(move || {
+        send_probe_response(&listener, &binding, true);
         let (mut stream, request) = authenticated_request(&listener);
         let Frame::DispatchRequest(request) = request else {
             panic!("dispatch request expected");
@@ -283,8 +326,7 @@ fn claim_and_dispatch_marks_before_send_and_admits_real_worker() {
         worker_boot_id: control.worker_boot_id.clone(),
         mode_sequence: control.mode_sequence,
     };
-    let result = fixture
-        .client
+    let result = client
         .claim_and_dispatch(&mut store, &witness, 3)
         .expect("dispatch orchestration")
         .expect("claimed handoff");
@@ -298,12 +340,23 @@ fn claim_and_dispatch_marks_before_send_and_admits_real_worker() {
 fn uncertain_dispatch_is_retained_and_never_resent() {
     let fixture = Fixture::new();
     let (mut store, _config, control) = store_fixture(&fixture);
+    let binding = WorkerBinding {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+    };
+    let client = fixture.client_with_binding(binding.clone());
     let listener = fixture.bind();
     let server = thread::spawn(move || {
+        send_probe_response(&listener, &binding, true);
         let (_stream, request) = authenticated_request(&listener);
         assert!(matches!(request, Frame::DispatchRequest(_)));
         // Drop the connected stream after the request.  The client has no
         // response identity to trust and must leave the durable reservation.
+        send_probe_response(&listener, &binding, true);
     });
     let witness = WorkerClaimWitness {
         deployment_id: DEPLOYMENT.to_owned(),
@@ -316,28 +369,32 @@ fn uncertain_dispatch_is_retained_and_never_resent() {
         worker_boot_id: control.worker_boot_id.clone(),
         mode_sequence: control.mode_sequence,
     };
+    assert!(client.claim_and_dispatch(&mut store, &witness, 3).is_err());
     assert!(
-        fixture
-            .client
-            .claim_and_dispatch(&mut store, &witness, 3)
-            .is_err()
-    );
-    server.join().expect("uncertain server");
-    assert!(
-        fixture
-            .client
+        client
             .claim_and_dispatch(&mut store, &witness, 4)
             .expect("held reservation")
             .is_none()
     );
+    server.join().expect("uncertain server");
 }
 
 #[test]
 fn terminal_dispatch_commits_before_ack_and_retains_one_completed_result() {
     let fixture = Fixture::new();
     let (mut store, _config, control) = store_fixture(&fixture);
+    let binding = WorkerBinding {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+    };
+    let client = fixture.client_with_binding(binding.clone());
     let listener = fixture.bind();
     let server = thread::spawn(move || {
+        send_probe_response(&listener, &binding, true);
         let (mut stream, request) = authenticated_request(&listener);
         let Frame::DispatchRequest(request) = request else {
             panic!("dispatch request expected");
@@ -379,6 +436,7 @@ fn terminal_dispatch_commits_before_ack_and_retains_one_completed_result() {
                 status: AcknowledgeStatus::Acknowledged,
             }),
         );
+        send_probe_response(&listener, &binding, true);
     });
     let witness = WorkerClaimWitness {
         deployment_id: DEPLOYMENT.to_owned(),
@@ -391,8 +449,7 @@ fn terminal_dispatch_commits_before_ack_and_retains_one_completed_result() {
         worker_boot_id: control.worker_boot_id.clone(),
         mode_sequence: control.mode_sequence,
     };
-    let result = fixture
-        .client
+    let result = client
         .claim_and_dispatch(&mut store, &witness, 3)
         .expect("terminal orchestration")
         .expect("terminal handoff");
@@ -404,13 +461,201 @@ fn terminal_dispatch_commits_before_ack_and_retains_one_completed_result() {
         ascension_watchdog::JobStatus::Completed
     );
     assert!(
-        fixture
-            .client
+        client
             .claim_and_dispatch(&mut store, &witness, 4)
             .expect("completed rerun guard")
             .is_none()
     );
     server.join().expect("terminal server");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn reconciliation_uses_current_control_for_old_worker_terminal_and_ack() {
+    let fixture = Fixture::new();
+    let (mut store, _config, old_control) = store_fixture(&fixture);
+    let binding = WorkerBinding {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+    };
+    let client = fixture.client_with_binding(binding.clone());
+    let claim = store
+        .claim_next_worker_handoff(
+            &WorkerClaimWitness {
+                deployment_id: old_control.deployment_id.clone(),
+                worker_owner_id: old_control.worker_owner_id.clone(),
+                worker_profile_digest: old_control.worker_profile_digest.clone(),
+                release_digest: binding.release_digest.clone(),
+                config_digest: binding.config_digest.clone(),
+                schema_digest: binding.schema_digest.clone(),
+                watchdog_boot_id: old_control.watchdog_boot_id.clone(),
+                worker_boot_id: old_control.worker_boot_id.clone(),
+                mode_sequence: old_control.mode_sequence,
+            },
+            3,
+        )
+        .expect("claim")
+        .expect("handoff");
+    let tuple = store
+        .mark_worker_handoff_may_have_been_dispatched_at(&claim.tuple(), 4)
+        .expect("dispatch marker")
+        .tuple();
+    let current_control = WorkerControlWitness {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        watchdog_boot_id: WATCHDOG_BOOT.to_owned(),
+        worker_boot_id: CURRENT_WORKER_BOOT.to_owned(),
+        mode: WorkerControlMode::Running,
+        mode_sequence: 2,
+    };
+    store
+        .set_worker_control_at(&current_control, 5)
+        .expect("current worker control");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (mut stream, request) = authenticated_request(&listener);
+        let Frame::LookupRequest(request) = request else {
+            panic!("lookup request expected");
+        };
+        assert_eq!(
+            request.header.worker_boot_id.as_deref(),
+            Some(CURRENT_WORKER_BOOT)
+        );
+        let terminal = TerminalReceipt {
+            handoff_id: request.tuple.handoff_id.clone(),
+            deployment_id: request.tuple.deployment_id.clone(),
+            job_id: request.tuple.job_id.clone(),
+            attempt_id: request.tuple.attempt_id.clone(),
+            attempt_number: request.tuple.attempt_number,
+            worker_owner_id: request.tuple.worker_owner_id.clone(),
+            worker_profile_digest: request.tuple.worker_profile_digest.clone(),
+            run_id: request.tuple.run_id.clone(),
+            episode_id: request.tuple.episode_id.clone(),
+            trajectory_id: request.tuple.trajectory_id.clone(),
+            payload_digest: request.tuple.payload_digest.clone(),
+            status: TerminalStatus::Completed,
+            checkpoint_sequence: 2,
+            terminal_ref: "terminal/recovered".to_owned(),
+            result_digest: "9999999999999999999999999999999999999999999999999999999999999999"
+                .to_owned(),
+        };
+        send_response(
+            &mut stream,
+            &Frame::LookupResponse(ascension_watchdog::worker_protocol::LookupResponse {
+                header: response_header(&request.header, Some(CURRENT_WORKER_BOOT)),
+                tuple: request.tuple,
+                status: ascension_watchdog::worker_protocol::LookupStatus::Terminal,
+                terminal: Some(terminal),
+            }),
+        );
+        let (mut stream, request) = authenticated_request(&listener);
+        let Frame::AcknowledgeRequest(request) = request else {
+            panic!("acknowledgment request expected");
+        };
+        send_response(
+            &mut stream,
+            &Frame::AcknowledgeResponse(AcknowledgeResponse {
+                header: response_header(&request.header, Some(CURRENT_WORKER_BOOT)),
+                tuple: request.tuple,
+                status: AcknowledgeStatus::Acknowledged,
+            }),
+        );
+    });
+    let result = client
+        .reconcile_handoff(&mut store, &tuple, &current_control, 6)
+        .expect("historical reconciliation");
+    assert_eq!(
+        result.status,
+        ascension_watchdog::worker_protocol::LookupStatus::Terminal
+    );
+    assert!(result.acknowledged);
+    assert_eq!(result.handoff.state, WorkerHandoffState::Acknowledged);
+    server.join().expect("reconciliation server");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn credential_fifo_replacement_fails_bounded_before_any_auth_bytes() {
+    use rustix::fs::{CWD, Mode, mkfifoat};
+
+    let fixture = Fixture::new();
+    let listener = fixture.bind();
+    fs::remove_file(&fixture.credential).expect("replace credential");
+    mkfifoat(CWD, &fixture.credential, Mode::from_raw_mode(0o600)).expect("credential FIFO");
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("worker connection");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .expect("read timeout");
+        let mut stream = stream;
+        let mut byte = [0_u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => {}
+            Ok(_) => panic!("credential must not be sent after FIFO replacement"),
+            Err(error) => assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )),
+        }
+    });
+    let started = Instant::now();
+    let error = fixture.client.probe().expect_err("FIFO credential");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(matches!(
+        error,
+        ascension_watchdog::WatchdogError::Unauthorized(_)
+            | ascension_watchdog::WatchdogError::Timeout(_)
+    ));
+    server.join().expect("FIFO server");
+}
+
+#[test]
+fn claim_requires_ready_probe_before_persisting_or_sending() {
+    let fixture = Fixture::new();
+    let (mut store, _config, control) = store_fixture(&fixture);
+    let binding = WorkerBinding {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+    };
+    let client = fixture.client_with_binding(binding.clone());
+    let listener = fixture.bind();
+    let server = thread::spawn(move || send_probe_response(&listener, &binding, false));
+    let witness = WorkerClaimWitness {
+        deployment_id: DEPLOYMENT.to_owned(),
+        worker_owner_id: OWNER.to_owned(),
+        worker_profile_digest: PROFILE_DIGEST.to_owned(),
+        release_digest: RELEASE_DIGEST.to_owned(),
+        config_digest: store.status().expect("store status").config_digest,
+        schema_digest: WORKER_HANDOFF_SCHEMA_DIGEST.to_owned(),
+        watchdog_boot_id: control.watchdog_boot_id,
+        worker_boot_id: control.worker_boot_id,
+        mode_sequence: control.mode_sequence,
+    };
+    let before = store.status().expect("before status");
+    let error = client
+        .claim_and_dispatch(&mut store, &witness, 3)
+        .expect_err("not-ready worker");
+    assert!(matches!(
+        error,
+        ascension_watchdog::WatchdogError::Conflict(_)
+    ));
+    assert_eq!(store.status().expect("after status"), before);
+    assert!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("reconciliation query")
+            .is_none()
+    );
+    server.join().expect("not-ready server");
 }
 
 #[test]

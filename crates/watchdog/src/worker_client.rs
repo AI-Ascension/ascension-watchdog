@@ -13,7 +13,7 @@ mod transport;
 use crate::error::{Result, WatchdogError};
 use crate::storage::{
     Store, WorkerClaimWitness, WorkerControlMode, WorkerControlWitness, WorkerHandoff,
-    WorkerHandoffTuple, WorkerTerminalReceipt, WorkerTerminalStatus,
+    WorkerHandoffState, WorkerHandoffTuple, WorkerTerminalReceipt, WorkerTerminalStatus,
 };
 use crate::worker_protocol::{
     AcknowledgeRequest, AcknowledgeResponse, AcknowledgeStatus, CONTRACT, Command, ControlScope,
@@ -335,12 +335,11 @@ impl WorkerClient {
         store.set_worker_control_at(&control, now_ms)
     }
 
-    /// Send one already-authorized dispatch.  The caller must persist the
-    /// `may_have_been_dispatched` marker before invoking this method.  Any
-    /// transport error is returned as uncertainty and must be reconciled by
-    /// lookup; this method never retries.
-    pub fn dispatch(&self, handoff: &WorkerHandoff) -> Result<DispatchResponse> {
-        validate_handoff_for_client(handoff)?;
+    /// Send one dispatch after the owner-local admission marker has committed.
+    /// This is deliberately private: callers cannot bypass the durable claim,
+    /// binding, probe, or `may_have_been_dispatched` ordering.
+    fn dispatch(&self, handoff: &WorkerHandoff) -> Result<DispatchResponse> {
+        validate_handoff_for_client(self, handoff)?;
         let tuple = protocol_tuple(handoff);
         let request = Frame::DispatchRequest(DispatchRequest {
             header: self.header(
@@ -391,7 +390,13 @@ impl WorkerClient {
         current_worker_boot_id: &str,
     ) -> Result<LookupResponse> {
         validate_storage_tuple(tuple)?;
+        validate_tuple_for_client(self, tuple)?;
         validate_uuid4(current_worker_boot_id, "worker boot id")?;
+        if current_worker_boot_id == self.watchdog_boot_id {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker lookup target cannot reuse the watchdog boot identity".to_owned(),
+            ));
+        }
         let request = Frame::LookupRequest(LookupRequest {
             header: self.header(Command::Lookup, Scope::Lookup, Some(current_worker_boot_id)),
             tuple: protocol_tuple_from_storage(tuple),
@@ -427,8 +432,9 @@ impl WorkerClient {
     }
 
     /// Acknowledge a durable terminal receipt on the current worker boot.
-    /// The caller must commit local completion/ack intent before this send.
-    pub fn acknowledge(
+    /// This is private so terminal delivery cannot be sent without one of the
+    /// store-backed claim or recovery orchestration paths below.
+    fn acknowledge(
         &self,
         tuple: &WorkerHandoffTuple,
         current_worker_boot_id: &str,
@@ -436,6 +442,12 @@ impl WorkerClient {
     ) -> Result<AcknowledgeResponse> {
         validate_storage_tuple(tuple)?;
         validate_uuid4(current_worker_boot_id, "worker boot id")?;
+        validate_tuple_for_client(self, tuple)?;
+        if current_worker_boot_id == self.watchdog_boot_id {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker acknowledgment target cannot reuse the watchdog boot identity".to_owned(),
+            ));
+        }
         crate::config::validate_digest(terminal_digest).map_err(|message| {
             WatchdogError::InvalidInput(format!("terminal digest is invalid: {message}"))
         })?;
@@ -487,6 +499,8 @@ impl WorkerClient {
         witness: &WorkerClaimWitness,
         now_ms: u64,
     ) -> Result<Option<WorkerDispatchResult>> {
+        validate_claim_witness_for_client(self, witness)?;
+        self.probe_for_claim(witness)?;
         let Some(claim) = store.claim_next_worker_handoff(witness, now_ms)? else {
             return Ok(None);
         };
@@ -550,26 +564,34 @@ impl WorkerClient {
         &self,
         store: &mut Store,
         tuple: &WorkerHandoffTuple,
-        current_worker_boot_id: &str,
+        current_control: &WorkerControlWitness,
         now_ms: u64,
     ) -> Result<WorkerReconcileResult> {
+        validate_recovery_witness_for_client(self, current_control)?;
         let Some(existing) = store.lookup_worker_handoff(tuple)? else {
             return Err(WatchdogError::NotFound(format!(
                 "worker handoff {}",
                 tuple.handoff_id
             )));
         };
-        let response = self.lookup(tuple, current_worker_boot_id)?;
+        let response = self.lookup(tuple, &current_control.worker_boot_id)?;
         let mut handoff = existing;
         let mut acknowledged = false;
         if response.status == LookupStatus::Terminal {
             let receipt = response.terminal.as_ref().ok_or_else(|| {
                 WatchdogError::Conflict("terminal lookup response has no receipt".to_owned())
             })?;
-            let completion =
-                store.complete_worker_handoff_at(tuple, &storage_receipt(receipt), now_ms)?;
-            let ack_response =
-                self.acknowledge(tuple, current_worker_boot_id, &completion.terminal_digest)?;
+            let completion = store.complete_worker_handoff_with_recovery_at(
+                tuple,
+                &storage_receipt(receipt),
+                current_control,
+                now_ms,
+            )?;
+            let ack_response = self.acknowledge(
+                tuple,
+                &current_control.worker_boot_id,
+                &completion.terminal_digest,
+            )?;
             if !matches!(
                 ack_response.status,
                 AcknowledgeStatus::Acknowledged | AcknowledgeStatus::AlreadyAcknowledged
@@ -578,8 +600,12 @@ impl WorkerClient {
                     "worker rejected terminal acknowledgment".to_owned(),
                 ));
             }
-            let _ack =
-                store.acknowledge_worker_handoff_at(tuple, &completion.terminal_digest, now_ms)?;
+            let _ack = store.acknowledge_worker_handoff_with_recovery_at(
+                tuple,
+                &completion.terminal_digest,
+                current_control,
+                now_ms,
+            )?;
             acknowledged = true;
             handoff = store.worker_handoff(&tuple.handoff_id)?.ok_or_else(|| {
                 WatchdogError::Conflict(
@@ -593,6 +619,21 @@ impl WorkerClient {
             terminal: response.terminal,
             acknowledged,
         })
+    }
+
+    fn probe_for_claim(&self, witness: &WorkerClaimWitness) -> Result<()> {
+        let response = self.probe()?;
+        if !response.ready {
+            return Err(WatchdogError::Conflict(
+                "worker probe is not ready for admission".to_owned(),
+            ));
+        }
+        if response.header.worker_boot_id.as_deref() != Some(witness.worker_boot_id.as_str()) {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker probe boot differs from the durable claim witness".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     fn header(&self, command: Command, scope: Scope, worker_boot_id: Option<&str>) -> Header {
@@ -693,7 +734,12 @@ fn protocol_tuple_from_storage(tuple: &WorkerHandoffTuple) -> HandoffTuple {
     }
 }
 
-fn validate_handoff_for_client(handoff: &WorkerHandoff) -> Result<()> {
+fn validate_handoff_for_client(client: &WorkerClient, handoff: &WorkerHandoff) -> Result<()> {
+    if handoff.state != WorkerHandoffState::MayHaveBeenDispatched {
+        return Err(WatchdogError::Conflict(
+            "worker dispatch requires a committed may_have_been_dispatched handoff".to_owned(),
+        ));
+    }
     if handoff.operation != OPERATION_RUNTIME_V3_EPISODE
         || handoff.parameters != Value::Object(serde_json::Map::new())
         || handoff.payload_digest != EMPTY_PARAMETERS_DIGEST
@@ -703,13 +749,93 @@ fn validate_handoff_for_client(handoff: &WorkerHandoff) -> Result<()> {
             "worker handoff is not the configured empty runtime-v3 episode".to_owned(),
         ));
     }
+    if handoff.watchdog_boot_id != client.watchdog_boot_id {
+        return Err(WatchdogError::Conflict(
+            "worker handoff is not bound to this watchdog session".to_owned(),
+        ));
+    }
     validate_storage_tuple(&handoff.tuple())?;
+    validate_tuple_for_client(client, &handoff.tuple())?;
     validate_uuid4(&handoff.worker_boot_id, "worker boot id")?;
     if handoff.mode_sequence == 0 {
         return Err(WatchdogError::InvalidInput(
             "worker mode sequence must be positive".to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn validate_tuple_for_client(client: &WorkerClient, tuple: &WorkerHandoffTuple) -> Result<()> {
+    if tuple.deployment_id != client.config.binding.deployment_id
+        || tuple.worker_owner_id != client.config.binding.worker_owner_id
+        || tuple.worker_profile_digest != client.config.binding.worker_profile_digest
+    {
+        return Err(WatchdogError::Conflict(
+            "worker handoff tuple differs from the configured worker".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_claim_witness_for_client(
+    client: &WorkerClient,
+    witness: &WorkerClaimWitness,
+) -> Result<()> {
+    if witness.deployment_id != client.config.binding.deployment_id
+        || witness.worker_owner_id != client.config.binding.worker_owner_id
+        || witness.worker_profile_digest != client.config.binding.worker_profile_digest
+        || witness.release_digest != client.config.binding.release_digest
+        || witness.config_digest != client.config.binding.config_digest
+        || witness.schema_digest != client.config.binding.schema_digest
+        || witness.watchdog_boot_id != client.watchdog_boot_id
+    {
+        return Err(WatchdogError::Conflict(
+            "worker claim witness differs from the configured client binding".to_owned(),
+        ));
+    }
+    validate_uuid4(&witness.watchdog_boot_id, "watchdog boot id")?;
+    validate_uuid4(&witness.worker_boot_id, "worker boot id")?;
+    if witness.watchdog_boot_id == witness.worker_boot_id || witness.mode_sequence == 0 {
+        return Err(WatchdogError::InvalidInput(
+            "worker claim witness has an invalid boot or mode sequence".to_owned(),
+        ));
+    }
+    for (digest, field) in [
+        (&witness.worker_profile_digest, "worker profile digest"),
+        (&witness.release_digest, "worker release digest"),
+        (&witness.config_digest, "worker config digest"),
+        (&witness.schema_digest, "worker schema digest"),
+    ] {
+        crate::config::validate_digest(digest).map_err(|message| {
+            WatchdogError::InvalidInput(format!("{field} is invalid: {message}"))
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_recovery_witness_for_client(
+    client: &WorkerClient,
+    recovery: &WorkerControlWitness,
+) -> Result<()> {
+    if recovery.deployment_id != client.config.binding.deployment_id
+        || recovery.worker_owner_id != client.config.binding.worker_owner_id
+        || recovery.worker_profile_digest != client.config.binding.worker_profile_digest
+        || recovery.watchdog_boot_id != client.watchdog_boot_id
+    {
+        return Err(WatchdogError::Conflict(
+            "worker recovery witness differs from the configured client binding".to_owned(),
+        ));
+    }
+    validate_uuid4(&recovery.watchdog_boot_id, "watchdog boot id")?;
+    validate_uuid4(&recovery.worker_boot_id, "worker boot id")?;
+    if recovery.watchdog_boot_id == recovery.worker_boot_id || recovery.mode_sequence == 0 {
+        return Err(WatchdogError::InvalidInput(
+            "worker recovery witness has an invalid boot or mode sequence".to_owned(),
+        ));
+    }
+    crate::config::validate_digest(&recovery.worker_profile_digest).map_err(|message| {
+        WatchdogError::InvalidInput(format!("worker profile digest is invalid: {message}"))
+    })?;
     Ok(())
 }
 

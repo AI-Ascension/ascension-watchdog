@@ -95,7 +95,7 @@ fn exchange_unix(
     authenticate_linux_peer(&stream, peer, deadline)?;
     // Do not open or read the worker credential until the OS peer identity
     // (including PID and process-start token) has been authenticated.
-    let credential = read_credential(credential_path)?;
+    let credential = read_credential(credential_path, deadline)?;
     let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.len());
     auth_body.extend_from_slice(AUTH_MAGIC);
     auth_body.extend_from_slice(&credential);
@@ -326,7 +326,7 @@ fn exchange_named_pipe(
     }
     // The credential is opened only after the exact named-pipe server PID,
     // creation timestamp, image path, and image digest have been checked.
-    let credential = read_credential(credential_path)?;
+    let credential = read_credential(credential_path, deadline)?;
     let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.len());
     auth_body.extend_from_slice(AUTH_MAGIC);
     auth_body.extend_from_slice(&credential);
