@@ -14,6 +14,10 @@ identity, never a remote request or a historical process row. The harness uses t
 validated bootstrap nonce and static `STS2_WORKER_ENDPOINT_NAMESPACE` policy. The
 ordinary launch arguments/environment and their binding digest do not change per
 launch. No runtime selects a different release or credential to resolve a failure.
+Watchdog configuration requires the harness launch environment's exact
+`STS2_WORKER_ENDPOINT_NAMESPACE` value to equal `endpoint_namespace`. Missing or
+different values, legacy endpoint keys, and case-variant reserved keys are rejected;
+validation does not inject or rewrite environment values.
 
 The nonce must be a canonical lowercase RFC4122 UUIDv4. Linux namespace is an
 absolute UTF-8 directory path without empty, dot, dot-dot, backslash, or control
