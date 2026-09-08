@@ -28,7 +28,10 @@ fn configured() -> WatchdogConfig {
             executable: local("harness"),
             args: Vec::new(),
             cwd: None,
-            environment: BTreeMap::new(),
+            environment: BTreeMap::from([(
+                "STS2_WORKER_ENDPOINT_NAMESPACE".to_owned(),
+                endpoint().to_str().unwrap().to_owned(),
+            )]),
             executable_sha256: Some("a".repeat(64)),
             restart: true,
         }],
@@ -76,6 +79,33 @@ fn absent_worker_remains_disabled_and_does_not_change_serialized_defaults() {
     let decoded: WatchdogConfig = serde_json::from_value(encoded).unwrap();
     assert!(decoded.worker.is_none());
     assert!(decoded.worker_binding().unwrap().is_none());
+}
+
+#[test]
+fn worker_namespace_requires_exact_launch_environment_without_legacy_aliases() {
+    let config = configured();
+    config.validate().unwrap();
+    let before = config.digest().unwrap();
+    for key in [
+        "STS2_WORKER_ENDPOINT",
+        "sts2_worker_endpoint",
+        "sts2_worker_endpoint_namespace",
+    ] {
+        let mut invalid = config.clone();
+        invalid.components[0]
+            .environment
+            .insert(key.to_owned(), String::new());
+        assert!(invalid.validate().is_err());
+    }
+    let mut invalid = config.clone();
+    invalid.components[0].environment.clear();
+    assert!(invalid.validate().is_err());
+    invalid.components[0].environment.insert(
+        "STS2_WORKER_ENDPOINT_NAMESPACE".to_owned(),
+        "different-namespace".to_owned(),
+    );
+    assert!(invalid.validate().is_err());
+    assert_eq!(config.digest().unwrap(), before);
 }
 
 #[cfg(windows)]

@@ -38,7 +38,10 @@ mod windows_tests {
                     "--ignored".to_owned(),
                 ],
                 cwd: None,
-                environment: BTreeMap::new(),
+                environment: BTreeMap::from([(
+                    "STS2_WORKER_ENDPOINT_NAMESPACE".to_owned(),
+                    crate::worker_endpoint::WINDOWS_NAMESPACE.to_owned(),
+                )]),
                 restart: true,
             }],
             worker: Some(WorkerConfig {

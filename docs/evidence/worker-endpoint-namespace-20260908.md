@@ -43,3 +43,17 @@ wiring and an actual authenticated exchange from the integrated launcher.
 No service installation, release activation, game/provider launch, host reboot,
 or live soak is established by these checks. Legacy configuration requires an
 explicit approved replacement; startup performs no configuration migration.
+
+## Configuration-agreement follow-up
+
+The namespace agreement gap above was subsequently corrected and independently
+reviewed. The watchdog now requires the exact launch namespace value and rejects
+legacy/case-variant reserved environment keys without injecting values. Focused
+Linux configuration/runtime tests passed (18 total), and Clippy passed. The Windows
+configuration executable passed 13 tests natively, including environment agreement;
+SHA-256: `6c0cdb5c41b7f602c608465626f11a84402a3aa713423f2122eddb8ba0587cee`.
+
+The full Linux workspace/all-target/all-feature test command also exited zero for
+the preceding endpoint commit `0b26404ca22e882d4d7056995bbb922578913c52`.
+That result predates the Linux pipe cherry-pick and configuration-agreement change;
+it is not a full gate for subsequent bootstrap producer integration.

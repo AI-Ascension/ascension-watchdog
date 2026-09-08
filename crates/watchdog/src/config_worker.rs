@@ -86,6 +86,21 @@ impl WorkerConfig {
         }
         validate_reference(&self.credential_path)?;
         self.validate_endpoint()?;
+        let namespace = self.endpoint_namespace.to_str().ok_or_else(|| {
+            WatchdogError::InvalidInput("worker namespace must be Unicode".to_owned())
+        })?;
+        if component.environment.iter().any(|(key, _)| {
+            key.eq_ignore_ascii_case("STS2_WORKER_ENDPOINT")
+                || (key.eq_ignore_ascii_case("STS2_WORKER_ENDPOINT_NAMESPACE")
+                    && key != "STS2_WORKER_ENDPOINT_NAMESPACE")
+        }) || component
+            .environment
+            .get("STS2_WORKER_ENDPOINT_NAMESPACE")
+            .map(String::as_str)
+            != Some(namespace)
+        {
+            return invalid("worker launch namespace must exactly match approved worker policy");
+        }
         if same_reference(&self.endpoint_namespace, &self.credential_path) {
             return invalid("worker endpoint and credential reference must differ");
         }

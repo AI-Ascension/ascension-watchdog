@@ -40,7 +40,14 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
                 executable: executable.clone(),
                 args: synthetic_arguments(),
                 cwd: None,
-                environment: BTreeMap::new(),
+                environment: BTreeMap::from([(
+                    "STS2_WORKER_ENDPOINT_NAMESPACE".to_owned(),
+                    if cfg!(windows) {
+                        ascension_watchdog::worker_endpoint::WINDOWS_NAMESPACE.to_owned()
+                    } else {
+                        root.to_str().expect("test namespace").to_owned()
+                    },
+                )]),
                 executable_sha256: Some(executable_digest.clone()),
                 restart: true,
             },
