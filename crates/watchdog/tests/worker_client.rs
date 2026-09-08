@@ -135,7 +135,26 @@ fn write_frame(stream: &mut UnixStream, body: &[u8]) -> std::io::Result<()> {
 }
 
 fn authenticated_request(listener: &UnixListener) -> (UnixStream, Frame) {
-    let (mut stream, _) = listener.accept().expect("worker connection");
+    listener
+        .set_nonblocking(true)
+        .expect("bounded test listener");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "worker fixture accept deadline");
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("worker connection: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read deadline");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .expect("write deadline");
     let auth = read_frame(&mut stream).expect("worker auth frame");
     assert!(auth.starts_with(AUTH_MAGIC));
     assert_eq!(&auth[AUTH_MAGIC.len()..], b"fixture-worker-secret");
@@ -352,10 +371,11 @@ fn uncertain_dispatch_is_retained_and_never_resent() {
     let listener = fixture.bind();
     let server = thread::spawn(move || {
         send_probe_response(&listener, &binding, true);
-        let (_stream, request) = authenticated_request(&listener);
+        let (stream, request) = authenticated_request(&listener);
         assert!(matches!(request, Frame::DispatchRequest(_)));
         // Drop the connected stream after the request.  The client has no
         // response identity to trust and must leave the durable reservation.
+        drop(stream);
         send_probe_response(&listener, &binding, true);
     });
     let witness = WorkerClaimWitness {
