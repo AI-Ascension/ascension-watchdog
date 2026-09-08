@@ -4,16 +4,16 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "6066074db1840781282ec4e738bfe3921ff222b1",
-    "bundle_digest": "sha256:a283e56b1ca556d95a13cdbb615ab426c53cd523cdd5da30d60a070840b30123",
+    "commit": "0c66c94e5ecfd238f81da1f9baa8578b2d44c2b3",
+    "bundle_digest": "sha256:c3165a11ad2db6d9686e6569e8687f2b20c58c075e814bc16fd1491121e0a4ac",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "9f30d9738adcebf2e02e458ca4237aaf227797f6f41f45d7fb4efa18045481a6",
+  "profile_sha256": "fee2303efa3f8695620ed7663af102f0b5d35af957599d2f654b323f025b7c93",
   "files": [
     {
       "path": "standards/BASELINE.md",
-      "sha256": "3ae7ddd12dc6a999ef3b52a5179b74d5b846c730ad0d6998cc3ad0cdbcd67a60"
+      "sha256": "2ed13d754614032b08e6767dbc292eb877c252fbe364db09b3d1bf1d15b776f1"
     },
     {
       "path": "standards/MANAGED_DOTNET.md",
@@ -41,11 +41,11 @@
     },
     {
       "path": "standards/conformance/invalid-exception-broad-path.yaml",
-      "sha256": "4e7e815998e0b6171cb5d31869e05b72421c3d694c7bdb5295b2967a83445afe"
+      "sha256": "615b90901bfcd9d44efdb044eafdda917c64e0cb39f023487051cda3bd0f0830"
     },
     {
       "path": "standards/conformance/invalid-exception-pending.yaml",
-      "sha256": "024cfce9e44859b28e24c4f8b50bc2a116a00b9d5ecf3f943cfa4626981e827c"
+      "sha256": "1f8ae0482ca39f687af69a3136d6ec6f174df87fbc57dff431dbdd27a3d10a7e"
     },
     {
       "path": "standards/conformance/invalid-lock-published.json",
@@ -77,7 +77,7 @@
     },
     {
       "path": "standards/conformance/valid-exception.yaml",
-      "sha256": "4875a4dc868e751c42f364921270813f47292872ee3cb50a9587d0ef4772d9c7"
+      "sha256": "f61583e1a7c31d7dfce125f1f4ccc51345a7a4160b20af72689cacf40d964884"
     },
     {
       "path": "standards/conformance/valid-lock.json",
@@ -97,11 +97,11 @@
     },
     {
       "path": "standards/rules.yaml",
-      "sha256": "75f0faee09613e9078a13ba34ac9c5c47a6ce664efdf21008b886205be7b71e2"
+      "sha256": "b9de18bd0c2f415f62e2bf0fd68511bb8f5dad91ddf5444431e15035cacba540"
     },
     {
       "path": "standards/schemas/exception.schema.json",
-      "sha256": "a36fb27441b615ecb9f1aee0400303e26c0ec06a9a6769c426447765711a61a1"
+      "sha256": "94c83f3c0329bf15d4f8b65a8391e47ed5e4e724e31b3ea68f7ede50f4a4e9ae"
     },
     {
       "path": "standards/schemas/lock.schema.json",
@@ -121,7 +121,7 @@
     },
     {
       "path": "standards/schemas/rule.schema.json",
-      "sha256": "eda8d3e939c165642d592caf1a2b2c4d8bfd7fc39aa1752275b683beecbeea77"
+      "sha256": "5a5925aaa6e0e20a9ca7dd4ebc6cca515b3f0e5b88de1a5a520acaef0c6487a9"
     },
     {
       "path": "standards/schemas/rules.schema.json",
@@ -149,11 +149,11 @@
     },
     {
       "path": "standards/tools/standards-sync/src/conformance_tests.rs",
-      "sha256": "f8875e9287280c12b27af04fb21d38be4681f1f2fb109016f7e864ee3d90488e"
+      "sha256": "dd56741aa40a1f104d8b0ef526868ed1bf14dc417b3907ba054a34442c22bfd2"
     },
     {
       "path": "standards/tools/standards-sync/src/main.rs",
-      "sha256": "8dafb7fc9b06b5e1675fee2c955b60695d785803baadb22c30c2bd62c28128eb"
+      "sha256": "4f88e99612d88e015a1c192768824fb32ef7d6442495504895d3c9ad935fb714"
     }
   ],
   "protected_paths": [

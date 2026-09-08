@@ -157,7 +157,7 @@ fn expired_future_and_unverified_approvals_cannot_suppress_a_rule() -> TestResul
     exception.approval.record = "local-review:fixture-review".to_owned();
     assert!(validate_exception(&exception, None, date_days("2026-10-08")?, true).is_err());
     assert!(validate_exception(&exception, None, date_days("2026-09-06")?, true).is_err());
-    let rules = BTreeMap::from([("X-ERR-001".to_owned(), false)]);
+    let rules = BTreeMap::from([("ASC-FMT-001".to_owned(), false)]);
     assert!(validate_exception(&exception, Some(&rules), date, true).is_err());
     exception.paths = vec!["src/../outside".to_owned()];
     assert!(validate_exception(&exception, None, date, true).is_err());
@@ -322,5 +322,63 @@ fn every_adopting_repository_has_a_valid_generated_profile() -> TestResult {
         checked += 1;
     }
     assert_eq!(checked, 12);
+    Ok(())
+}
+
+#[test]
+fn ordinary_exceptions_cannot_enable_safety_rule_suppression() -> TestResult {
+    let fixture = Fixture::new()?;
+    let path = fixture.0.join("rules.yaml");
+    let source = fs::read_to_string(canonical_root().join("standards/rules.yaml"))?;
+    let mut document: serde_yaml::Value = serde_yaml::from_str(&source)?;
+    let rules = document["rules"].as_sequence_mut().ok_or("missing rules")?;
+    for rule in rules.iter_mut() {
+        if rule["id"].as_str() == Some("X-ERR-001") {
+            rule["exception_eligible"] = serde_yaml::Value::Bool(true);
+        }
+    }
+    fs::write(&path, serde_yaml::to_string(&document)?)?;
+    assert!(validate_rules(&path).is_err());
+    Ok(())
+}
+
+#[test]
+fn supplied_rule_ids_severity_and_exception_scope_are_enforced() -> TestResult {
+    let root = canonical_root();
+    let path = root.join("standards/rules.yaml");
+    let rules = validate_rules(&path)?;
+    assert_eq!(rules.keys().filter(|id| id.starts_with("ASC-")).count(), 37);
+    assert_eq!(rules.values().filter(|eligible| **eligible).count(), 4);
+    let fixture = Fixture::new()?;
+    let altered = fixture.0.join("rules.yaml");
+    let source = fs::read_to_string(&path)?;
+    let mut document: serde_yaml::Value = serde_yaml::from_str(&source)?;
+    document["rules"]
+        .as_sequence_mut()
+        .ok_or("missing rules")?
+        .retain(|rule| rule["id"].as_str() != Some("ASC-SEC-001"));
+    fs::write(&altered, serde_yaml::to_string(&document)?)?;
+    assert!(validate_rules(&altered).is_err());
+    let mut document: serde_yaml::Value = serde_yaml::from_str(&source)?;
+    for rule in document["rules"].as_sequence_mut().ok_or("missing rules")? {
+        if rule["id"].as_str() == Some("ASC-SIZE-001") {
+            rule["severity"] = "mandatory".into();
+            rule["classification"] = "blocking".into();
+            rule["failure_behavior"] = "reject".into();
+        }
+    }
+    fs::write(&altered, serde_yaml::to_string(&document)?)?;
+    assert!(validate_rules(&altered).is_err());
+    let mut exception: Exception =
+        parse_yaml(&root.join("standards/conformance/valid-exception.yaml"))?;
+    validate_exception(&exception, Some(&rules), date_days(FIXTURE_AS_OF)?, true)?;
+    for id in ["ASC-SEC-001", "X-ERR-001", "RUST-BOUND-001", "ASC-RUS-002"] {
+        exception.rule_ids = vec![id.to_owned()];
+        let forged = BTreeMap::from([(id.to_owned(), true)]);
+        assert!(
+            validate_exception(&exception, Some(&forged), date_days(FIXTURE_AS_OF)?, true).is_err()
+        );
+        assert!(validate_exception(&exception, None, date_days(FIXTURE_AS_OF)?, true).is_err());
+    }
     Ok(())
 }

@@ -96,3 +96,13 @@ and conformance fixture inventory. It accepts `--as-of YYYY-MM-DD` for determini
 expiry checks. Production validation does not accept a `local-review:` fixture token or an unqueried
 GitHub review URL as independent approval evidence. It has no network, provider, game, mail, service,
 or deployment side effect.
+
+## Supplied rule catalog integration
+
+The `ASC-*` IDs preserve all 37 supplied rules alongside the earlier local IDs.
+Only `ASC-FMT-001`, `ASC-SIZE-001`, `ASC-SIZE-002` and `ASC-DES-001` are eligible
+for ordinary style/design exceptions. Catalog changes cannot grant that mechanism
+to safety, privacy, errors, resource bounds, contracts or production-panic rules.
+Production approval verification remains fail-closed; fixture approval never grants
+an actual suppression. Preferred size and design rules remain advisory, while the
+other supplied rules retain their mandatory classification.

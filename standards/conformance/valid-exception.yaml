@@ -1,14 +1,14 @@
 id: EXC-TEST-001
-rule_ids: [X-ERR-001]
+rule_ids: [ASC-FMT-001]
 paths: [src/adapter.rs]
 owner: test-owner
-rationale: A narrow source boundary needs an owner reviewed temporary exception.
+rationale: A formatter limitation needs an owner reviewed temporary style exception.
 compensating_tests: [cargo test --locked --package fixture]
 approval:
   reviewer: maintainer
   record: local-review:fixture-review
   status: approved
-reviewed_on: 2026-09-07
-expires_on: 2026-10-07
-removal_criteria: Remove when the boundary error mapper is extracted.
+reviewed_on: '2026-09-07'
+expires_on: '2026-10-07'
+removal_criteria: Remove when the formatter supports this exact source shape.
 

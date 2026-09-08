@@ -613,6 +613,25 @@ fn validate_rules(path: &Path) -> Result<BTreeMap<String, bool>> {
         {
             return Err(format!("invalid or duplicate rule id '{}'", rule.id));
         }
+        if rule.exception_eligible && !ordinary_style_rule(&rule.id) {
+            return Err(format!(
+                "rule {} cannot use an ordinary style exception",
+                rule.id
+            ));
+        }
+        if rule.id.starts_with("ASC-") {
+            let expected = if matches!(rule.id.as_str(), "ASC-SIZE-001" | "ASC-DES-001") {
+                "advisory"
+            } else {
+                "mandatory"
+            };
+            if rule.severity != expected {
+                return Err(format!(
+                    "rule {} changes the supplied severity contract",
+                    rule.id
+                ));
+            }
+        }
         if rule.title.is_empty() || rule.title.len() > 120 {
             return Err(format!("rule {} has an invalid title", rule.id));
         }
@@ -669,6 +688,43 @@ fn validate_rules(path: &Path) -> Result<BTreeMap<String, bool>> {
         }
     }
     for required in [
+        "ASC-OWN-001",
+        "ASC-CON-001",
+        "ASC-CON-002",
+        "ASC-ERR-001",
+        "ASC-RES-001",
+        "ASC-SEC-001",
+        "ASC-SEC-002",
+        "ASC-EFX-001",
+        "ASC-DEP-001",
+        "ASC-FMT-001",
+        "ASC-SIZE-001",
+        "ASC-SIZE-002",
+        "ASC-DES-001",
+        "ASC-PROV-001",
+        "ASC-EXC-001",
+        "ASC-RUS-001",
+        "ASC-RUS-002",
+        "ASC-RUS-003",
+        "ASC-RUS-004",
+        "ASC-NET-001",
+        "ASC-NET-002",
+        "ASC-PHP-001",
+        "ASC-PHP-002",
+        "ASC-PHP-003",
+        "ASC-PHP-004",
+        "ASC-WEB-001",
+        "ASC-WEB-002",
+        "ASC-OPS-001",
+        "ASC-OPS-002",
+        "ASC-OPS-003",
+        "ASC-CI-001",
+        "ASC-CI-002",
+        "ASC-CI-003",
+        "ASC-TST-001",
+        "ASC-EVD-001",
+        "ASC-REP-001",
+        "ASC-PLN-001",
         "X-ID-001",
         "X-VER-001",
         "X-AUTH-001",
@@ -1207,7 +1263,7 @@ fn validate_exception(
         return Err("local exception review record must name a safe review artifact".to_owned());
     }
     for rule in &exception.rule_ids {
-        if !valid_rule_id(rule) {
+        if !valid_rule_id(rule) || !ordinary_style_rule(rule) {
             return Err(format!("invalid exception rule {rule}"));
         }
         if let Some(known) = known_rule_ids
@@ -2341,10 +2397,20 @@ fn is_upper_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
+fn ordinary_style_rule(value: &str) -> bool {
+    matches!(
+        value,
+        "ASC-FMT-001" | "ASC-SIZE-001" | "ASC-SIZE-002" | "ASC-DES-001"
+    )
+}
+
 fn valid_rule_id(value: &str) -> bool {
     let parts = value.split('-').collect::<Vec<_>>();
     parts.len() == 3
-        && matches!(parts[0], "X" | "RUST" | "MANAGED" | "WEB" | "OPS" | "DOC")
+        && matches!(
+            parts[0],
+            "X" | "RUST" | "MANAGED" | "WEB" | "OPS" | "DOC" | "ASC"
+        )
         && !parts[1].is_empty()
         && parts[1]
             .bytes()

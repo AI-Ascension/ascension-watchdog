@@ -1,3 +1,4 @@
+# ASC IDs preserve the supplied catalog; earlier IDs remain compatible local references.
 schema_version: 1
 rules:
   - id: X-ID-001
@@ -42,7 +43,7 @@ rules:
     check: typed-error-and-redaction-tests
     verification: manual
     command: null
-    exception_eligible: true
+    exception_eligible: false
     failure_behavior: reject
   - id: X-LIFE-001
     title: Own lifecycle and cancellation
@@ -64,7 +65,7 @@ rules:
     check: bounds-and-timeout-tests
     verification: manual
     command: null
-    exception_eligible: true
+    exception_eligible: false
     failure_behavior: reject
   - id: X-PRIV-001
     title: Minimize private data
@@ -141,7 +142,7 @@ rules:
     check: compiler-clippy-and-source-linked-negative-tests
     verification: manual
     command: null
-    exception_eligible: true
+    exception_eligible: false
     failure_behavior: reject
   - id: MANAGED-BOUND-001
     title: Separate source-only and exact-host evidence
@@ -196,5 +197,592 @@ rules:
     check: documentation-review
     verification: manual
     command: null
+    exception_eligible: false
+    failure_behavior: reject
+
+  - id: ASC-OWN-001
+    title: Preserve owner and dependency boundaries
+    purpose: Preserve owner and dependency boundaries. See the package rule mapping for owner-specific evidence
+      and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: review-and-contract-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-CON-001
+    title: Protect external names, canonical bytes and version/profile compatibility
+    purpose: Protect external names, canonical bytes and version/profile compatibility. See the package
+      rule mapping for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: schema-golden-and-digest-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-CON-002
+    title: Keep semantic identity and unit namespaces distinct
+    purpose: Keep semantic identity and unit namespaces distinct. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: type-and-contract-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-ERR-001
+    title: Map structured failures and preserve unknown outcomes
+    purpose: Map structured failures and preserve unknown outcomes. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: negative-and-lifecycle-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-RES-001
+    title: Bound resource admission, execution and cleanup
+    purpose: Bound resource admission, execution and cleanup. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: limit-and-cancellation-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-SEC-001
+    title: Prevent secrets/private data in source, logs and artifacts
+    purpose: Prevent secrets/private data in source, logs and artifacts. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: secret-and-redaction-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-SEC-002
+    title: Validate untrusted inputs at the owned boundary
+    purpose: Validate untrusted inputs at the owned boundary. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: parser-and-negative-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-EFX-001
+    title: No unauthorized external effects during checks
+    purpose: No unauthorized external effects during checks. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: isolated-test-and-command-review
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-DEP-001
+    title: Use reviewed dependency/tool pins and actual supported targets
+    purpose: Use reviewed dependency/tool pins and actual supported targets. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: manifest-lock-and-tool-resolution
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-FMT-001
+    title: Use one authoritative formatter per file type
+    purpose: Use one authoritative formatter per file type. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: formatter-check
+    verification: manual
+    command: null
     exception_eligible: true
+    failure_behavior: reject
+  - id: ASC-SIZE-001
+    title: Report preferred file-size budgets as design guidance after adoption
+    purpose: Report preferred file-size budgets as design guidance after adoption. See the package rule
+      mapping for owner-specific evidence and acceptance boundaries.
+    severity: advisory
+    classification: advisory
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: classified-nonblank-line-count
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: report
+  - id: ASC-SIZE-002
+    title: Enforce approved hard file-size budgets
+    purpose: Enforce approved hard file-size budgets. See the package rule mapping for owner-specific evidence
+      and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: classified-nonblank-line-count
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: reject
+  - id: ASC-DES-001
+    title: Review function size, cohesion and meaningful naming
+    purpose: Review function size, cohesion and meaningful naming. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: advisory
+    classification: advisory
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: targeted-design-review
+    verification: manual
+    command: null
+    exception_eligible: true
+    failure_behavior: report
+  - id: ASC-PROV-001
+    title: Preserve source/generator/license and evidence provenance
+    purpose: Preserve source/generator/license and evidence provenance. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: provenance-and-fixture-validation
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-EXC-001
+    title: Verify precise, active and genuinely approved exceptions
+    purpose: Verify precise, active and genuinely approved exceptions. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: schema-plus-approval-validation
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-RUS-001
+    title: Verify member lint inheritance and effective overrides
+    purpose: Verify member lint inheritance and effective overrides. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - rust
+    check: cargo-metadata-and-negative-compilation
+    verification: automated
+    command: cargo run --locked --package repo-policy -- --strict
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-RUS-002
+    title: Reject prohibited production panic/placeholder constructs
+    purpose: Reject prohibited production panic/placeholder constructs. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - rust
+    check: compiler-and-clippy
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-RUS-003
+    title: Restrict unsafe to separately approved native/OS boundaries
+    purpose: Restrict unsafe to separately approved native/OS boundaries. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - rust
+    check: compiler-and-safety-review
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-RUS-004
+    title: Cover actual workspaces, targets, features and documentation tests
+    purpose: Cover actual workspaces, targets, features and documentation tests. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - rust
+    check: inventory-and-test-matrix
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-NET-001
+    title: Verify effective nullable/analyzer/warning/build properties
+    purpose: Verify effective nullable/analyzer/warning/build properties. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - managed
+    check: evaluated-project-properties-and-builds
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-NET-002
+    title: Validate ABI, callbacks, lifetime and host-thread behavior
+    purpose: Validate ABI, callbacks, lifetime and host-thread behavior. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - managed
+    check: source-linked-and-authorized-host-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-PHP-001
+    title: Distinguish runtime/test-tool PHP requirements
+    purpose: Distinguish runtime/test-tool PHP requirements. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: composer-platform-and-runtime-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-PHP-002
+    title: Use exact parsed origin policy
+    purpose: Use exact parsed origin policy. See the package rule mapping for owner-specific evidence and
+      acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: origin-regression-tests
+    verification: automated
+    command: composer run test
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-PHP-003
+    title: Serialize complete persistent read-modify-write operations
+    purpose: Serialize complete persistent read-modify-write operations. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: concurrent-process-and-fault-tests
+    verification: automated
+    command: composer run test
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-PHP-004
+    title: Check storage/input errors and sanitize notification logging
+    purpose: Check storage/input errors and sanitize notification logging. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: negative-and-secret-marker-tests
+    verification: automated
+    command: composer run test
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-WEB-001
+    title: Preserve static architecture and safe DOM/async boundaries
+    purpose: Preserve static architecture and safe DOM/async boundaries. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: lint-and-browser-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-WEB-002
+    title: Verify keyboard, focus, errors and reduced-motion behavior
+    purpose: Verify keyboard, focus, errors and reduced-motion behavior. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - web_php
+    check: local-browser-and-accessibility-review
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-OPS-001
+    title: Parse config as data and preserve subprocess argument boundaries
+    purpose: Parse config as data and preserve subprocess argument boundaries. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - operations
+    check: shell-analyzer-and-injection-fixtures
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-OPS-002
+    title: Propagate failures and bound owned process cleanup
+    purpose: Propagate failures and bound owned process cleanup. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - operations
+    check: synthetic-process-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-OPS-003
+    title: Preserve data volumes, host exposure policy and privilege boundaries
+    purpose: Preserve data volumes, host exposure policy and privilege boundaries. See the package rule
+      mapping for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - operations
+    check: structured-config-and-negative-tests
+    verification: automated
+    command: bash tests/compose-invariants.sh
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-CI-001
+    title: Prevent privileged execution of untrusted changes
+    purpose: Prevent privileged execution of untrusted changes. See the package rule mapping for owner-specific
+      evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: workflow-review-and-fixtures
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-CI-002
+    title: Reject false green from missing, skipped or zero-target checks
+    purpose: Reject false green from missing, skipped or zero-target checks. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: matrix-and-exit-status-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-CI-003
+    title: Protect enforcement changes and coordinate required-check names
+    purpose: Protect enforcement changes and coordinate required-check names. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: owner-review-and-baseline-comparison
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-TST-001
+    title: Require executable counterexamples for new gates and fixes
+    purpose: Require executable counterexamples for new gates and fixes. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: positive-negative-regression-suite
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-EVD-001
+    title: Report exact revisions, checks, outcomes and environment limits
+    purpose: Report exact revisions, checks, outcomes and environment limits. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: evidence-schema-and-review
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-REP-001
+    title: Keep routine checks read-only, deterministic and LLM-independent
+    purpose: Keep routine checks read-only, deterministic and LLM-independent. See the package rule mapping
+      for owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - brand
+    - contracts
+    - managed
+    - operations
+    - rust
+    - web_php
+    check: idempotence-and-side-effect-tests
+    verification: manual
+    command: null
+    exception_eligible: false
+    failure_behavior: reject
+  - id: ASC-PLN-001
+    title: Do not invent product implementation for planning profiles
+    purpose: Do not invent product implementation for planning profiles. See the package rule mapping for
+      owner-specific evidence and acceptance boundaries.
+    severity: mandatory
+    classification: blocking
+    scope:
+    - contracts
+    check: source-inventory-and-stage-review
+    verification: manual
+    command: null
+    exception_eligible: false
     failure_behavior: reject
