@@ -375,9 +375,9 @@ fn exchange_named_pipe(
             "worker transport deadline expired".to_owned(),
         ));
     }
-    let mut pipe = AdminPipeClient::connect(
+    let mut pipe = AdminPipeClient::connect_worker(
         endpoint.to_string_lossy().into_owned(),
-        Some(peer.executable()),
+        peer.executable(),
         remaining,
     )
     .map_err(|error| WatchdogError::Unauthorized(error.to_string()))?;

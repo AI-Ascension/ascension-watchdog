@@ -504,14 +504,37 @@ impl AdminPipeClient {
         expected_server_executable: Option<&Path>,
         timeout: Duration,
     ) -> Result<Self, PlatformError> {
+        Self::connect_profile(name.into(), expected_server_executable, timeout, false)
+    }
+
+    /// Connect to a nonce-bound worker byte-stream endpoint. This does not grant
+    /// admin authority or change the admin server namespace and message mode.
+    /// The caller must additionally verify its approved process and release proof.
+    pub fn connect_worker(
+        name: impl Into<String>,
+        expected_server_executable: &Path,
+        timeout: Duration,
+    ) -> Result<Self, PlatformError> {
+        Self::connect_profile(name.into(), Some(expected_server_executable), timeout, true)
+    }
+
+    fn connect_profile(
+        name: String,
+        expected_server_executable: Option<&Path>,
+        timeout: Duration,
+        worker: bool,
+    ) -> Result<Self, PlatformError> {
         validate_timeout(timeout)?;
         let expected_server_executable = expected_server_executable.ok_or_else(|| {
             PlatformError::Invalid(
                 "admin pipe clients must configure the expected server executable".to_owned(),
             )
         })?;
-        let name = name.into();
-        validate_pipe_name(&name)?;
+        if worker {
+            validate_worker_pipe_name(&name)?;
+        } else {
+            validate_pipe_name(&name)?;
+        }
         let wide_name = wide(&name)?;
         let timeout_ms = timeout_millis(timeout)?;
         let waited = unsafe {
@@ -538,7 +561,18 @@ impl AdminPipeClient {
             )
         };
         let handle = OwnedHandle::new(raw, "CreateFileW(admin pipe)")?;
-        set_message_nonblocking(handle.raw())?;
+        if worker {
+            let mode = PIPE_NOWAIT; // PIPE_READMODE_BYTE is zero.
+            // SAFETY: the owned client handle and mode remain live for this call;
+            // optional remote-buffering pointers are null for this local pipe.
+            if unsafe { SetNamedPipeHandleState(handle.raw(), &raw const mode, null(), null()) }
+                == 0
+            {
+                return Err(last_error("SetNamedPipeHandleState(worker)"));
+            }
+        } else {
+            set_message_nonblocking(handle.raw())?;
+        }
         let mut server_process_id = 0_u32;
         if unsafe { GetNamedPipeServerProcessId(handle.raw(), &raw mut server_process_id) } == 0
             || server_process_id == 0
@@ -1257,6 +1291,30 @@ fn validate_pipe_name(name: &str) -> Result<(), PlatformError> {
     Ok(())
 }
 
+fn validate_worker_pipe_name(name: &str) -> Result<(), PlatformError> {
+    let valid = name
+        .strip_prefix(r"\\.\pipe\ascension-worker-")
+        .is_some_and(|nonce| {
+            let bytes = nonce.as_bytes();
+            bytes.len() == 36
+                && bytes.iter().enumerate().all(|(index, byte)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        *byte == b'-'
+                    } else {
+                        byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+                    }
+                })
+                && bytes[14] == b'4'
+                && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+        });
+    if !valid {
+        return Err(PlatformError::Invalid(
+            "worker pipe name is not a local launch nonce".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_timeout(timeout: Duration) -> Result<(), PlatformError> {
     if timeout.is_zero() || timeout > Duration::from_secs(30) {
         return Err(PlatformError::Invalid(
@@ -1558,6 +1616,64 @@ impl Drop for SecurityDescriptor {
 #[cfg(test)]
 mod ancestor_lock_tests {
     use super::*;
+
+    #[test]
+    fn worker_client_exchanges_frames_with_byte_pipe() -> Result<(), PlatformError> {
+        let name = format!(
+            r"\\.\pipe\ascension-worker-{:08x}-1234-4234-8234-123456789abc",
+            std::process::id()
+        );
+        let wide_name = wide(&name)?;
+        // SAFETY: fixed local test pipe, live terminated UTF-16 name, null
+        // optional security pointer; the returned handle has one RAII owner.
+        let raw = unsafe {
+            CreateNamedPipeW(
+                wide_name.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                4096,
+                4096,
+                0,
+                null(),
+            )
+        };
+        let server = OwnedHandle::new(raw, "create byte-pipe test")?;
+        // Nonblocking server enters listening state; no external peer is used.
+        unsafe {
+            ConnectNamedPipe(server.raw(), null_mut());
+        }
+        let executable = std::env::current_exe()
+            .map_err(|_| PlatformError::Invalid("test executable unavailable".to_owned()))?;
+        let mut client =
+            AdminPipeClient::connect_worker(&name, &executable, Duration::from_secs(2))?;
+        client.write_frame(b"request", Duration::from_secs(2))?;
+        let mut received = [0_u8; 11];
+        read_exact_poll(
+            server.raw(),
+            &mut received,
+            deadline(Duration::from_secs(2)),
+        )?;
+        assert_eq!(&received, b"\0\0\0\x07request");
+        write_all_poll(
+            server.raw(),
+            b"\0\0\0\x02ok",
+            deadline(Duration::from_secs(2)),
+        )?;
+        assert_eq!(client.read_frame(Duration::from_secs(2))?, b"ok");
+        Ok(())
+    }
+
+    #[test]
+    fn worker_and_admin_namespaces_remain_separate() {
+        let worker = r"\\.\pipe\ascension-worker-12345678-1234-4234-8234-123456789abc";
+        assert!(validate_worker_pipe_name(worker).is_ok());
+        assert!(validate_pipe_name(worker).is_err());
+        assert!(validate_worker_pipe_name(r"\\.\pipe\ascension-watchdog-admin").is_err());
+        assert!(validate_worker_pipe_name(&worker.replace("4234", "3234")).is_err());
+        assert!(validate_worker_pipe_name(&worker.replace("8234", "7234")).is_err());
+        assert!(validate_worker_pipe_name(&format!("{worker}\\extra")).is_err());
+    }
 
     struct TestDirectory(PathBuf);
 
