@@ -4,6 +4,8 @@
 pub(crate) mod runtime_admin;
 #[path = "runtime_process.rs"]
 pub(crate) mod runtime_process;
+#[path = "runtime_worker.rs"]
+pub(crate) mod runtime_worker;
 
 use self::runtime_process::{
     RuntimeChild, RuntimeLaunchError, RuntimeObservation, RuntimeProcessManager,
@@ -89,6 +91,9 @@ pub struct Supervisor {
     process_manager: RuntimeProcessManager,
     lock: Option<SingletonLock>,
     worker_id: String,
+    /// One fresh watchdog worker-session identity per Supervisor instance.
+    /// It is never restored from durable state or regenerated per request.
+    worker_boot_id: String,
     initialized_runtime: bool,
 }
 
@@ -99,6 +104,7 @@ impl std::fmt::Debug for Supervisor {
             .field("components", &self.config.components.len())
             .field("children", &self.children.keys().collect::<Vec<_>>())
             .field("worker_id", &self.worker_id)
+            .field("worker_boot_id", &self.worker_boot_id)
             .finish_non_exhaustive()
     }
 }
@@ -171,6 +177,7 @@ impl Supervisor {
             process_manager,
             lock: None,
             worker_id: format!("watchdog-{}", Uuid::new_v4()),
+            worker_boot_id: Uuid::new_v4().to_string(),
             initialized_runtime: false,
         }
     }
@@ -257,18 +264,32 @@ impl Supervisor {
             self.reconcile_persisted_identities(now_ms)?;
             self.initialized_runtime = true;
         }
+        // A configured worker binding is immutable owner-local state. Persist
+        // it before any worker control or queue effect, while leaving the
+        // first-reconcile quarantine/generation/orphan-proof ordering above
+        // intact.
+        self.configure_worker_binding(now_ms)?;
         let desired_mode = self.store.desired_mode()?;
         let mut report = ReconcileReport {
             observed_at_ms: now_ms,
             desired_mode,
             ..ReconcileReport::default()
         };
+        // Existing live harnesses must receive the freshly observed durable
+        // desired mode before component stop/cleanup can run.
+        self.reconcile_worker_before_components(desired_mode, now_ms)?;
         for component in self.config.components.clone() {
             let decision =
                 self.reconcile_component(&component, desired_mode, now_ms, &mut report)?;
             report.decisions.push(decision);
         }
-        if desired_mode == DesiredMode::Draining && self.children.is_empty() {
+        // Repeat control/recovery after a possible new launch.  Claims are
+        // admitted only by this post-scheduling Running phase.
+        self.reconcile_worker_after_components(desired_mode, now_ms)?;
+        if desired_mode == DesiredMode::Draining
+            && self.children.is_empty()
+            && self.worker_drain_complete()?
+        {
             self.store
                 .set_desired_mode_at(DesiredMode::Stopped, now_ms)?;
         }
@@ -1703,6 +1724,14 @@ impl Supervisor {
     /// Expose the worker's child identity for integration diagnostics.
     pub fn child_identity(&self, component_id: &str) -> Option<&ProcessIdentity> {
         self.children.get(component_id).map(RuntimeChild::identity)
+    }
+
+    /// The watchdog worker-session identity for this Supervisor instance.
+    /// A reopened Supervisor receives a new value; durable handoffs retain the
+    /// original value and can only be reconciled through current control.
+    #[must_use]
+    pub fn worker_boot_id(&self) -> &str {
+        &self.worker_boot_id
     }
 
     /// Submit a job through the durable store.
