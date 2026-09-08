@@ -27,6 +27,8 @@ mod storage_admin;
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
 mod storage_queries;
+#[path = "storage_worker_bootstrap.rs"]
+mod storage_worker_bootstrap;
 #[path = "storage_worker_handoff.rs"]
 mod storage_worker_handoff;
 pub use storage_admin::{
@@ -36,6 +38,7 @@ pub use storage_admin::{
     RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
 };
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
+pub use storage_worker_bootstrap::WorkerBootstrapBinding;
 pub use storage_worker_handoff::{
     MAX_WORKER_WIRE_INTEGER, WORKER_HANDOFF_CONTRACT, WORKER_HANDOFF_OPERATION,
     WORKER_HANDOFF_PAYLOAD_DIGEST, WORKER_HANDOFF_SCHEMA_DIGEST, WORKER_HANDOFF_SCHEMA_VERSION,
@@ -2409,6 +2412,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
         ",
     )?;
     storage_worker_handoff::create_worker_handoff_schema(conn)?;
+    storage_worker_bootstrap::create_schema(conn)?;
     Ok(())
 }
 

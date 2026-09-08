@@ -54,6 +54,29 @@ environment entries. A new Supervisor cannot adopt a worker bound to a different
 watchdog boot: retain exact cleanup ownership, stop/quarantine, and only relaunch
 after confirmed cleanup and current durable desired-state authorization.
 
+## Owner-local launch binding storage
+
+The additive `worker_bootstrap_bindings` table stores only launch-intent identity,
+extension version 1, watchdog boot UUID, and encoded-frame SHA-256. It retains no
+frame bytes, credential, or executable path. `Store::bind_worker_bootstrap` validates
+and encodes the frame, then atomically binds it and writes its audit entry while
+durable desired mode is running and the exact component/nonce intent is prepared.
+Repeating the same binding in that phase is idempotent; changing it or binding
+after ownership proof has been recorded fails. Historical lookup remains read-only
+after stop.
+
+Fresh initialization creates the extension. For an older store,
+`Store::migrate_worker_bootstrap` is an explicit library operation requiring its
+matching singleton lock and durable stopped mode. Installation and audit commit
+together, only if both table and version marker are absent. It never backfills
+historical launch identities. Missing or altered installed DDL/marker fails closed;
+ordinary startup and reads do not repair it. A backed-up database retains this
+table with the rest of owner state; restoring it does not authorize an old boot.
+
+This storage API is not yet wired into the launch path or an authenticated
+operator migration command. Its tests therefore establish storage behavior only,
+not successful worker bootstrap delivery or restart admission.
+
 Acceptance requires bounded codec malformed/duplicate/unknown-field tests,
 cross-consumer fixtures, distinct boots across Supervisor restart, binding checks,
 partial-launch and unused-pipe cleanup tests, bootstrap timeout, credential and
