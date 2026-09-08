@@ -2,7 +2,8 @@
 
 Classification: confirmed synthetic local-process/IPC test evidence only.
 
-Source revision: `27000a9` (worker-client fixture deadline and stream-close fix).
+Source revision: `27000a9a50de419b2f9a38b6bb101ca0000409fc`.
+Test file SHA-256: `f67054d7c0237fa90a4b978235a1d996973659f31b0ae2aca70b661f95bbb7c3`.
 The fixture now bounds accept to 30 seconds and connected reads/writes to five
 seconds. The lost-response fixture explicitly closes its accepted stream before
 waiting for the next probe. These are test bounds, not production deadlines.
