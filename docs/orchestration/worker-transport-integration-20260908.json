@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-local-checkpoint-not-a-release",
+  "date": "2026-09-08",
+  "prior_turn_classification": "progress",
+  "integrated_candidates": {
+    "ascension-watchdog": "1eb4cfb356ca12c48b8f0b576ae761819c160008",
+    "sts2-harness": "1a6ef5cc87b0a4825229eb6e2c774a96eadaa189"
+  },
+  "pending_candidates": [
+    {
+      "task": "H49",
+      "subject": "worker ledger independent review",
+      "commit": "b836363fd022d0302adae8f9a9fdc18bb61c0158",
+      "status": "review-running-not-integrated",
+      "integration_gate": "preserve current schema bootstrap split and validate schema 6 to 7 migration"
+    },
+    {
+      "task": "W50",
+      "subject": "worker client independent review",
+      "commit": "56777ee82990fc8ec1d13b9e8fcc41b49c7945c9",
+      "status": "review-running-not-integrated"
+    },
+    {
+      "task": "H51",
+      "subject": "Linux worker transport repair",
+      "dependency_commit": "935c8892797bb2f4dd1f6f02d5ab9ddfff34e5ba",
+      "status": "source-repair-running-not-exported",
+      "baseline_results": "8 focused synthetic tests passed; strict policy failed two file-size warnings",
+      "repair_gates": ["held approved image identity", "single active exchange", "private witness construction", "bounded filesystem preparation", "strict file-size policy"]
+    },
+    {
+      "task": "H52",
+      "subject": "Windows worker transport independent review",
+      "commit": "4ce47b9511eefc97f3a7e97c63e0df52fa0c1682",
+      "status": "review-running-not-integrated",
+      "integration_gate": "independent source review plus native Windows fault matrix"
+    },
+    {
+      "task": "W48",
+      "subject": "synthetic reaper final delta review",
+      "commit": "1eb4cfb356ca12c48b8f0b576ae761819c160008",
+      "status": "review-running",
+      "root_result": "4 focused tests, formatting and diff checks passed"
+    }
+  ],
+  "dependency_audit": {
+    "lock_sha256": "8547cc0581bb00da9151e0a7ace1b16d5a398729c125f587de9eeea115d9a0c6",
+    "rustsec_commit": "8a1eb4f933fb5821add5b4e98601ebd90b8b3538",
+    "dependencies": 129,
+    "vulnerabilities": 0,
+    "warnings": 0,
+    "exit_code": 0,
+    "scope": "Linux candidate lockfile snapshot; no target filters or ignored advisories"
+  },
+  "agent_reservations": {
+    "ceiling": 12,
+    "open_existing_descendants": 7,
+    "active_tasks": ["H49", "W50", "H51", "H52", "W48"],
+    "reserved_new_children": 0,
+    "actual_task_depth": 1,
+    "required_model": "gpt-5.6-luna",
+    "required_effort": "max",
+    "nested_capability": "H42 again reported no native child-spawn tool; no depth-2 or depth-3 children created",
+    "three_level_orchestration_verified": false
+  },
+  "next_dependencies": [
+    "review and integrate ledger while preserving current schema bootstrap",
+    "resolve client review findings and connect durable dispatch to supervision",
+    "finish transport repairs and independent native boundary validation",
+    "wire endpoint admission and execution runtime, then test exact companion binaries"
+  ],
+  "implementation_complete": false,
+  "release_ready": false,
+  "native_windows_worker_transport_verified": false,
+  "live_host_recovery_verified": false,
+  "cold_boot_recovery_verified": false,
+  "soak_verified": false,
+  "remote_writes_this_checkpoint": false,
+  "service_install_or_release_activation_this_checkpoint": false
+}
