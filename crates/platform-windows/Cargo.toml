@@ -10,6 +10,9 @@ license = "MIT"
 [lib]
 path = "src/lib.rs"
 
+[dev-dependencies]
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+
 [[bin]]
 name = "platform_synthetic"
 path = "src/bin/platform_synthetic.rs"
