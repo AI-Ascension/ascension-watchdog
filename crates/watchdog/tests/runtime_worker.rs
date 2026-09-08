@@ -56,10 +56,10 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
         ],
         worker: Some(WorkerConfig {
             component_id: "harness".to_owned(),
-            endpoint: if cfg!(windows) {
-                PathBuf::from(format!(r"\\.\pipe\ascension-worker-{}", Uuid::new_v4()))
+            endpoint_namespace: if cfg!(windows) {
+                PathBuf::from(ascension_watchdog::worker_endpoint::WINDOWS_NAMESPACE)
             } else {
-                root.join("worker.sock")
+                root.to_path_buf()
             },
             credential_path: root.join("worker.token"),
             allowed_peer_sid: None,
@@ -202,6 +202,7 @@ fn draining_keeps_pending_handoff_barrier_without_live_child()
 #[cfg(unix)]
 fn assert_missing_worker_endpoint_does_not_abort_stop(
     config: &WatchdogConfig,
+    unready_current_endpoint: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     std::fs::set_permissions(
@@ -258,6 +259,16 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
     // Change only the durable operator intent through a second owner-local
     // SQLite connection. The ServiceLoop remains the sole process-cleanup
     // authority and must still run its stop path after the worker outage.
+    if unready_current_endpoint {
+        let record = running.component("harness")?.expect("harness record");
+        let endpoint = config
+            .worker
+            .as_ref()
+            .expect("worker config")
+            .endpoint_for_launch(record.launch_nonce.as_deref().expect("owned launch nonce"))?;
+        let listener = std::os::unix::net::UnixListener::bind(endpoint)?;
+        drop(listener);
+    }
     let mut intent = Store::open(&database, config)?;
     intent.set_desired_mode_at(DesiredMode::Stopped, 1_001)?;
     drop(intent);
@@ -287,7 +298,10 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
 fn missing_worker_endpoint_does_not_abort_loop_or_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
-    assert_missing_worker_endpoint_does_not_abort_stop(&worker_config(&temp, DesiredMode::Running))
+    assert_missing_worker_endpoint_does_not_abort_stop(
+        &worker_config(&temp, DesiredMode::Running),
+        false,
+    )
 }
 
 #[cfg(windows)]
@@ -320,7 +334,7 @@ fn worker_identity_failure_cannot_veto_durable_operator_stop()
 
 #[cfg(unix)]
 #[test]
-fn unready_worker_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
+fn stale_prior_launch_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let config = worker_config(&temp, DesiredMode::Running);
@@ -328,11 +342,19 @@ fn unready_worker_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
         .worker
         .as_ref()
         .expect("worker config")
-        .endpoint
-        .clone();
+        .endpoint_for_launch(&Uuid::new_v4().to_string())?;
     let listener = std::os::unix::net::UnixListener::bind(&endpoint)?;
     drop(listener);
-    assert_missing_worker_endpoint_does_not_abort_stop(&config)
+    assert_missing_worker_endpoint_does_not_abort_stop(&config, false)
+}
+
+#[cfg(unix)]
+#[test]
+fn unready_current_worker_socket_does_not_skip_owned_stop_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let config = worker_config(&temp, DesiredMode::Running);
+    assert_missing_worker_endpoint_does_not_abort_stop(&config, true)
 }
 
 #[test]

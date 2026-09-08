@@ -117,7 +117,18 @@ impl WorkerClientConfig {
     }
 
     fn validate(self) -> Result<Self> {
+        #[cfg(not(windows))]
         crate::admin::validate_endpoint_path(&self.endpoint)?;
+        #[cfg(windows)]
+        {
+            let endpoint = self.endpoint.to_str().ok_or_else(|| {
+                WatchdogError::InvalidInput("worker endpoint must be Unicode".to_owned())
+            })?;
+            ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(endpoint)
+                .map_err(|_| {
+                    WatchdogError::InvalidInput("invalid worker pipe endpoint".to_owned())
+                })?;
+        }
         auth::validate_credential_reference(&self.credential_path)?;
         validate_binding(&self.binding)?;
         if self.timeout.is_zero() || self.timeout > Duration::from_millis(MAX_TIMEOUT_MS) {

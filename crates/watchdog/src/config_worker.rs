@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
     pub component_id: String,
-    pub endpoint: PathBuf,
+    pub endpoint_namespace: PathBuf,
     pub credential_path: PathBuf,
     #[serde(default)]
     pub allowed_peer_sid: Option<String>,
@@ -86,11 +86,11 @@ impl WorkerConfig {
         }
         validate_reference(&self.credential_path)?;
         self.validate_endpoint()?;
-        if same_reference(&self.endpoint, &self.credential_path) {
+        if same_reference(&self.endpoint_namespace, &self.credential_path) {
             return invalid("worker endpoint and credential reference must differ");
         }
         if let Some(admin) = &config.admin {
-            let overlaps = [&self.endpoint, &self.credential_path]
+            let overlaps = [&self.endpoint_namespace, &self.credential_path]
                 .iter()
                 .any(|worker| {
                     [
@@ -109,23 +109,16 @@ impl WorkerConfig {
     }
 
     fn validate_endpoint(&self) -> Result<()> {
+        self.endpoint_for_launch("12345678-1234-4234-8234-123456789abc")?;
         #[cfg(unix)]
         {
-            validate_reference(&self.endpoint)?;
-            if self.endpoint.as_os_str().len() > 100 || self.allowed_peer_sid.is_some() {
+            validate_reference(&self.endpoint_namespace)?;
+            if self.allowed_peer_sid.is_some() {
                 return invalid("Unix worker endpoint must be bounded and cannot specify a SID");
             }
         }
         #[cfg(windows)]
         {
-            let Some(endpoint) = self.endpoint.to_str() else {
-                return invalid("worker pipe name must be Unicode");
-            };
-            if ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(endpoint)
-                .is_err()
-            {
-                return invalid("worker pipe name is invalid");
-            }
             if let Some(sid) = &self.allowed_peer_sid {
                 if sid.len() > 184
                     || !sid.starts_with("S-1-")
@@ -141,6 +134,17 @@ impl WorkerConfig {
         return invalid("worker transport is unsupported on this platform");
         #[cfg(any(unix, windows))]
         Ok(())
+    }
+
+    pub fn endpoint_for_launch(&self, nonce: &str) -> Result<PathBuf> {
+        let namespace = self.endpoint_namespace.to_str().ok_or_else(|| {
+            WatchdogError::InvalidInput("worker namespace must be Unicode".to_owned())
+        })?;
+        #[cfg(windows)]
+        let platform = crate::worker_endpoint::EndpointPlatform::Windows;
+        #[cfg(not(windows))]
+        let platform = crate::worker_endpoint::EndpointPlatform::Linux;
+        crate::worker_endpoint::resolve(platform, namespace, nonce).map(PathBuf::from)
     }
 }
 

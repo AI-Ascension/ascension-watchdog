@@ -15,9 +15,9 @@ fn local(name: &str) -> PathBuf {
 
 fn endpoint() -> PathBuf {
     if cfg!(windows) {
-        PathBuf::from(r"\\.\pipe\ascension-worker-12345678-1234-4234-8234-123456789abc")
+        PathBuf::from(ascension_watchdog::worker_endpoint::WINDOWS_NAMESPACE)
     } else {
-        local("worker.sock")
+        local("ipc")
     }
 }
 
@@ -34,7 +34,7 @@ fn configured() -> WatchdogConfig {
         }],
         worker: Some(WorkerConfig {
             component_id: "harness".to_owned(),
-            endpoint: endpoint(),
+            endpoint_namespace: endpoint(),
             credential_path: local("worker-credential"),
             allowed_peer_sid: None,
             worker_profile_digest: "b".repeat(64),
@@ -45,6 +45,26 @@ fn configured() -> WatchdogConfig {
         }),
         ..WatchdogConfig::default()
     }
+}
+
+#[test]
+fn legacy_fixed_endpoint_is_rejected_and_resolution_does_not_mutate_config() {
+    let config = configured();
+    let before = config.digest().unwrap();
+    let worker = config.worker.as_ref().unwrap();
+    let first = worker
+        .endpoint_for_launch("12345678-1234-4234-8234-123456789abc")
+        .unwrap();
+    let second = worker
+        .endpoint_for_launch("22345678-1234-4234-8234-123456789abc")
+        .unwrap();
+    assert_ne!(first, second);
+    assert_eq!(config.digest().unwrap(), before);
+    let mut encoded = serde_json::to_value(&config).unwrap();
+    let object = encoded.get_mut("worker").unwrap().as_object_mut().unwrap();
+    let namespace = object.remove("endpoint_namespace").unwrap();
+    object.insert("endpoint".to_owned(), namespace);
+    assert!(serde_json::from_value::<WatchdogConfig>(encoded).is_err());
 }
 
 #[test]
@@ -63,21 +83,77 @@ fn absent_worker_remains_disabled_and_does_not_change_serialized_defaults() {
 fn worker_config_and_transport_share_exact_pipe_namespace() {
     let mut config = configured();
     config.validate().unwrap();
-    let name = config.worker.as_ref().unwrap().endpoint.to_str().unwrap();
-    ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(name).unwrap();
+    let name = config
+        .worker
+        .as_ref()
+        .unwrap()
+        .endpoint_for_launch("12345678-1234-4234-8234-123456789abc")
+        .unwrap();
+    ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(name.to_str().unwrap())
+        .unwrap();
     for rejected in [
         r"\\.\pipe\ascension-watchdog-worker-fixture",
         r"\\.\pipe\ascension-worker-12345678-1234-3234-8234-123456789abc",
         r"\\.\pipe\ascension-worker-12345678-1234-4234-7234-123456789abc",
         r"\\.\pipe\ascension-worker-12345678-1234-4234-8234-123456789abc\extra",
     ] {
-        config.worker.as_mut().unwrap().endpoint = PathBuf::from(rejected);
+        config.worker.as_mut().unwrap().endpoint_namespace = PathBuf::from(rejected);
         assert!(config.validate().is_err(), "accepted {rejected}");
         assert!(
             ascension_platform_windows::AdminPipeClient::validate_worker_endpoint(rejected)
                 .is_err()
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn derived_worker_endpoint_constructs_client_and_rejects_admin_namespace()
+-> Result<(), Box<dyn std::error::Error>> {
+    use ascension_watchdog::worker_client::{WorkerClientConfig, WorkerPeerIdentity};
+    let config = configured();
+    let worker = config.worker.as_ref().unwrap();
+    let binding = config.worker_binding()?.unwrap();
+    let peer = WorkerPeerIdentity::new(local("harness"), "a".repeat(64), 1, "1")?
+        .with_windows_account("S-1-5-18".to_owned(), 0)?;
+    let directory = tempfile::tempdir()?;
+    let credential = directory.path().join("synthetic-credential");
+    std::fs::write(&credential, b"synthetic-test-credential")?;
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_CREDENTIAL_PATH -AclObject $acl
+"#,
+        ])
+        .env("ASCENSION_TEST_CREDENTIAL_PATH", &credential)
+        .status()?;
+    assert!(
+        status.success(),
+        "protect only the synthetic credential fixture"
+    );
+    let endpoint = worker.endpoint_for_launch("12345678-1234-4234-8234-123456789abc")?;
+    let _client =
+        WorkerClientConfig::new(endpoint, credential.clone(), binding.clone(), peer.clone())?;
+    assert!(
+        WorkerClientConfig::new(
+            PathBuf::from(r"\\.\pipe\ascension-watchdog-admin-fixture"),
+            credential,
+            binding,
+            peer
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]
@@ -196,9 +272,9 @@ fn unix_worker_references_reject_pseudo_files_and_oversized_endpoints() {
         assert!(config.validate().is_err());
     }
     let mut config = configured();
-    config.worker.as_mut().unwrap().endpoint = local(&"x".repeat(101));
+    config.worker.as_mut().unwrap().endpoint_namespace = local(&"x".repeat(101));
     assert!(config.validate().is_err());
-    config.worker.as_mut().unwrap().endpoint = endpoint();
+    config.worker.as_mut().unwrap().endpoint_namespace = endpoint();
     config.worker.as_mut().unwrap().allowed_peer_sid = Some("S-1-5-18".into());
     assert!(config.validate().is_err());
 }

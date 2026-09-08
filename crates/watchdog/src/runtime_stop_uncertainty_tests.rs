@@ -43,10 +43,9 @@ mod windows_tests {
             }],
             worker: Some(WorkerConfig {
                 component_id: "harness".to_owned(),
-                endpoint: std::path::PathBuf::from(format!(
-                    r"\\.\pipe\ascension-worker-{}",
-                    uuid::Uuid::new_v4()
-                )),
+                endpoint_namespace: std::path::PathBuf::from(
+                    crate::worker_endpoint::WINDOWS_NAMESPACE,
+                ),
                 credential_path: directory.path().join("credential"),
                 allowed_peer_sid: None,
                 worker_profile_digest: "b".repeat(64),

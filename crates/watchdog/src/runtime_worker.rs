@@ -419,7 +419,7 @@ impl Supervisor {
             WatchdogError::Conflict("worker configuration disappeared".to_owned())
         })?;
         let config = WorkerClientConfig::new(
-            worker.endpoint.clone(),
+            worker.endpoint_for_launch(&identity.launch_nonce)?,
             worker.credential_path.clone(),
             binding,
             peer,
