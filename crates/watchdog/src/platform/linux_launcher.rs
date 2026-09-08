@@ -2209,7 +2209,7 @@ mod tests {
     #[test]
     fn parent_bootstrap_drop_closes_keepalive_descriptors() -> Result<(), Box<dyn std::error::Error>>
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         let directory = tempdir()?;
         let config_path = directory.path().join("watchdog.json");
@@ -2224,16 +2224,32 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let (config_fd, root_fd, ready_fd) = {
+        let identities = {
             let parent = bootstrap.parent_descriptors()?;
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.config_fd)).exists());
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.root_fd)).exists());
-            assert!(Path::new(&format!("/proc/self/fd/{}", parent.ready_fd)).exists());
-            (parent.config_fd, parent.root_fd, parent.ready_fd)
+            let mut identities = Vec::new();
+            for (file, fd) in [
+                (&parent.config, parent.config_fd),
+                (&parent.root, parent.root_fd),
+                (&parent.ready, parent.ready_fd),
+            ] {
+                let metadata = file.metadata()?;
+                identities.push((fd, metadata.dev(), metadata.ino()));
+            }
+            identities
         };
-        assert!(!Path::new(&format!("/proc/self/fd/{config_fd}")).exists());
-        assert!(!Path::new(&format!("/proc/self/fd/{root_fd}")).exists());
-        assert!(!Path::new(&format!("/proc/self/fd/{ready_fd}")).exists());
+        for (fd, device, inode) in identities {
+            // Parallel tests may immediately reuse a released descriptor number.
+            // Only retaining the original unique resource indicates a leaked handle.
+            match fs::metadata(format!("/proc/self/fd/{fd}")) {
+                Ok(replacement) => assert_ne!(
+                    (replacement.dev(), replacement.ino()),
+                    (device, inode),
+                    "original bootstrap resource remains open at descriptor {fd}"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
     }
 
