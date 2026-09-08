@@ -7,32 +7,18 @@
 use crate::config::validate_digest;
 use crate::error::{Result, WatchdogError};
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "linux")]
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 #[cfg(target_os = "linux")]
+use std::os::fd::OwnedFd;
+#[cfg(target_os = "linux")]
 use std::path::Component;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
-#[cfg(target_os = "linux")]
-const MAX_PEER_DIGEST_CACHE_ENTRIES: usize = 128;
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct PeerDigestCacheKey {
-    pid: u32,
-    creation_token: String,
-    executable: PathBuf,
-}
-
-#[cfg(target_os = "linux")]
-static PEER_DIGEST_CACHE: OnceLock<Mutex<HashMap<PeerDigestCacheKey, String>>> = OnceLock::new();
+const MAX_PEER_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Immutable identity of the supervised worker process.
 ///
@@ -53,19 +39,25 @@ pub struct WorkerPeerIdentity {
     /// OS process-start token (Linux `/proc/<pid>/stat` start time or the
     /// Windows creation timestamp rendered as decimal text).
     pub(crate) creation_token: String,
+    #[cfg(target_os = "linux")]
+    configured_image_identity: LinuxFileIdentity,
 }
 
 impl std::fmt::Debug for WorkerPeerIdentity {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("WorkerPeerIdentity")
+        let mut debug = formatter.debug_struct("WorkerPeerIdentity");
+        debug
             .field("executable", &"<protected-reference>")
             .field("executable_sha256", &self.executable_sha256)
             .field("uid", &self.uid)
             .field("gid", &self.gid)
             .field("pid", &self.pid)
-            .field("creation_token", &self.creation_token)
-            .finish()
+            .field("creation_token", &self.creation_token);
+        #[cfg(target_os = "linux")]
+        {
+            debug.field("configured_image_identity", &self.configured_image_identity);
+        }
+        debug.finish()
     }
 }
 
@@ -84,10 +76,20 @@ impl WorkerPeerIdentity {
             gid: None,
             pid,
             creation_token: creation_token.into(),
+            #[cfg(target_os = "linux")]
+            configured_image_identity: LinuxFileIdentity {
+                device: 0,
+                inode: 0,
+            },
         };
+        #[cfg(target_os = "linux")]
+        let mut identity = identity.validate()?;
+        #[cfg(not(target_os = "linux"))]
         let identity = identity.validate()?;
         #[cfg(target_os = "linux")]
-        prime_peer_digest(&identity)?;
+        {
+            identity.configured_image_identity = prime_peer_digest(&identity)?;
+        }
         Ok(identity)
     }
 
@@ -202,7 +204,21 @@ pub(crate) fn validate_credential_reference(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<Vec<u8>> {
+pub(crate) struct ProtectedCredential {
+    #[cfg(target_os = "linux")]
+    _ancestors: Vec<OwnedFd>,
+    #[cfg(target_os = "linux")]
+    _file: File,
+    bytes: Vec<u8>,
+}
+
+impl ProtectedCredential {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<ProtectedCredential> {
     ensure_deadline(deadline, "worker credential read")?;
     // Open and validate the exact object before reading it.  The Unix Linux
     // path walks held, non-following directory descriptors and opens the final
@@ -222,7 +238,7 @@ pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<Vec<u8>>
         .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
 
     #[cfg(target_os = "linux")]
-    let bytes = read_bounded_credential(&mut file, deadline)?;
+    let bytes = read_bounded_credential(&mut file.file, deadline)?;
     ensure_deadline(deadline, "worker credential read")?;
     if bytes.is_empty()
         || bytes.len() > MAX_CREDENTIAL_BYTES
@@ -234,11 +250,28 @@ pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<Vec<u8>>
             "worker credential is empty, oversized, or malformed".to_owned(),
         ));
     }
-    Ok(bytes)
+    #[cfg(target_os = "linux")]
+    {
+        Ok(ProtectedCredential {
+            _ancestors: file.ancestors,
+            _file: file.file,
+            bytes,
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(ProtectedCredential { bytes })
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
+struct OpenCredential {
+    ancestors: Vec<OwnedFd>,
+    file: File,
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_credential(path: &Path, deadline: Instant) -> Result<OpenCredential> {
     use rustix::fs::{Mode, OFlags, fstatfs, open, openat};
 
     let mut components = Vec::new();
@@ -259,10 +292,11 @@ fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
         ));
     }
     let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
-    let mut directory = open("/", flags | OFlags::DIRECTORY, Mode::empty())
+    let root = open("/", flags | OFlags::DIRECTORY, Mode::empty())
         .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
+    validate_linux_credential_directory(&root)?;
     ensure_local_protected_filesystem(
-        fstatfs(&directory)
+        fstatfs(&root)
             .map_err(|_| {
                 WatchdogError::Unauthorized(
                     "worker credential filesystem is unavailable".to_owned(),
@@ -271,11 +305,15 @@ fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
             .f_type
             .cast_unsigned(),
     )?;
+    let mut ancestors = vec![root];
     for (index, name) in components.iter().enumerate() {
         ensure_deadline(deadline, "worker credential open")?;
         let final_component = index + 1 == components.len();
+        let directory = ancestors.last().ok_or_else(|| {
+            WatchdogError::Unauthorized("worker credential path is unavailable".to_owned())
+        })?;
         let descriptor = openat(
-            &directory,
+            directory,
             *name,
             if final_component {
                 flags
@@ -287,8 +325,12 @@ fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
         .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
         if final_component {
             let file: File = descriptor.into();
-            return validate_linux_credential_file(file, deadline);
+            return Ok(OpenCredential {
+                ancestors,
+                file: validate_linux_credential_file(file, deadline)?,
+            });
         }
+        validate_linux_credential_directory(&descriptor)?;
         ensure_local_protected_filesystem(
             fstatfs(&descriptor)
                 .map_err(|_| {
@@ -299,11 +341,32 @@ fn open_linux_credential(path: &Path, deadline: Instant) -> Result<File> {
                 .f_type
                 .cast_unsigned(),
         )?;
-        directory = descriptor;
+        ancestors.push(descriptor);
     }
     Err(WatchdogError::Unauthorized(
         "worker credential is unavailable".to_owned(),
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_credential_directory(directory: &OwnedFd) -> Result<()> {
+    use rustix::fs::fstat;
+
+    let metadata = fstat(directory).map_err(|_| {
+        WatchdogError::Unauthorized("worker credential directory is unavailable".to_owned())
+    })?;
+    let mode = metadata.st_mode;
+    let directory_type = (mode & 0o170_000) == 0o040_000;
+    // A sticky, root-owned system temporary directory is safe as an outer
+    // ancestor: unprivileged users cannot rename another user's directory.
+    // Every non-sticky ancestor must be free of group/world write access.
+    let sticky_root = metadata.st_uid == 0 && mode & 0o1000 != 0;
+    if !directory_type || (mode & 0o022 != 0 && !sticky_root) {
+        return Err(WatchdogError::Unauthorized(
+            "worker credential ancestor is not protected".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -391,10 +454,13 @@ pub(crate) fn authenticate_linux_peer(
     stream: &std::os::unix::net::UnixStream,
     identity: &WorkerPeerIdentity,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<LinuxPeerSession> {
     use rustix::net::sockopt::socket_peercred;
     use rustix::process::{Pid, PidfdFlags, pidfd_open};
 
+    rustix::net::sockopt::set_socket_passcred(stream, true).map_err(|_| {
+        WatchdogError::Unauthorized("worker peer message credentials are unavailable".to_owned())
+    })?;
     let peer = socket_peercred(stream).map_err(|_| {
         WatchdogError::Unauthorized("worker peer credentials are unavailable".to_owned())
     })?;
@@ -420,7 +486,7 @@ pub(crate) fn authenticate_linux_peer(
             WatchdogError::Unauthorized("worker peer PID is out of bounds".to_owned())
         })?)
         .ok_or_else(|| WatchdogError::Unauthorized("worker peer PID is zero".to_owned()))?;
-    let _pidfd = pidfd_open(process, PidfdFlags::empty()).map_err(|_| {
+    let pidfd = pidfd_open(process, PidfdFlags::empty()).map_err(|_| {
         WatchdogError::Unauthorized("worker peer process identity is unavailable".to_owned())
     })?;
     ensure_deadline(deadline, "worker peer authentication")?;
@@ -444,29 +510,22 @@ pub(crate) fn authenticate_linux_peer(
             "worker peer executable is not approved".to_owned(),
         ));
     }
-    // Hash the canonical configured path after the `/proc/<pid>/exe` path
-    // check.  Reading the executable through procfs can be orders of
-    // magnitude slower on WSL/overlay filesystems; the exact PID/start-token
-    // proof plus the pre/post executable-path checks still bind this digest
-    // to the authenticated process, while keeping the five-second deadline
-    // usable under host filesystem latency.  A digest is cached only for the
-    // exact PID + creation token + canonical image path tuple, so a second
-    // same-binary process never inherits a prior process's proof.
-    let cache_key = PeerDigestCacheKey {
-        pid,
-        creation_token: identity.creation_token.clone(),
-        executable: expected.clone(),
-    };
-    let executable_sha256 = if let Some(cached) = cached_peer_digest(&cache_key) {
-        cached
-    } else {
-        let mut executable_file = File::open(&expected).map_err(|_| {
-            WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
-        })?;
-        let digest = hash_file_until(&mut executable_file, Some(deadline))?;
-        insert_peer_digest(cache_key, digest.clone());
-        digest
-    };
+    // Retain the actual image through `/proc/<pid>/exe` and compare its file
+    // identity with the configured artifact that was hashed while constructing
+    // `WorkerPeerIdentity`.  Rehashing this descriptor here would make the
+    // ordinary transport deadline depend on debug-build SHA-256 throughput;
+    // the held descriptor plus device/inode comparison prevents a replaced
+    // path or a different image object from inheriting that proof.
+    let image = File::open(&proc_executable).map_err(|_| {
+        WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
+    })?;
+    let image_identity = linux_file_identity(&image)?;
+    if image_identity != identity.configured_image_identity {
+        return Err(WatchdogError::IdentityMismatch(
+            "worker peer executable image identity is not approved".to_owned(),
+        ));
+    }
+    let image_digest = identity.executable_sha256.clone();
     let start_after = process_start_token(pid, deadline)?;
     ensure_deadline(deadline, "worker peer authentication")?;
     let executable_after = fs::read_link(&proc_executable).map_err(|_| {
@@ -477,25 +536,111 @@ pub(crate) fn authenticate_linux_peer(
             "worker peer process identity changed during authentication".to_owned(),
         ));
     }
-    if executable_sha256 != identity.executable_sha256 {
-        return Err(WatchdogError::Unauthorized(
-            "worker peer executable digest is not approved".to_owned(),
-        ));
+    Ok(LinuxPeerSession {
+        _pidfd: pidfd,
+        _image: image,
+        image_identity,
+        _image_digest: image_digest,
+        expected_path: expected,
+        expected_pid: pid,
+        expected_uid: peer.uid.as_raw(),
+        expected_gid: peer.gid.as_raw(),
+        creation_token: identity.creation_token.clone(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LinuxFileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct LinuxPeerSession {
+    // A pidfd pins the authenticated process identity against PID reuse.  It
+    // does not prevent exec or fork; those are checked separately below and
+    // in the transport's ancillary-message validation.
+    _pidfd: OwnedFd,
+    // Keep the actual `/proc/<pid>/exe` object alive until the response has
+    // been received.  Its inode and digest are the process-image proof.
+    _image: File,
+    image_identity: LinuxFileIdentity,
+    _image_digest: String,
+    expected_path: PathBuf,
+    expected_pid: u32,
+    expected_uid: u32,
+    expected_gid: u32,
+    creation_token: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxPeerSession {
+    pub(crate) fn verify_current(&self, deadline: Instant) -> Result<()> {
+        ensure_deadline(deadline, "worker peer authentication")?;
+        let start = process_start_token(self.expected_pid, deadline)?;
+        if start != self.creation_token {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker peer process creation token changed during exchange".to_owned(),
+            ));
+        }
+        let proc_executable = PathBuf::from(format!("/proc/{}/exe", self.expected_pid));
+        let path_before = fs::read_link(&proc_executable).map_err(|_| {
+            WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
+        })?;
+        if path_before != self.expected_path {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker peer executable path changed during exchange".to_owned(),
+            ));
+        }
+        let current_image = File::open(&proc_executable).map_err(|_| {
+            WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
+        })?;
+        let current_identity = linux_file_identity(&current_image)?;
+        let path_after = fs::read_link(&proc_executable).map_err(|_| {
+            WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
+        })?;
+        if path_before != path_after || current_identity != self.image_identity {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker peer process image changed during exchange".to_owned(),
+            ));
+        }
+        ensure_deadline(deadline, "worker peer authentication")?;
+        Ok(())
     }
-    Ok(())
+
+    pub(crate) fn verify_message_credentials(
+        &self,
+        credentials: &rustix::net::UCred,
+    ) -> Result<()> {
+        let pid = u32::try_from(credentials.pid.as_raw_pid()).map_err(|_| {
+            WatchdogError::Unauthorized("worker peer message PID is out of bounds".to_owned())
+        })?;
+        if pid != self.expected_pid
+            || credentials.uid.as_raw() != self.expected_uid
+            || credentials.gid.as_raw() != self.expected_gid
+        {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker peer message credentials changed during exchange".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn cached_peer_digest(key: &PeerDigestCacheKey) -> Option<String> {
-    PEER_DIGEST_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(key).cloned())
+fn linux_file_identity(file: &File) -> Result<LinuxFileIdentity> {
+    let metadata = rustix::fs::fstat(file).map_err(|_| {
+        WatchdogError::Unauthorized("worker peer executable identity is unavailable".to_owned())
+    })?;
+    Ok(LinuxFileIdentity {
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn prime_peer_digest(identity: &WorkerPeerIdentity) -> Result<()> {
+fn prime_peer_digest(identity: &WorkerPeerIdentity) -> Result<LinuxFileIdentity> {
     let executable = fs::canonicalize(identity.executable()).map_err(|_| {
         WatchdogError::Unauthorized("configured worker executable is unavailable".to_owned())
     })?;
@@ -508,28 +653,7 @@ fn prime_peer_digest(identity: &WorkerPeerIdentity) -> Result<()> {
             "configured worker executable digest is not approved".to_owned(),
         ));
     }
-    insert_peer_digest(
-        PeerDigestCacheKey {
-            pid: identity.pid,
-            creation_token: identity.creation_token.clone(),
-            executable,
-        },
-        digest,
-    );
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn insert_peer_digest(key: PeerDigestCacheKey, digest: String) {
-    if let Ok(mut cache) = PEER_DIGEST_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-    {
-        if cache.len() >= MAX_PEER_DIGEST_CACHE_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, digest);
-    }
+    linux_file_identity(&file)
 }
 
 #[cfg(target_os = "linux")]
@@ -555,6 +679,7 @@ pub(crate) fn hash_file_until(file: &mut File, deadline: Option<Instant>) -> Res
     // filesystems where each procfs read crosses a host boundary (for
     // example WSL).  This allocation is short-lived and capped at 1 MiB.
     let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut total = 0_usize;
     loop {
         if deadline.is_some_and(|limit| Instant::now() >= limit) {
             return Err(WatchdogError::Timeout(
@@ -563,7 +688,19 @@ pub(crate) fn hash_file_until(file: &mut File, deadline: Option<Instant>) -> Res
         }
         match file.read(&mut buffer) {
             Ok(0) => break,
-            Ok(count) => hasher.update(&buffer[..count]),
+            Ok(count) => {
+                total = total.checked_add(count).ok_or_else(|| {
+                    WatchdogError::Unauthorized(
+                        "worker peer executable image exceeds the size bound".to_owned(),
+                    )
+                })?;
+                if total > MAX_PEER_IMAGE_BYTES {
+                    return Err(WatchdogError::Unauthorized(
+                        "worker peer executable image exceeds the size bound".to_owned(),
+                    ));
+                }
+                hasher.update(&buffer[..count]);
+            }
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => return Err(WatchdogError::Io(error)),
         }
@@ -573,4 +710,104 @@ pub(crate) fn hash_file_until(file: &mut File, deadline: Option<Instant>) -> Res
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    fn current_peer_session() -> LinuxPeerSession {
+        use rustix::process::{Pid, PidfdFlags, pidfd_open};
+
+        let pid = std::process::id();
+        let process = Pid::from_raw(i32::try_from(pid).expect("test PID fits i32"))
+            .expect("test PID is nonzero");
+        let pidfd = pidfd_open(process, PidfdFlags::empty()).expect("test pidfd");
+        let executable = fs::read_link(format!("/proc/{pid}/exe")).expect("test executable");
+        let image = File::open(format!("/proc/{pid}/exe")).expect("test image");
+        let image_identity = linux_file_identity(&image).expect("test image identity");
+        let creation_token = process_start_token(pid, Instant::now() + Duration::from_secs(1))
+            .expect("test creation token");
+        LinuxPeerSession {
+            _pidfd: pidfd,
+            _image: image,
+            image_identity,
+            _image_digest: String::new(),
+            expected_path: executable,
+            expected_pid: pid,
+            expected_uid: rustix::process::geteuid().as_raw(),
+            expected_gid: rustix::process::getegid().as_raw(),
+            creation_token,
+        }
+    }
+
+    #[test]
+    fn forked_socket_writer_credentials_are_rejected() {
+        use rustix::net::UCred;
+        use rustix::process::{Gid, Pid, Uid};
+
+        let session = current_peer_session();
+        let pid = Pid::from_raw(i32::try_from(session.expected_pid).expect("test PID fits i32"))
+            .expect("test PID is nonzero");
+        let credentials = UCred {
+            pid,
+            uid: Uid::from_raw(session.expected_uid),
+            gid: Gid::from_raw(session.expected_gid),
+        };
+        session
+            .verify_message_credentials(&credentials)
+            .expect("original process credentials");
+
+        let inherited_socket_writer = UCred {
+            pid: Pid::from_raw(pid.as_raw_pid().saturating_add(1)).expect("alternate PID"),
+            ..credentials
+        };
+        assert!(matches!(
+            session.verify_message_credentials(&inherited_socket_writer),
+            Err(WatchdogError::IdentityMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn protected_credential_keeps_authority_after_path_replacement() {
+        let directory = tempfile::tempdir().expect("credential directory");
+        fs::set_permissions(
+            directory.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("credential directory permissions");
+        let path = directory.path().join("worker.token");
+        fs::write(&path, b"held-secret").expect("credential");
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .expect("credential permissions");
+        let protected = read_credential(&path, Instant::now() + Duration::from_secs(1))
+            .expect("protected credential");
+        fs::remove_file(&path).expect("replace credential path");
+        assert_eq!(protected.bytes(), b"held-secret");
+    }
+
+    #[test]
+    fn image_identity_swap_is_rejected_before_peer_digest_use() {
+        let (client, _server) = UnixStream::pair().expect("peer socket");
+        let executable = std::env::current_exe().expect("test executable");
+        let digest = hash_file_until(
+            &mut File::open(&executable).expect("test executable file"),
+            None,
+        )
+        .expect("test executable digest");
+        let pid = std::process::id();
+        let creation_token = process_start_token(pid, Instant::now() + Duration::from_secs(1))
+            .expect("test creation token");
+        let mut identity = WorkerPeerIdentity::new(executable, digest, pid, creation_token)
+            .expect("peer identity");
+        identity.configured_image_identity = LinuxFileIdentity {
+            device: identity.configured_image_identity.device.wrapping_add(1),
+            inode: identity.configured_image_identity.inode,
+        };
+        let result =
+            authenticate_linux_peer(&client, &identity, Instant::now() + Duration::from_secs(1));
+        assert!(matches!(result, Err(WatchdogError::IdentityMismatch(_))));
+    }
 }

@@ -1,7 +1,7 @@
 //! Authenticated local IPC for the worker handoff client.
 
 #[cfg(target_os = "linux")]
-use super::auth::authenticate_linux_peer;
+use super::auth::{LinuxPeerSession, authenticate_linux_peer};
 use super::auth::{WorkerPeerIdentity, read_credential};
 #[cfg(target_os = "linux")]
 use crate::admin::validate_endpoint_path;
@@ -9,7 +9,7 @@ use crate::error::{Result, WatchdogError};
 use crate::worker_protocol::{Frame, MAX_FRAME_BYTES, decode_response, encode_frame};
 use std::fs;
 #[cfg(target_os = "linux")]
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -92,16 +92,19 @@ fn exchange_unix(
             "worker endpoint changed while connecting".to_owned(),
         ));
     }
-    authenticate_linux_peer(&stream, peer, deadline)?;
+    let peer_session = authenticate_linux_peer(&stream, peer, deadline)?;
+    peer_session.verify_current(deadline)?;
     // Do not open or read the worker credential until the OS peer identity
     // (including PID and process-start token) has been authenticated.
     let credential = read_credential(credential_path, deadline)?;
-    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.len());
+    peer_session.verify_current(deadline)?;
+    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.bytes().len());
     auth_body.extend_from_slice(AUTH_MAGIC);
-    auth_body.extend_from_slice(&credential);
-    write_frame_unix(&mut stream, &auth_body, deadline)?;
-    write_frame_unix(&mut stream, request_bytes, deadline)?;
-    let response_bytes = read_frame_unix(&mut stream, deadline)?;
+    auth_body.extend_from_slice(credential.bytes());
+    write_frame_unix(&mut stream, &auth_body, deadline, &peer_session)?;
+    write_frame_unix(&mut stream, request_bytes, deadline, &peer_session)?;
+    let response_bytes = read_frame_unix(&mut stream, deadline, &peer_session)?;
+    peer_session.verify_current(deadline)?;
     decode_response(&response_bytes).map_err(|error| WatchdogError::InvalidInput(error.to_string()))
 }
 
@@ -199,6 +202,7 @@ fn write_frame_unix(
     stream: &mut std::os::unix::net::UnixStream,
     body: &[u8],
     deadline: Instant,
+    peer: &LinuxPeerSession,
 ) -> Result<()> {
     if body.is_empty() || body.len() > MAX_FRAME_BYTES {
         return Err(WatchdogError::InvalidInput(
@@ -208,17 +212,21 @@ fn write_frame_unix(
     let length = u32::try_from(body.len()).map_err(|_| {
         WatchdogError::InvalidInput("worker transport frame length overflow".to_owned())
     })?;
+    peer.verify_current(deadline)?;
     write_all_deadline(stream, &length.to_be_bytes(), deadline)?;
-    write_all_deadline(stream, body, deadline)
+    peer.verify_current(deadline)?;
+    write_all_deadline(stream, body, deadline)?;
+    peer.verify_current(deadline)
 }
 
 #[cfg(target_os = "linux")]
 fn read_frame_unix(
     stream: &mut std::os::unix::net::UnixStream,
     deadline: Instant,
+    peer: &LinuxPeerSession,
 ) -> Result<Vec<u8>> {
     let mut length = [0_u8; 4];
-    read_exact_deadline(stream, &mut length, deadline)?;
+    read_exact_deadline(stream, &mut length, deadline, peer)?;
     let length = usize::try_from(u32::from_be_bytes(length)).map_err(|_| {
         WatchdogError::InvalidInput("worker response frame length overflow".to_owned())
     })?;
@@ -228,7 +236,7 @@ fn read_frame_unix(
         ));
     }
     let mut body = vec![0_u8; length];
-    read_exact_deadline(stream, &mut body, deadline)?;
+    read_exact_deadline(stream, &mut body, deadline, peer)?;
     Ok(body)
 }
 
@@ -238,20 +246,31 @@ fn write_all_deadline(
     bytes: &[u8],
     deadline: Instant,
 ) -> Result<()> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return Err(WatchdogError::Timeout(
-            "worker transport write timed out".to_owned(),
-        ));
-    }
-    stream.set_write_timeout(Some(remaining))?;
-    stream.write_all(bytes).map_err(|error| {
-        if error.kind() == ErrorKind::TimedOut {
-            WatchdogError::Timeout("worker transport write timed out".to_owned())
-        } else {
-            WatchdogError::Io(error)
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(WatchdogError::Timeout(
+                "worker transport write timed out".to_owned(),
+            ));
         }
-    })
+        stream.set_write_timeout(Some(remaining))?;
+        let count = stream.write(&bytes[offset..]).map_err(|error| {
+            if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) {
+                WatchdogError::Timeout("worker transport write timed out".to_owned())
+            } else {
+                WatchdogError::Io(error)
+            }
+        })?;
+        if count == 0 {
+            return Err(WatchdogError::Io(std::io::Error::new(
+                ErrorKind::WriteZero,
+                "worker transport closed during write",
+            )));
+        }
+        offset += count;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -259,26 +278,82 @@ fn read_exact_deadline(
     stream: &mut std::os::unix::net::UnixStream,
     bytes: &mut [u8],
     deadline: Instant,
+    peer: &LinuxPeerSession,
 ) -> Result<()> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return Err(WatchdogError::Timeout(
-            "worker transport read timed out".to_owned(),
-        ));
-    }
-    stream.set_read_timeout(Some(remaining))?;
-    stream.read_exact(bytes).map_err(|error| {
-        if error.kind() == ErrorKind::TimedOut {
-            WatchdogError::Timeout("worker transport read timed out".to_owned())
-        } else if error.kind() == ErrorKind::UnexpectedEof {
-            WatchdogError::Io(std::io::Error::new(
+    use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
+    use std::io::IoSliceMut;
+    use std::mem::MaybeUninit;
+
+    let mut offset = 0;
+    while offset < bytes.len() {
+        peer.verify_current(deadline)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(WatchdogError::Timeout(
+                "worker transport read timed out".to_owned(),
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        let mut control_space =
+            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
+        let mut control = RecvAncillaryBuffer::new(&mut control_space);
+        let mut iov = [IoSliceMut::new(&mut bytes[offset..])];
+        let message = recvmsg(
+            &mut *stream,
+            &mut iov,
+            &mut control,
+            RecvFlags::CMSG_CLOEXEC,
+        )
+        .map_err(|error| {
+            if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) {
+                WatchdogError::Timeout("worker transport read timed out".to_owned())
+            } else {
+                WatchdogError::Io(error.into())
+            }
+        })?;
+        if message.bytes == 0 {
+            return Err(WatchdogError::Io(std::io::Error::new(
                 ErrorKind::UnexpectedEof,
                 "worker transport closed during read",
-            ))
-        } else {
-            WatchdogError::Io(error)
+            )));
         }
-    })
+        if message.flags.contains(rustix::net::ReturnFlags::CTRUNC) {
+            return Err(WatchdogError::Unauthorized(
+                "worker response carried truncated ancillary credentials".to_owned(),
+            ));
+        }
+        let mut credentials = None;
+        for ancillary in control.drain() {
+            match ancillary {
+                RecvAncillaryMessage::ScmCredentials(value) => {
+                    if credentials.replace(value).is_some() {
+                        return Err(WatchdogError::Unauthorized(
+                            "worker response carried duplicate peer credentials".to_owned(),
+                        ));
+                    }
+                }
+                RecvAncillaryMessage::ScmRights(_) => {
+                    return Err(WatchdogError::Unauthorized(
+                        "worker response carried unexpected file descriptors".to_owned(),
+                    ));
+                }
+                _ => {
+                    return Err(WatchdogError::Unauthorized(
+                        "worker response carried unsupported ancillary data".to_owned(),
+                    ));
+                }
+            }
+        }
+        let credentials = credentials.ok_or_else(|| {
+            WatchdogError::Unauthorized(
+                "worker response did not carry peer message credentials".to_owned(),
+            )
+        })?;
+        peer.verify_message_credentials(&credentials)?;
+        offset += message.bytes;
+        peer.verify_current(deadline)?;
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -327,9 +402,9 @@ fn exchange_named_pipe(
     // The credential is opened only after the exact named-pipe server PID,
     // creation timestamp, image path, and image digest have been checked.
     let credential = read_credential(credential_path, deadline)?;
-    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.len());
+    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.bytes().len());
     auth_body.extend_from_slice(AUTH_MAGIC);
-    auth_body.extend_from_slice(&credential);
+    auth_body.extend_from_slice(credential.bytes());
     let remaining = deadline.saturating_duration_since(Instant::now());
     pipe.write_frame(&auth_body, remaining)
         .map_err(|error| WatchdogError::Io(std::io::Error::other(error.to_string())))?;

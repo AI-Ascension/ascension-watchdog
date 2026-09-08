@@ -13,21 +13,30 @@ the schema digest.  The client therefore proposes a transport-only
 authentication envelope on every fresh local IPC connection:
 
 1. On Linux it connects to the protected Unix socket, verifies the endpoint
-   owner and mode, obtains `SO_PEERCRED`, pins the peer with `pidfd_open`, and
-   checks the configured PID, process start token, executable path, and
-   executable SHA-256.  Windows uses the existing owner/SID ACL and held
-   server-process identity in `AdminPipeClient`, followed by the configured
-   PID/creation timestamp, image path, and image digest checks.
+   owner and mode, obtains `SO_PEERCRED`, pins the peer with a held
+   `pidfd_open` descriptor, and binds the configured PID, process start token,
+   executable path, image inode, and executable SHA-256 at one bounded
+   observation point.  The actual `/proc/<pid>/exe` descriptor remains held
+   through the exchange.  Before each transport phase the client rechecks the
+   PID/start token/path/inode; this is a fail-closed observation check, not an
+   assertion that `pidfd` prevents `exec` or `fork`, freezes code, or makes the
+   peer benign.  `SO_PASSCRED` is enabled and response reads verify the
+   kernel-supplied sender PID/UID/GID, so a separately-forked socket writer is
+   rejected when its message credentials are observed.  Windows uses the
+   existing owner/SID ACL and held server-process identity in `AdminPipeClient`,
+   followed by the configured PID/creation timestamp, image path, and image
+   digest checks.
 2. Only after the exact peer process has passed those checks does the client
    open the credential.  Linux walks held, non-following directory descriptors
    and opens the final descriptor with `O_NONBLOCK` before validating its
-   regular-file type, owner, mode, and approved local filesystem.  This closes
-   ancestor and regular-file-to-FIFO replacement races; unsupported remote or
-   pseudo filesystems fail closed because a synchronous regular-file read cannot
-   be cancelled safely.  Windows walks and holds protected ancestors before
-   reading the final owner-only handle.  Both paths reject symlinks,
-   non-regular files, non-owner files, group/world permissions, whitespace,
-   NUL bytes, and credentials over 4 KiB.
+   regular-file type, owner, mode, and approved local filesystem.  The final
+   file and every walked ancestor remain held until the response is consumed,
+   closing ancestor and regular-file-to-FIFO replacement races; unsupported
+   remote or pseudo filesystems fail closed because a synchronous regular-file
+   read cannot be cancelled safely.  Windows walks and holds protected
+   ancestors before reading the final owner-only handle.  Both paths reject
+   symlinks, non-regular files, non-owner files, group/world permissions,
+   whitespace, NUL bytes, and credentials over 4 KiB.
 3. It writes one ordinary four-byte-length-prefixed transport body whose
    bytes are `ascension-worker-auth-v1\\0` followed by the credential bytes.
    The worker endpoint consumes and authenticates this body before decoding
@@ -55,10 +64,14 @@ evidence is implied.
 requires the exact supervised process PID and platform creation token in
 addition to the executable identity.  `from_process_identity` accepts the
 supervisor's live `ProcessIdentity` and rejects a missing creation fingerprint.
-On Linux construction verifies the configured executable digest once and
-retains that proof only for the exact PID/start-token/path tuple; every
-exchange still rechecks the live peer credentials, PID, start token, and
-path before opening the credential.
+On Linux construction verifies the configured executable digest and image inode
+once.  The exchange binds the held process-image descriptor to that proof and
+retains it with the pidfd; every exchange still rechecks the live peer
+credentials, PID, start token, path, and image inode before opening the
+credential.  These checks deliberately provide point-in-time peer identity,
+not continuous code-integrity or no-fork/no-exec guarantees; the authenticated
+worker endpoint remains responsible for its own authorization and execution
+policy.
 `WorkerClientConfig::new(endpoint, credential_path, binding, peer_identity)`
 then binds the endpoint, dedicated credential reference, immutable
 profile/release/config/schema digests, and exact process identity.
