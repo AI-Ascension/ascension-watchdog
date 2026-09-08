@@ -330,3 +330,56 @@ fn payload_bytes(payload: &[u8]) -> Vec<u8> {
     frame.extend_from_slice(payload);
     frame
 }
+
+#[test]
+fn version_four_bits_do_not_authorize_non_rfc_uuid_variants() {
+    for variant in ['0', '7', 'c', 'e', 'f'] {
+        let invalid = format!("abcdefab-cdef-4abc-{variant}def-abcdefabcdef");
+        for field in ["launch_nonce", "watchdog_boot_id"] {
+            let mut payload = linux_payload();
+            payload[field] = Value::String(invalid.clone());
+            assert_eq!(
+                decode_frame(&payload_frame(&payload)),
+                Err(BootstrapError::InvalidUuid),
+                "{field}: {invalid}"
+            );
+            let mut typed = linux_frame();
+            let uuid = Uuid::parse_str(&invalid).expect("syntactically valid UUID");
+            if field == "launch_nonce" {
+                typed.launch_nonce = uuid;
+            } else {
+                typed.watchdog_boot_id = uuid;
+            }
+            assert_eq!(encode_frame(&typed), Err(BootstrapError::InvalidUuid));
+        }
+    }
+}
+
+#[test]
+fn escaped_duplicate_peer_keys_are_rejected_before_typed_conversion() {
+    let valid =
+        String::from_utf8(serde_json::to_vec(&linux_payload()).expect("JSON")).expect("UTF-8");
+    for duplicate in [r#""pid":42,"pid":42"#, r#""pid":42,"p\u0069d":42"#] {
+        let payload = valid.replace(r#""pid":42"#, duplicate);
+        assert_ne!(payload, valid);
+        assert_eq!(
+            decode_frame(&payload_bytes(payload.as_bytes())),
+            Err(BootstrapError::InvalidJson)
+        );
+    }
+}
+
+#[test]
+fn owner_published_linux_and_windows_payloads_decode_without_rewriting() {
+    for payload in [
+        include_bytes!("../../../schemas/worker-bootstrap-v1/valid/linux.json").as_slice(),
+        include_bytes!("../../../schemas/worker-bootstrap-v1/valid/windows.json").as_slice(),
+    ] {
+        let decoded = decode_frame(&payload_bytes(payload)).expect("owner fixture");
+        assert_eq!(decoded.component_id, "harness");
+        assert_eq!(
+            decode_frame(&encode_frame(&decoded).expect("encode")),
+            Ok(decoded)
+        );
+    }
+}

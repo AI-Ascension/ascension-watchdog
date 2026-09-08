@@ -6,7 +6,7 @@ use crate::worker_bootstrap::{
     MAX_SID_SUBAUTHORITIES,
 };
 use serde_json::{Map, Value};
-use uuid::{Uuid, Version};
+use uuid::{Uuid, Variant, Version};
 
 const LINUX_FIELDS: &[&str] = &[
     "platform",
@@ -108,7 +108,10 @@ fn positive_pid(value: Option<&Value>) -> Result<u32, BootstrapError> {
 }
 
 pub(super) fn validate_uuid(value: Uuid) -> Result<(), BootstrapError> {
-    if value.is_nil() || value.get_version() != Some(Version::Random) {
+    if value.is_nil()
+        || value.get_variant() != Variant::RFC4122
+        || value.get_version() != Some(Version::Random)
+    {
         return Err(BootstrapError::InvalidUuid);
     }
     Ok(())
