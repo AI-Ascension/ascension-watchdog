@@ -25,7 +25,7 @@ use crate::worker_protocol::{
 use serde_json::Value;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::{Uuid, Variant};
 
 pub use auth::WorkerPeerIdentity;
@@ -171,6 +171,10 @@ fn validate_binding(binding: &crate::storage::WorkerBinding) -> Result<()> {
 pub struct WorkerClient {
     config: WorkerClientConfig,
     watchdog_boot_id: String,
+    /// Optional absolute deadline supplied by the owning reconciliation
+    /// phase.  A phase deadline is never extended by rebuilding a client for
+    /// another request.
+    deadline: Option<Instant>,
 }
 
 impl fmt::Debug for WorkerClient {
@@ -183,12 +187,50 @@ impl fmt::Debug for WorkerClient {
     }
 }
 
+/// Result classification used by the owning reconciliation phase.  Only
+/// failures raised by the worker transport itself are deferrable.  Validation,
+/// identity, and durable-store failures remain fatal to that reconciliation.
+#[derive(Debug)]
+pub(crate) enum WorkerPhaseError {
+    Unavailable(WatchdogError),
+    Fatal(WatchdogError),
+}
+
+impl WorkerPhaseError {
+    fn transport(error: WatchdogError) -> Self {
+        match error {
+            WatchdogError::Io(_)
+            | WatchdogError::Timeout(_)
+            | WatchdogError::Unauthorized(_)
+            | WatchdogError::Unsupported(_) => Self::Unavailable(error),
+            error => Self::Fatal(error),
+        }
+    }
+
+    fn into_watchdog_error(self) -> WatchdogError {
+        match self {
+            Self::Unavailable(error) | Self::Fatal(error) => error,
+        }
+    }
+
+    pub(crate) fn from_client_error(error: WatchdogError) -> Self {
+        Self::transport(error)
+    }
+}
+
+impl From<WatchdogError> for WorkerPhaseError {
+    fn from(error: WatchdogError) -> Self {
+        Self::Fatal(error)
+    }
+}
+
 impl WorkerClient {
     /// Construct a client bound to an explicit watchdog boot identity.
     pub fn new(config: WorkerClientConfig, watchdog_boot_id: impl Into<String>) -> Result<Self> {
         let client = Self {
             config: config.validate()?,
             watchdog_boot_id: watchdog_boot_id.into(),
+            deadline: None,
         };
         validate_uuid4(&client.watchdog_boot_id, "watchdog boot id")?;
         Ok(client)
@@ -212,30 +254,74 @@ impl WorkerClient {
         &self.watchdog_boot_id
     }
 
+    /// Bind this client to one absolute reconciliation deadline.  The worker
+    /// transport still honors the shorter configured per-exchange bound.
+    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    fn exchange_timeout(&self) -> Duration {
+        self.deadline.map_or(self.config.timeout, |deadline| {
+            self.config
+                .timeout
+                .min(deadline.saturating_duration_since(Instant::now()))
+        })
+    }
+
+    fn exchange(&self, request: &Frame) -> Result<Frame> {
+        let timeout = self.exchange_timeout();
+        if timeout.is_zero() {
+            return Err(WatchdogError::Timeout(
+                "worker reconciliation deadline expired".to_owned(),
+            ));
+        }
+        if let Some(deadline) = self.deadline {
+            transport::exchange_until(
+                &self.config.endpoint,
+                &self.config.credential_path,
+                &self.config.peer,
+                deadline,
+                request,
+            )
+        } else {
+            transport::exchange(
+                &self.config.endpoint,
+                &self.config.credential_path,
+                &self.config.peer,
+                timeout,
+                request,
+            )
+        }
+    }
+
     /// Read-only bootstrap probe.  It never claims a job or changes worker
     /// control state.
     pub fn probe(&self) -> Result<ProbeResponse> {
+        self.probe_phase()
+            .map_err(WorkerPhaseError::into_watchdog_error)
+    }
+
+    /// Probe with the transport/persistence boundary retained for the
+    /// supervisor's bounded worker phase.
+    pub(crate) fn probe_phase(&self) -> std::result::Result<ProbeResponse, WorkerPhaseError> {
         let request = Frame::ProbeRequest(ProbeRequest {
             header: self.header(Command::Probe, Scope::Probe, None),
         });
-        let response = transport::exchange(
-            &self.config.endpoint,
-            &self.config.credential_path,
-            &self.config.peer,
-            self.config.timeout,
-            &request,
-        )?;
+        let response = self
+            .exchange(&request)
+            .map_err(WorkerPhaseError::transport)?;
         let Frame::ProbeResponse(response) = response else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker probe returned a different response command".to_owned(),
-            ));
+            )));
         };
         let request_header = match &request {
             Frame::ProbeRequest(request) => &request.header,
             _ => {
-                return Err(WatchdogError::Conflict(
+                return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                     "worker probe request construction changed".to_owned(),
-                ));
+                )));
             }
         };
         validate_response_header(request_header, &response.header, None)?;
@@ -246,9 +332,9 @@ impl WorkerClient {
             || response.release_digest != expected.release_digest
             || response.config_digest != expected.config_digest
         {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker probe binding differs from the configured worker".to_owned(),
-            ));
+            )));
         }
         Ok(response)
     }
@@ -263,15 +349,26 @@ impl WorkerClient {
         worker_boot_id: &str,
         scope: ControlScope,
     ) -> Result<SetControlModeResponse> {
+        self.set_control_mode_phase(worker_boot_id, scope)
+            .map_err(WorkerPhaseError::into_watchdog_error)
+    }
+
+    /// Send control while retaining transport failure classification for the
+    /// supervisor phase.  No durable control witness is written here.
+    pub(crate) fn set_control_mode_phase(
+        &self,
+        worker_boot_id: &str,
+        scope: ControlScope,
+    ) -> std::result::Result<SetControlModeResponse, WorkerPhaseError> {
         validate_uuid4(worker_boot_id, "worker boot id")?;
         validate_control_scope(&scope)?;
         if scope.deployment_id != self.config.binding.deployment_id
             || scope.worker_owner_id != self.config.binding.worker_owner_id
             || scope.worker_profile_digest != self.config.binding.worker_profile_digest
         {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker control scope differs from the configured worker".to_owned(),
-            ));
+            )));
         }
         let request = Frame::SetControlModeRequest(SetControlModeRequest {
             header: self.header(
@@ -281,28 +378,24 @@ impl WorkerClient {
             ),
             scope,
         });
-        let response = transport::exchange(
-            &self.config.endpoint,
-            &self.config.credential_path,
-            &self.config.peer,
-            self.config.timeout,
-            &request,
-        )?;
+        let response = self
+            .exchange(&request)
+            .map_err(WorkerPhaseError::transport)?;
         let Frame::SetControlModeResponse(response) = response else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker control returned a different response command".to_owned(),
-            ));
+            )));
         };
         let Frame::SetControlModeRequest(request) = request else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker control request construction changed".to_owned(),
-            ));
+            )));
         };
         validate_response_header(&request.header, &response.header, Some(worker_boot_id))?;
         if response.scope != request.scope {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker control response scope does not match the request".to_owned(),
-            ));
+            )));
         }
         Ok(response)
     }
@@ -339,6 +432,17 @@ impl WorkerClient {
     /// This is deliberately private: callers cannot bypass the durable claim,
     /// binding, probe, or `may_have_been_dispatched` ordering.
     fn dispatch(&self, handoff: &WorkerHandoff) -> Result<DispatchResponse> {
+        self.dispatch_phase(handoff)
+            .map_err(WorkerPhaseError::into_watchdog_error)
+    }
+
+    /// Dispatch with transport failure classification retained for the
+    /// supervisor's phase adapter.  The caller still has to commit the
+    /// durable admission marker before invoking this method.
+    pub(crate) fn dispatch_phase(
+        &self,
+        handoff: &WorkerHandoff,
+    ) -> std::result::Result<DispatchResponse, WorkerPhaseError> {
         validate_handoff_for_client(self, handoff)?;
         let tuple = protocol_tuple(handoff);
         let request = Frame::DispatchRequest(DispatchRequest {
@@ -352,22 +456,18 @@ impl WorkerClient {
             operation: OPERATION_RUNTIME_V3_EPISODE.to_owned(),
             parameters: Value::Object(serde_json::Map::new()),
         });
-        let response = transport::exchange(
-            &self.config.endpoint,
-            &self.config.credential_path,
-            &self.config.peer,
-            self.config.timeout,
-            &request,
-        )?;
+        let response = self
+            .exchange(&request)
+            .map_err(WorkerPhaseError::transport)?;
         let Frame::DispatchResponse(response) = response else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker dispatch returned a different response command".to_owned(),
-            ));
+            )));
         };
         let Frame::DispatchRequest(request) = request else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker dispatch request construction changed".to_owned(),
-            ));
+            )));
         };
         validate_response_header(
             &request.header,
@@ -375,9 +475,9 @@ impl WorkerClient {
             Some(&handoff.worker_boot_id),
         )?;
         if response.tuple != request.tuple {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker dispatch response tuple does not match the request".to_owned(),
-            ));
+            )));
         }
         Ok(response)
     }
@@ -389,34 +489,42 @@ impl WorkerClient {
         tuple: &WorkerHandoffTuple,
         current_worker_boot_id: &str,
     ) -> Result<LookupResponse> {
+        self.lookup_phase(tuple, current_worker_boot_id)
+            .map_err(WorkerPhaseError::into_watchdog_error)
+    }
+
+    /// Historical lookup with transport failure classification retained for
+    /// the supervisor's recovery phase.
+    pub(crate) fn lookup_phase(
+        &self,
+        tuple: &WorkerHandoffTuple,
+        current_worker_boot_id: &str,
+    ) -> std::result::Result<LookupResponse, WorkerPhaseError> {
         validate_storage_tuple(tuple)?;
         validate_tuple_for_client(self, tuple)?;
         validate_uuid4(current_worker_boot_id, "worker boot id")?;
         if current_worker_boot_id == self.watchdog_boot_id {
-            return Err(WatchdogError::IdentityMismatch(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::IdentityMismatch(
                 "worker lookup target cannot reuse the watchdog boot identity".to_owned(),
-            ));
+            )));
         }
         let request = Frame::LookupRequest(LookupRequest {
             header: self.header(Command::Lookup, Scope::Lookup, Some(current_worker_boot_id)),
             tuple: protocol_tuple_from_storage(tuple),
         });
-        let response = transport::exchange(
-            &self.config.endpoint,
-            &self.config.credential_path,
-            &self.config.peer,
-            self.config.timeout,
-            &request,
-        )?;
+        let response = self
+            .exchange(&request)
+            .map_err(WorkerPhaseError::transport)?;
         let Frame::LookupResponse(response) = response else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker lookup returned a different response command".to_owned(),
-            ));
+            )));
         };
         let Frame::LookupRequest(request) = request else {
             return Err(WatchdogError::Conflict(
                 "worker lookup request construction changed".to_owned(),
-            ));
+            )
+            .into());
         };
         validate_response_header(
             &request.header,
@@ -424,9 +532,9 @@ impl WorkerClient {
             Some(current_worker_boot_id),
         )?;
         if response.tuple != request.tuple {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker lookup response tuple does not match the request".to_owned(),
-            ));
+            )));
         }
         Ok(response)
     }
@@ -440,13 +548,25 @@ impl WorkerClient {
         current_worker_boot_id: &str,
         terminal_digest: &str,
     ) -> Result<AcknowledgeResponse> {
+        self.acknowledge_phase(tuple, current_worker_boot_id, terminal_digest)
+            .map_err(WorkerPhaseError::into_watchdog_error)
+    }
+
+    /// Acknowledge with transport failure classification retained for the
+    /// supervisor's terminal-delivery phase.
+    pub(crate) fn acknowledge_phase(
+        &self,
+        tuple: &WorkerHandoffTuple,
+        current_worker_boot_id: &str,
+        terminal_digest: &str,
+    ) -> std::result::Result<AcknowledgeResponse, WorkerPhaseError> {
         validate_storage_tuple(tuple)?;
         validate_uuid4(current_worker_boot_id, "worker boot id")?;
         validate_tuple_for_client(self, tuple)?;
         if current_worker_boot_id == self.watchdog_boot_id {
-            return Err(WatchdogError::IdentityMismatch(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::IdentityMismatch(
                 "worker acknowledgment target cannot reuse the watchdog boot identity".to_owned(),
-            ));
+            )));
         }
         crate::config::validate_digest(terminal_digest).map_err(|message| {
             WatchdogError::InvalidInput(format!("terminal digest is invalid: {message}"))
@@ -460,22 +580,19 @@ impl WorkerClient {
             tuple: protocol_tuple_from_storage(tuple),
             terminal_digest: terminal_digest.to_owned(),
         });
-        let response = transport::exchange(
-            &self.config.endpoint,
-            &self.config.credential_path,
-            &self.config.peer,
-            self.config.timeout,
-            &request,
-        )?;
+        let response = self
+            .exchange(&request)
+            .map_err(WorkerPhaseError::transport)?;
         let Frame::AcknowledgeResponse(response) = response else {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker acknowledgment returned a different response command".to_owned(),
-            ));
+            )));
         };
         let Frame::AcknowledgeRequest(request) = request else {
             return Err(WatchdogError::Conflict(
                 "worker acknowledgment request construction changed".to_owned(),
-            ));
+            )
+            .into());
         };
         validate_response_header(
             &request.header,
@@ -483,9 +600,9 @@ impl WorkerClient {
             Some(current_worker_boot_id),
         )?;
         if response.tuple != request.tuple {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker acknowledgment response tuple does not match the request".to_owned(),
-            ));
+            )));
         }
         Ok(response)
     }
@@ -873,7 +990,7 @@ fn validate_storage_tuple(tuple: &WorkerHandoffTuple) -> Result<()> {
     Ok(())
 }
 
-fn storage_receipt(receipt: &TerminalReceipt) -> WorkerTerminalReceipt {
+pub(crate) fn storage_receipt(receipt: &TerminalReceipt) -> WorkerTerminalReceipt {
     WorkerTerminalReceipt {
         status: match receipt.status {
             TerminalStatus::Completed => WorkerTerminalStatus::Completed,

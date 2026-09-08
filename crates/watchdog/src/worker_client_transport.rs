@@ -65,6 +65,19 @@ pub(crate) fn exchange(
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| WatchdogError::Timeout("worker transport deadline overflow".to_owned()))?;
+    exchange_until(endpoint, credential_path, peer, deadline, request)
+}
+
+/// Exchange using an already-computed absolute deadline.  Keeping this
+/// boundary in the transport layer prevents a fresh per-request timeout from
+/// extending the owning reconciliation phase.
+pub(crate) fn exchange_until(
+    endpoint: &Path,
+    credential_path: &Path,
+    peer: &WorkerPeerIdentity,
+    deadline: Instant,
+    request: &Frame,
+) -> Result<Frame> {
     let request_bytes =
         encode_frame(request).map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
     if request_bytes.is_empty() || request_bytes.len() > MAX_FRAME_BYTES {
