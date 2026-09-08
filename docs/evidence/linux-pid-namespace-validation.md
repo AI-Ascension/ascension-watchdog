@@ -18,6 +18,9 @@ itself: the runner requires the target status, a quiet private-`/proc`
 interval, and no remaining namespace child. Workload and drain deadlines are
 bounded. The runner sends no signals; a timeout exits namespace init, allowing
 Linux to terminate only that namespace's children.
+The root review correction caps the workload at 3,600,000 ms and descendant drain
+at 60,000 ms; zero and larger values fail before any child is launched. Defaults
+remain 300,000 ms and 5,000 ms. This is a short synthetic runner, not the soak runner.
 
 ## Executed checks
 
@@ -56,8 +59,43 @@ Results:
 - `/bin/sh -c 'setsid /bin/sh -c "sleep 0.05" >/dev/null 2>&1 & exit 0'`:
   exit 0, reaping a detached process-group/session descendant.
 - `/bin/sh -c 'sleep 30 & echo $! > <marker>; exit 0'` with
-  `--drain-timeout-ms=200`: exit 125; the exact marker PID was absent from the
-  host `/proc` after namespace exit. No signal was issued by the runner.
+  `--drain-timeout-ms=200`: exit 125. The marker is a namespace PID and cannot
+  establish host-PID absence by indexing host `/proc` directly. That original
+  absence claim is withdrawn. Independent W44 validation instead matched the
+  child namespace and `NSpid` mapping (namespace PID 3, host PID 143369), then
+  observed `/proc/143369` absent after teardown. No signal was issued by the runner.
+
+Independent W44 reviewed exact source commit
+`9741b8fde228cee5fac224ab5cfbaf5cfe55e6ca`, not only its base. The original reviewed
+source SHA-256 was `a04c8bc80f9d8e59398e60e6d4905da7a3cef7f03789617971c873b87639c55f`;
+the reviewer's built runner SHA-256 was
+`645efd91aa17c42385ee15d2a012b96326bcf6b9b9a6ebb3fbae1eaaa9c27ac0`.
+These hashes describe the pre-timeout-cap review, not rebuilt correction bytes.
+
+## Root timeout correction validation
+
+The corrected runner source SHA-256 is
+`81a1372e62fdf74038ec466a2d1ad3a28da2f973c8c5e055920106da3c1edce1`;
+the rebuilt debug runner SHA-256 is
+`871f3c3571bad63865118e094b9c50cbd5338c0d4766dcff1c443a069847040e`.
+These identify the timeout-cap correction over integration base `c7d2d0c`.
+
+Root validation passed formatting, locked/offline workspace all-target/all-feature
+Clippy with warnings denied, and the locked example build. The corrected example
+has four passing unit tests, including exact timeout bounds and rejection of zero
+and overflowing values. Namespace probes preserved exit 7 and reaped a detached
+`setsid` descendant; an oversized drain timeout rejected with exit 125.
+
+Workspace tests were partitioned because broker fixtures intentionally reject
+mapped-root peer identity. Ordinary execution passed workspace library, binary,
+and example tests with all features (watchdog: 77 passed, two delegated-cgroup
+tests ignored; runner: four passed), all 26 other watchdog integration targets,
+and all-target/all-feature platform-Windows and fault-fixture package tests.
+The three process integration targets `adversarial_core`, `process_cleanup`, and
+`launch_stop` passed together in the private PID namespace: 10, one, and two tests
+respectively. Ignored cgroup tests and native Windows-only paths are not verified
+by these results. This is partitioned synthetic coverage, not a claim that one
+unqualified whole-workspace invocation passed inside the namespace.
 
 ## Unchanged watchdog suites
 

@@ -26,6 +26,8 @@ mod linux {
     pub const RUNNER_FAILURE_EXIT: u8 = 125;
     const DEFAULT_WORKLOAD_TIMEOUT: Duration = Duration::from_mins(5);
     const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+    const MAX_WORKLOAD_TIMEOUT: Duration = Duration::from_hours(1);
+    const MAX_DRAIN_TIMEOUT: Duration = Duration::from_mins(1);
     const ADOPTION_SETTLE: Duration = Duration::from_millis(50);
     const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -36,12 +38,15 @@ mod linux {
     }
 
     /// Return a bounded timeout parsed from a `--*-timeout-ms=` option.
-    fn parse_timeout(value: &str, option: &str) -> Result<Duration, String> {
+    fn parse_timeout(value: &str, option: &str, maximum: Duration) -> Result<Duration, String> {
         let milliseconds = value
             .parse::<u64>()
             .map_err(|_| format!("{option} must be an unsigned millisecond count"))?;
-        if milliseconds == 0 {
-            return Err(format!("{option} must be positive"));
+        if milliseconds == 0 || u128::from(milliseconds) > maximum.as_millis() {
+            return Err(format!(
+                "{option} must be within 1..={} milliseconds",
+                maximum.as_millis()
+            ));
         }
         let seconds = Duration::from_secs(milliseconds / 1_000);
         let remainder = Duration::from_millis(milliseconds % 1_000);
@@ -63,11 +68,12 @@ mod linux {
             }
             if !after_separator && let Some(text) = arg.to_str() {
                 if let Some(value) = text.strip_prefix("--workload-timeout-ms=") {
-                    workload_timeout = parse_timeout(value, "--workload-timeout-ms")?;
+                    workload_timeout =
+                        parse_timeout(value, "--workload-timeout-ms", MAX_WORKLOAD_TIMEOUT)?;
                     continue;
                 }
                 if let Some(value) = text.strip_prefix("--drain-timeout-ms=") {
-                    drain_timeout = parse_timeout(value, "--drain-timeout-ms")?;
+                    drain_timeout = parse_timeout(value, "--drain-timeout-ms", MAX_DRAIN_TIMEOUT)?;
                     continue;
                 }
                 if text.starts_with('-') {
@@ -345,6 +351,28 @@ mod linux {
             let status = "Pid:\t1\nPPid:\t0\nNSpid:\t9001\t1\n";
             assert_eq!(status_field(status, "Pid"), Some("1"));
             assert_eq!(last_namespace_pid(status), Some(1));
+        }
+
+        #[test]
+        fn timeout_limits_reject_unbounded_workload_and_drain() {
+            for (option, maximum, accepted, rejected) in [
+                (
+                    "--workload-timeout-ms",
+                    MAX_WORKLOAD_TIMEOUT,
+                    "3600000",
+                    "3600001",
+                ),
+                ("--drain-timeout-ms", MAX_DRAIN_TIMEOUT, "60000", "60001"),
+            ] {
+                assert_eq!(parse_timeout(accepted, option, maximum), Ok(maximum));
+                assert_eq!(
+                    parse_timeout("1", option, maximum),
+                    Ok(Duration::from_millis(1))
+                );
+                for invalid in ["0", "-1", rejected, "18446744073709551615"] {
+                    assert!(parse_timeout(invalid, option, maximum).is_err());
+                }
+            }
         }
 
         #[test]
