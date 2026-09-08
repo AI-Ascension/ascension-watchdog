@@ -1,0 +1,46 @@
+{
+  "record_version": 1,
+  "date": "2026-09-08",
+  "classification": "confirmed",
+  "scope": "Local source integration and Linux development-environment tests only",
+  "implementation_complete": false,
+  "connected_worker_runtime_verified": false,
+  "candidates": {
+    "ascension-watchdog": {
+      "revision": "2c1d87e9df28f3cc8f3c10abb1cd18aeaa82ad8a",
+      "branch": "codex/watchdog-client-process-candidate",
+      "checks": [
+        {"command": "cargo test --locked --offline -p ascension-watchdog --test worker_config --test worker_storage", "exit_code": 0, "passed": 25},
+        {"command": "cargo test --locked --offline -p ascension-watchdog --test worker_client", "exit_code": 0, "passed": 11},
+        {"command": "cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings", "exit_code": 0}
+      ],
+      "independent_review": "H90: digest separation and immutable binding accepted; production wiring must derive bindings from validated configuration"
+    },
+    "sts2-harness": {
+      "revision": "a7db3ea27f3e9c6fa68bb89204d879c9f63a7ea0",
+      "branch": "codex/harness-worker-ledger-integration",
+      "checks": [
+        {"command": "cargo test --locked --offline -p sts2-harness --bin sts2-harness-runtime", "exit_code": 0, "passed": 140},
+        {"command": "cargo test --locked --offline --workspace --all-targets --all-features", "exit_code": 0}
+      ],
+      "independent_review": "H89: shared snapshot lineage, fingerprint and stale checkpoint checks accepted at source commit bcc232ef181f95ec7556707e16afc613212cd855",
+      "strict_clippy": "incomplete: 24 known dead-code diagnostics in unwired worker command modules"
+    }
+  },
+  "open_work": [
+    {"task": "H88", "owner": "g64_storage_final_review", "scope": "Propagate quarantine persistence failures and fence shared admission without hiding read-only diagnostics or recovery evidence", "state": "implementation_in_progress"},
+    {"task": "H85", "owner": "w37_historical_terminal_repair", "scope": "Prestarted Windows protected-file helper with bounded exchanges and retained uncertain cleanup ownership", "state": "implementation_in_progress"},
+    {"task": "H79", "owner": "w38_worker_client_lead", "scope": "Linux verifier transport, blocking-I/O isolation and bounded cleanup ownership", "state": "implementation_in_progress"},
+    {"task": "H91", "owner": "h35_raw_catalog_repair", "scope": "Real harness worker executable and admitted runtime wiring", "state": "implementation_in_progress"},
+    {"task": "H92", "owner": "g62_allocation_review", "scope": "Supervisor control, claim, lookup, terminal acknowledgment and drain sequencing", "state": "implementation_in_progress"}
+  ],
+  "limitations": [
+    "Tests do not establish connected watchdog-to-harness runtime operation.",
+    "Windows cross-compilation and portable platform tests are not native Windows execution.",
+    "Helper startup and cleanup deadline requirements remain under implementation and review.",
+    "A process-local quarantine latch cannot establish crash durability after a failed persistence operation.",
+    "Recovery diagnostics do not resolve the previously observed intermittent recovery-test failure's cause.",
+    "No new service installation, game/provider launch, host reboot or release activation is evidenced by this checkpoint.",
+    "These candidate revisions are not a promoted release set; remote delivery and all native/live/reboot/soak gates require separate evidence."
+  ]
+}
