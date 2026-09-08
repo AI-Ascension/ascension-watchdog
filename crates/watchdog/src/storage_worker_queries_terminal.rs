@@ -186,3 +186,41 @@ pub(super) fn new_uuid4_distinct(existing: &[&str]) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod digest_conformance_tests {
+    use super::{WorkerHandoffTuple, WorkerTerminalReceipt, terminal_digest};
+    use serde_json::{Map, Value};
+
+    #[test]
+    fn terminal_acknowledgment_matches_the_cross_consumer_golden()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bytes =
+            include_bytes!("../../../worker-handoff-v1/fixtures/valid/dispatch-response.json");
+        let _validated = crate::worker_protocol::decode_response(bytes)?;
+        let mut frame: Value = serde_json::from_slice(bytes)?;
+        let mut terminal = frame["terminal"]
+            .take()
+            .as_object()
+            .ok_or("terminal object")?
+            .clone();
+        let mut result = Map::new();
+        for key in [
+            "status",
+            "checkpoint_sequence",
+            "terminal_ref",
+            "result_digest",
+        ] {
+            result.insert(key.to_owned(), terminal.remove(key).ok_or("result field")?);
+        }
+        let tuple: WorkerHandoffTuple = serde_json::from_value(Value::Object(terminal))?;
+        let receipt: WorkerTerminalReceipt = serde_json::from_value(Value::Object(result))?;
+        let digest = terminal_digest(&tuple, &receipt)?;
+        assert_eq!(
+            digest,
+            "a0db0fc348623db806d2d053d7724198acb5c5c79f5b3422bf75faf3f653c260"
+        );
+        assert_ne!(digest, receipt.result_digest);
+        Ok(())
+    }
+}

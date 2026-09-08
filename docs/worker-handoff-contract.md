@@ -152,6 +152,30 @@ cannot restore Running or resume work. Completed and acknowledged deduplication
 records have a bounded documented retention horizon; unresolved rows are never
 evicted. Capacity is backpressure, not evidence of completion.
 
+## Terminal acknowledgment digest
+
+`terminal_digest` is lowercase SHA-256 of the complete canonical terminal record,
+not `result_digest` and not a hash of only the four result fields. Its WHJ-T1
+material is one compact UTF-8 JSON object, with no BOM, whitespace or trailing
+newline, in this exact key order:
+
+`handoff_id`, `deployment_id`, `job_id`, `attempt_id`, `attempt_number`,
+`worker_owner_id`, `worker_profile_digest`, `run_id`, `episode_id`, `trajectory_id`,
+`payload_digest`, `status`, `checkpoint_sequence`, `terminal_ref`, `result_digest`.
+
+Integer tokens are canonical unsigned decimal. String values retain their exact
+Unicode contents without normalization: quotation marks and backslashes are
+JSON-escaped, solidus is not escaped and other permitted characters use their
+UTF-8 bytes. The contract already rejects control characters in identity and
+reference values. The original tuple remains unchanged across worker/watchdog
+boots; transport request and boot identifiers are not added to this material.
+
+The terminal object in the frozen `fixtures/valid/dispatch-response.json` has
+digest `a0db0fc348623db806d2d053d7724198acb5c5c79f5b3422bf75faf3f653c260`.
+Its `result_digest` is the separate all-9s fixture value. Watchdog storage and the
+independent harness encoder must both verify this golden. This documents and
+tests the existing storage algorithm; no frozen schema/fixture bytes change.
+
 ## Pause, stop, and control ordering
 
 The worker's control-mode ledger is separate from its completion ledger.
