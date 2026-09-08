@@ -3,8 +3,10 @@
 Classification: confirmed Linux/WSL synthetic process-runner evidence. This is
 not native service, Windows, live-host, reboot, or soak evidence.
 
-Base commit: `76daced0642beddf9106a798137ebf9224744978`
-Implementation branch: `codex/watchdog-pid-namespace-reaper`
+Original authoring base: `76daced0642beddf9106a798137ebf9224744978`
+Original authoring branch: `codex/watchdog-pid-namespace-reaper`
+Reviewed corrected commit: `1eb4cfb356ca12c48b8f0b576ae761819c160008`
+Integration branch: `codex/watchdog-worker-process-integration`
 Runner: `crates/watchdog/examples/synthetic-test-reaper.rs`
 
 ## Runner contract
@@ -96,6 +98,16 @@ The three process integration targets `adversarial_core`, `process_cleanup`, and
 respectively. Ignored cgroup tests and native Windows-only paths are not verified
 by these results. This is partitioned synthetic coverage, not a claim that one
 unqualified whole-workspace invocation passed inside the namespace.
+
+Independent W48 accepted that exact corrected commit after a fresh-target build,
+four passing example tests, formatting, and locked/offline Clippy with warnings
+denied. Both corrected hashes above matched. Its ordinary invocation and invalid
+timeout probes rejected with exit 125; namespace probes preserved exit 7 and
+reaped ordinary and detached descendants. In its timeout probe, namespace PID 3
+mapped to host PID 554715, observed present before runner exit and absent after
+teardown. This separately confirms owned synthetic cleanup, not service or host
+recovery. The later orchestration-only commit `606724d` did not change reviewed
+runner bytes.
 
 ## Unchanged watchdog suites
 
