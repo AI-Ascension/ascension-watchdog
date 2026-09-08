@@ -14,6 +14,27 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 pub(super) use super::storage_worker_queries_handoff_row::RawHandoff;
 
 impl Store {
+    /// Rediscover the oldest retained handoff needing reconciliation or ACK.
+    /// Loads at most one bounded record, including prepared and uncertain work.
+    /// This query does not grant dispatch authority or clear its reservation.
+    pub fn next_worker_handoff_for_reconciliation(&self) -> Result<Option<WorkerHandoff>> {
+        let id: Option<String> = self.conn.query_row(
+            "SELECT CASE WHEN typeof(handoff_id)='text' AND length(CAST(handoff_id AS BLOB))=36 THEN handoff_id END
+             FROM worker_handoffs WHERE state NOT IN ('acknowledged','rejected') OR state IS NULL
+             ORDER BY created_at_ms, handoff_id LIMIT 1",
+            [],
+            |row| row.get(0),
+        ).optional()?;
+        id.map(|id| {
+            self.worker_handoff(&id)?.ok_or_else(|| {
+                WatchdogError::Conflict(
+                    "pending worker handoff disappeared during lookup".to_owned(),
+                )
+            })
+        })
+        .transpose()
+    }
+
     /// Read one handoff without mutating state.
     pub fn worker_handoff(&self, handoff_id: &str) -> Result<Option<WorkerHandoff>> {
         validate_uuid4(handoff_id, "handoff id")?;

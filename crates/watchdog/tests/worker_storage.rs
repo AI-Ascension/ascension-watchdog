@@ -106,6 +106,19 @@ fn with_reopened_replaced_pending_handoff(
         .set_desired_mode_at(DesiredMode::Stopped, 6)
         .expect("durable stop");
 
+    assert_eq!(
+        reopened.current_worker_control().expect("control"),
+        Some(replacement.clone())
+    );
+    assert_eq!(
+        reopened
+            .next_worker_handoff_for_reconciliation()
+            .expect("pending")
+            .expect("handoff")
+            .tuple(),
+        tuple
+    );
+
     test(
         &mut reopened,
         &binding,
@@ -238,6 +251,18 @@ fn dispatch_marker_is_one_way_and_terminal_ack_is_idempotent() {
     let (mut store, config) = fixture(&temp);
     let binding = binding(&config);
     let control = control(&binding);
+    assert!(
+        store
+            .current_worker_control()
+            .expect("no control")
+            .is_none()
+    );
+    assert!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("empty")
+            .is_none()
+    );
     store
         .configure_worker_binding_at(&binding, 1)
         .expect("binding");
@@ -251,10 +276,22 @@ fn dispatch_marker_is_one_way_and_terminal_ack_is_idempotent() {
         .expect("claim")
         .expect("handoff");
     let tuple = claim.tuple();
+    assert_eq!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("prepared"),
+        Some(claim.clone())
+    );
     let dispatched = store
         .mark_worker_handoff_may_have_been_dispatched_at(&tuple, 4)
         .expect("dispatch marker");
     assert_eq!(dispatched.state, WorkerHandoffState::MayHaveBeenDispatched);
+    assert_eq!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("uncertain"),
+        Some(dispatched)
+    );
     assert!(
         store
             .mark_worker_handoff_may_have_been_dispatched_at(&tuple, 5)
@@ -275,6 +312,12 @@ fn dispatch_marker_is_one_way_and_terminal_ack_is_idempotent() {
         .expect("completion");
     assert!(!completion.already_completed);
     assert_eq!(completion.handoff.state, WorkerHandoffState::Completed);
+    assert_eq!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("pending ack"),
+        Some(completion.handoff.clone())
+    );
     let repeated = store
         .complete_worker_handoff_at(&tuple, &receipt, 8)
         .expect("repeated completion");
@@ -287,6 +330,12 @@ fn dispatch_marker_is_one_way_and_terminal_ack_is_idempotent() {
         .acknowledge_worker_handoff_at(&tuple, &completion.terminal_digest, 10)
         .expect("repeated ack");
     assert!(repeated_ack.already_acknowledged);
+    assert!(
+        store
+            .next_worker_handoff_for_reconciliation()
+            .expect("acknowledged excluded")
+            .is_none()
+    );
     assert_eq!(
         store
             .worker_handoff(&claim.handoff_id)

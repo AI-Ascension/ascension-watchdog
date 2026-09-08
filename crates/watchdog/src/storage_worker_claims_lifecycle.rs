@@ -150,6 +150,19 @@ impl Store {
         self.set_worker_control_at(control, super::now_unix_ms())
     }
 
+    /// Read the current acknowledged control even while stopped or paused.
+    /// It is recovery evidence, not permission to claim or dispatch work.
+    pub fn current_worker_control(&self) -> Result<Option<WorkerControlWitness>> {
+        let Some(control) = control_from_conn(&self.conn)? else {
+            return Ok(None);
+        };
+        let binding = binding_from_conn(&self.conn)?.ok_or_else(|| {
+            WatchdogError::Conflict("worker control has no configured binding".to_owned())
+        })?;
+        validate_control_against_binding(&control, &binding)?;
+        Ok(Some(control))
+    }
+
     /// Return the currently admissible claim witness. Missing configuration,
     /// non-running control, and a paused/stopped durable mode produce None.
     pub fn current_worker_claim_witness(&self) -> Result<Option<WorkerClaimWitness>> {
