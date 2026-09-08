@@ -43,14 +43,30 @@ authentication envelope on every fresh local IPC connection:
    the next four-byte-length-prefixed JSON protocol frame.  The auth body is
    never echoed, logged, persisted, or included in a protocol digest.
 4. It writes exactly one request frame and reads exactly one response frame.
-   A single absolute monotonic deadline (at most 5 seconds) covers connect,
-   peer authentication, credential open/validation, write, and read.  On
-   Linux, credential opening and reading are also deadline-bounded and fail
-   closed on unsupported filesystems.  The Windows protected-file adapter
+   A single absolute monotonic deadline (at most 5 seconds) is carried through
+   connect, peer authentication, credential open/validation, write, and read;
+   the client applies it to cancellable operations and checks it around
+   synchronous reads.  On Linux, credential opening and each read-loop
+   iteration check the deadline and fail closed on unsupported filesystems.
+   The allowlist does not make a regular file's synchronous kernel read
+   cancellable: an individual Linux read can outlive the deadline, so this
+   layer must not claim a hard wall-clock bound across that syscall.  The
+   Windows protected-file adapter
    receives the size bound and performs the held-handle read; this portable
    client checks the deadline before and after that adapter call, while the
    adapter's synchronous file read cannot be cancelled by this layer.  The
    client opens a fresh connection for every exchange.
+
+Credential bytes are held in bounded `zeroize::Zeroizing<Vec<u8>>` buffers.  The
+Linux credential read reserves one spare capacity slot before reading, and its
+read staging buffer plus both platforms' auth bodies are zeroized on normal
+drop and error unwinding.  On Windows, this layer wraps the native adapter's
+returned `Vec` immediately; any native adapter-internal staging, allocation,
+or error-path copy remains outside this client repair and requires a separate
+platform change.  Other unsupported platforms fail closed instead of using an
+unbounded fallback read.  This is ordinary process-memory cleanup only; it is
+not a guarantee against process termination, OS copies, or native adapter
+temporaries.
 
 This envelope is intentionally a cross-consumer decision point.  A harness
 endpoint must implement the same prelude, or the owner may approve an

@@ -15,6 +15,7 @@ use std::os::fd::OwnedFd;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use zeroize::Zeroizing;
 
 const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
@@ -209,12 +210,12 @@ pub(crate) struct ProtectedCredential {
     _ancestors: Vec<OwnedFd>,
     #[cfg(target_os = "linux")]
     _file: File,
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Vec<u8>>,
 }
 
 impl ProtectedCredential {
     pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_slice()
     }
 }
 
@@ -225,42 +226,56 @@ pub(crate) fn read_credential(path: &Path, deadline: Instant) -> Result<Protecte
     // descriptor with O_NONBLOCK before validating its type.  Windows uses the
     // platform's held-handle ancestor walk for the same reason.  This function
     // is called only after worker-peer authentication.
-    #[cfg(target_os = "linux")]
-    let mut file = open_linux_credential(path, deadline)?;
-    #[cfg(windows)]
-    let bytes = ascension_platform_windows::read_protected_payload_file(path, MAX_CREDENTIAL_BYTES)
-        .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
     #[cfg(all(unix, not(target_os = "linux")))]
-    let bytes = fs::read(path)
-        .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
-    #[cfg(not(any(unix, windows)))]
-    let bytes = fs::read(path)
-        .map_err(|_| WatchdogError::Unauthorized("worker credential is unavailable".to_owned()))?;
-
-    #[cfg(target_os = "linux")]
-    let bytes = read_bounded_credential(&mut file.file, deadline)?;
-    ensure_deadline(deadline, "worker credential read")?;
-    if bytes.is_empty()
-        || bytes.len() > MAX_CREDENTIAL_BYTES
-        || bytes.contains(&0)
-        || !bytes.is_ascii()
-        || bytes.iter().any(u8::is_ascii_whitespace)
     {
-        return Err(WatchdogError::Unauthorized(
-            "worker credential is empty, oversized, or malformed".to_owned(),
+        let _ = (path, deadline);
+        return Err(WatchdogError::Unsupported(
+            "worker credential transport is unsupported on this platform".to_owned(),
         ));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(unix, windows)))]
     {
-        Ok(ProtectedCredential {
-            _ancestors: file.ancestors,
-            _file: file.file,
-            bytes,
-        })
+        let _ = (path, deadline);
+        return Err(WatchdogError::Unsupported(
+            "worker credential transport is unsupported on this platform".to_owned(),
+        ));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "linux", windows))]
     {
-        Ok(ProtectedCredential { bytes })
+        #[cfg(target_os = "linux")]
+        let mut file = open_linux_credential(path, deadline)?;
+        #[cfg(windows)]
+        let bytes = Zeroizing::new(
+            ascension_platform_windows::read_protected_payload_file(path, MAX_CREDENTIAL_BYTES)
+                .map_err(|_| {
+                    WatchdogError::Unauthorized("worker credential is unavailable".to_owned())
+                })?,
+        );
+        #[cfg(target_os = "linux")]
+        let bytes = read_bounded_credential(&mut file.file, deadline)?;
+        ensure_deadline(deadline, "worker credential read")?;
+        if bytes.is_empty()
+            || bytes.len() > MAX_CREDENTIAL_BYTES
+            || bytes.contains(&0)
+            || !bytes.is_ascii()
+            || bytes.iter().any(u8::is_ascii_whitespace)
+        {
+            return Err(WatchdogError::Unauthorized(
+                "worker credential is empty, oversized, or malformed".to_owned(),
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Ok(ProtectedCredential {
+                _ancestors: file.ancestors,
+                _file: file.file,
+                bytes,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(ProtectedCredential { bytes })
+        }
     }
 }
 
@@ -417,12 +432,12 @@ fn ensure_local_protected_filesystem(filesystem_type: u64) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_bounded_credential(file: &mut File, deadline: Instant) -> Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(64);
-    let mut buffer = [0_u8; 256];
+fn read_bounded_credential(file: &mut File, deadline: Instant) -> Result<Zeroizing<Vec<u8>>> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_CREDENTIAL_BYTES + 1));
+    let mut buffer = Zeroizing::new([0_u8; 256]);
     loop {
         ensure_deadline(deadline, "worker credential read")?;
-        let count = file.read(&mut buffer).map_err(|error| {
+        let count = file.read(&mut buffer[..]).map_err(|error| {
             if error.kind() == ErrorKind::WouldBlock {
                 WatchdogError::Timeout("worker credential read timed out".to_owned())
             } else {

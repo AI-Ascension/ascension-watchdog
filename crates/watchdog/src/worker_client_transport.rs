@@ -12,6 +12,7 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 /// Binary transport-authentication body.  It is not a worker-handoff JSON
 /// frame and is consumed by the worker endpoint before the first protocol
@@ -98,7 +99,9 @@ fn exchange_unix(
     // (including PID and process-start token) has been authenticated.
     let credential = read_credential(credential_path, deadline)?;
     peer_session.verify_current(deadline)?;
-    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.bytes().len());
+    let mut auth_body = Zeroizing::new(Vec::with_capacity(
+        AUTH_MAGIC.len() + credential.bytes().len(),
+    ));
     auth_body.extend_from_slice(AUTH_MAGIC);
     auth_body.extend_from_slice(credential.bytes());
     write_frame_unix(&mut stream, &auth_body, deadline, &peer_session)?;
@@ -402,7 +405,9 @@ fn exchange_named_pipe(
     // The credential is opened only after the exact named-pipe server PID,
     // creation timestamp, image path, and image digest have been checked.
     let credential = read_credential(credential_path, deadline)?;
-    let mut auth_body = Vec::with_capacity(AUTH_MAGIC.len() + credential.bytes().len());
+    let mut auth_body = Zeroizing::new(Vec::with_capacity(
+        AUTH_MAGIC.len() + credential.bytes().len(),
+    ));
     auth_body.extend_from_slice(AUTH_MAGIC);
     auth_body.extend_from_slice(credential.bytes());
     let remaining = deadline.saturating_duration_since(Instant::now());
