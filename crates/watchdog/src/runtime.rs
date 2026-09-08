@@ -22,7 +22,7 @@ use crate::storage::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
@@ -94,6 +94,14 @@ pub struct Supervisor {
     /// One fresh watchdog worker-session identity per Supervisor instance.
     /// It is never restored from durable state or regenerated per request.
     worker_boot_id: String,
+    /// Worker availability diagnostics are edge-triggered per phase so a
+    /// persistent endpoint outage cannot fill the audit log on every loop.
+    pub(crate) worker_deferred_phases: BTreeSet<String>,
+    /// A soft failure in the pre-scheduling worker phase gates fresh claims
+    /// for the rest of this reconciliation.  The post phase may still retry
+    /// control/recovery, but it cannot turn a later healthy probe into a
+    /// claim after the required pre-phase observation was unavailable.
+    pub(crate) worker_phase_pre_failed: bool,
     initialized_runtime: bool,
 }
 
@@ -178,6 +186,8 @@ impl Supervisor {
             lock: None,
             worker_id: format!("watchdog-{}", Uuid::new_v4()),
             worker_boot_id: Uuid::new_v4().to_string(),
+            worker_deferred_phases: BTreeSet::new(),
+            worker_phase_pre_failed: false,
             initialized_runtime: false,
         }
     }
@@ -269,6 +279,10 @@ impl Supervisor {
         // first-reconcile quarantine/generation/orphan-proof ordering above
         // intact.
         self.configure_worker_binding(now_ms)?;
+        // Both worker interactions in this reconciliation share one absolute
+        // budget. Rebuilding a client after component scheduling must not
+        // restart the full per-exchange timeout and miss the service watchdog.
+        let worker_budget = runtime_worker::WorkerPhaseBudget::new(self.config.worker.as_ref());
         let desired_mode = self.store.desired_mode()?;
         let mut report = ReconcileReport {
             observed_at_ms: now_ms,
@@ -277,7 +291,7 @@ impl Supervisor {
         };
         // Existing live harnesses must receive the freshly observed durable
         // desired mode before component stop/cleanup can run.
-        self.reconcile_worker_before_components(desired_mode, now_ms)?;
+        self.reconcile_worker_before_components(desired_mode, now_ms, worker_budget, &mut report)?;
         for component in self.config.components.clone() {
             let decision =
                 self.reconcile_component(&component, desired_mode, now_ms, &mut report)?;
@@ -285,7 +299,7 @@ impl Supervisor {
         }
         // Repeat control/recovery after a possible new launch.  Claims are
         // admitted only by this post-scheduling Running phase.
-        self.reconcile_worker_after_components(desired_mode, now_ms)?;
+        self.reconcile_worker_after_components(desired_mode, now_ms, worker_budget, &mut report)?;
         if desired_mode == DesiredMode::Draining
             && self.children.is_empty()
             && self.worker_drain_complete()?

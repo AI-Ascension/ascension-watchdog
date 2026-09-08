@@ -12,14 +12,57 @@ use crate::config::{DesiredMode, WorkerConfig};
 use crate::error::{Result, WatchdogError};
 use crate::policy::ComponentState;
 use crate::storage::{WorkerBinding, WorkerControlMode, WorkerControlWitness};
-use crate::worker_client::{WorkerClient, WorkerClientConfig, WorkerPeerIdentity};
-use crate::worker_protocol::{ControlScope, MAX_ATTEMPT_NUMBER, WorkerMode};
-use std::time::Duration;
+use crate::worker_client::{
+    WorkerClient, WorkerClientConfig, WorkerPeerIdentity, WorkerPhaseError, storage_receipt,
+};
+use crate::worker_protocol::{
+    AcknowledgeStatus, ControlScope, ControlStatus, DispatchStatus, LookupStatus,
+    MAX_ATTEMPT_NUMBER, WorkerMode,
+};
+use std::time::{Duration, Instant};
 
 /// The worker phase is bounded to one historical recovery and one fresh claim
 /// per reconciliation.  The store itself is the second line of defense and
 /// refuses claims while any unresolved handoff remains.
 const MAX_RECOVERIES_PER_RECONCILE: usize = 1;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkerPhaseBudget {
+    deadline: Instant,
+}
+
+impl WorkerPhaseBudget {
+    /// Share one configured worker-exchange budget across the pre/post phases.
+    /// If systemd advertises a shorter watchdog interval, reserve half of it
+    /// for component reconciliation and progress notification.  This keeps
+    /// the worker budget derived from live configuration rather than from an
+    /// arbitrary service deadline constant.
+    pub(crate) fn new(worker: Option<&WorkerConfig>) -> Self {
+        let exchange_budget = worker.map_or(Duration::ZERO, |config| {
+            Duration::from_millis(config.timeout_ms)
+        });
+        let watchdog_budget = std::env::var("WATCHDOG_USEC")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_micros)
+            .map(|duration| duration / 2);
+        let budget =
+            watchdog_budget.map_or(exchange_budget, |watchdog| exchange_budget.min(watchdog));
+        Self {
+            deadline: Instant::now()
+                .checked_add(budget)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+
+    fn deadline(self) -> Instant {
+        self.deadline
+    }
+
+    fn expired(self) -> bool {
+        Instant::now() >= self.deadline
+    }
+}
 
 impl Supervisor {
     /// Persist the approved worker binding before any worker transport effect.
@@ -40,8 +83,11 @@ impl Supervisor {
         &mut self,
         desired_mode: DesiredMode,
         now_ms: u64,
+        budget: WorkerPhaseBudget,
+        report: &mut super::ReconcileReport,
     ) -> Result<()> {
-        self.reconcile_worker(desired_mode, now_ms, false)
+        self.worker_phase_pre_failed = false;
+        self.reconcile_worker(desired_mode, now_ms, false, true, budget, report)
     }
 
     /// Repeat worker control after component scheduling.  A newly launched
@@ -51,8 +97,10 @@ impl Supervisor {
         &mut self,
         desired_mode: DesiredMode,
         now_ms: u64,
+        budget: WorkerPhaseBudget,
+        report: &mut super::ReconcileReport,
     ) -> Result<()> {
-        self.reconcile_worker(desired_mode, now_ms, true)
+        self.reconcile_worker(desired_mode, now_ms, true, false, budget, report)
     }
 
     /// Draining may settle to stopped only after all retained worker rows have
@@ -70,23 +118,57 @@ impl Supervisor {
         desired_mode: DesiredMode,
         now_ms: u64,
         allow_claim: bool,
+        pre_phase: bool,
+        budget: WorkerPhaseBudget,
+        report: &mut super::ReconcileReport,
     ) -> Result<()> {
         let Some(worker_config) = self.config.worker.clone() else {
             return Ok(());
         };
-        let Some(client) = self.worker_client(&worker_config)? else {
+        if budget.expired() {
+            return self.defer_worker_error(
+                "budget",
+                WorkerPhaseError::Unavailable(WatchdogError::Timeout(
+                    "worker reconciliation budget expired".to_owned(),
+                )),
+                now_ms,
+                pre_phase,
+                report,
+            );
+        }
+        let client = match self.worker_client(&worker_config, budget) {
+            Ok(client) => client,
+            Err(error) => {
+                return self.defer_worker_error("client", error, now_ms, pre_phase, report);
+            }
+        };
+        let Some(client) = client else {
             // A paused/stopped controller does not start a missing worker. A
             // running controller will get another attempt after component
             // scheduling, where a newly launched child can be adopted only
             // through its in-memory RuntimeChild handle.
             return Ok(());
         };
+        self.worker_phase_succeeded("client");
 
-        let probe = client.probe()?;
+        let probe = match client.probe_phase() {
+            Ok(probe) => probe,
+            Err(error) => {
+                return self.defer_worker_error("probe", error, now_ms, pre_phase, report);
+            }
+        };
+        self.worker_phase_succeeded("probe");
         let worker_boot_id = probe.header.worker_boot_id.clone().ok_or_else(|| {
             WatchdogError::IdentityMismatch("worker probe omitted its live boot".to_owned())
         })?;
-        let control = self.ensure_worker_control(&client, &worker_boot_id, desired_mode, now_ms)?;
+        let control =
+            match self.ensure_worker_control(&client, &worker_boot_id, desired_mode, now_ms) {
+                Ok(control) => control,
+                Err(error) => {
+                    return self.defer_worker_error("control", error, now_ms, pre_phase, report);
+                }
+            };
+        self.worker_phase_succeeded("control");
 
         // Every retained row is resolved by read-only lookup before a new
         // queue claim.  In particular, a prepared or uncertain row is never
@@ -99,8 +181,65 @@ impl Supervisor {
                 break;
             };
             recoveries += 1;
-            let _result =
-                client.reconcile_handoff(&mut self.store, &pending.tuple(), &control, now_ms)?;
+            if self
+                .store
+                .lookup_worker_handoff(&pending.tuple())?
+                .is_none()
+            {
+                return Err(WatchdogError::NotFound(format!(
+                    "worker handoff {}",
+                    pending.handoff_id
+                )));
+            }
+            let response = match client.lookup_phase(&pending.tuple(), &control.worker_boot_id) {
+                Ok(response) => response,
+                Err(error) => {
+                    return self.defer_worker_error("lookup", error, now_ms, pre_phase, report);
+                }
+            };
+            self.worker_phase_succeeded("lookup");
+            if response.status == LookupStatus::Terminal {
+                let receipt = response.terminal.as_ref().ok_or_else(|| {
+                    WatchdogError::Conflict("terminal lookup response has no receipt".to_owned())
+                })?;
+                let completion = self.store.complete_worker_handoff_with_recovery_at(
+                    &pending.tuple(),
+                    &storage_receipt(receipt),
+                    &control,
+                    now_ms,
+                )?;
+                let ack_response = match client.acknowledge_phase(
+                    &pending.tuple(),
+                    &control.worker_boot_id,
+                    &completion.terminal_digest,
+                ) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        return self.defer_worker_error(
+                            "acknowledge",
+                            error,
+                            now_ms,
+                            pre_phase,
+                            report,
+                        );
+                    }
+                };
+                self.worker_phase_succeeded("acknowledge");
+                if !matches!(
+                    ack_response.status,
+                    AcknowledgeStatus::Acknowledged | AcknowledgeStatus::AlreadyAcknowledged
+                ) {
+                    return Err(WatchdogError::Conflict(
+                        "worker rejected terminal acknowledgment".to_owned(),
+                    ));
+                }
+                self.store.acknowledge_worker_handoff_with_recovery_at(
+                    &pending.tuple(),
+                    &completion.terminal_digest,
+                    &control,
+                    now_ms,
+                )?;
+            }
             // A running/unknown/rejected lookup leaves the original row held;
             // it is not safe to claim a second job in this pass. A terminal
             // lookup may have completed and acknowledged the row, in which
@@ -115,7 +254,11 @@ impl Supervisor {
             }
         }
 
-        if !allow_claim || desired_mode != DesiredMode::Running || !probe.ready {
+        if !allow_claim
+            || self.worker_phase_pre_failed
+            || desired_mode != DesiredMode::Running
+            || !probe.ready
+        {
             return Ok(());
         }
         // A live child that the component reconciler retained in quarantine is
@@ -139,14 +282,109 @@ impl Supervisor {
             // retain the queue and wait for the next live-identity phase.
             return Ok(());
         }
-        let _ = client.claim_and_dispatch(&mut self.store, &witness, now_ms)?;
+        // This second probe is the admission barrier. The initial probe may
+        // have been followed by a worker replacement or a readiness change;
+        // no fresh claim is created until this live response is ready and
+        // still names the same worker boot.
+        let claim_probe = match client.probe_phase() {
+            Ok(probe) => probe,
+            Err(error) => {
+                return self.defer_worker_error("claim_probe", error, now_ms, pre_phase, report);
+            }
+        };
+        self.worker_phase_succeeded("claim_probe");
+        if !claim_probe.ready {
+            return self.defer_worker_error(
+                "claim_probe",
+                WorkerPhaseError::Unavailable(WatchdogError::Conflict(
+                    "worker probe is not ready for admission".to_owned(),
+                )),
+                now_ms,
+                pre_phase,
+                report,
+            );
+        }
+        if claim_probe.header.worker_boot_id.as_deref() != Some(worker_boot_id.as_str()) {
+            return Err(WatchdogError::IdentityMismatch(
+                "worker claim probe boot differs from the control witness".to_owned(),
+            ));
+        }
+        let Some(claim) = self.store.claim_next_worker_handoff(&witness, now_ms)? else {
+            return Ok(());
+        };
+        let tuple = claim.tuple();
+        let marked = self
+            .store
+            .mark_worker_handoff_may_have_been_dispatched_at(&tuple, now_ms)?;
+        let response = match client.dispatch_phase(&marked) {
+            Ok(response) => response,
+            Err(error) => {
+                return self.defer_worker_error("dispatch", error, now_ms, pre_phase, report);
+            }
+        };
+        self.worker_phase_succeeded("dispatch");
+        match response.status {
+            DispatchStatus::Accepted => {
+                self.store.mark_worker_handoff_admitted_at(&tuple, now_ms)?;
+            }
+            DispatchStatus::Terminal | DispatchStatus::AlreadyCompleted => {
+                let receipt = response.terminal.as_ref().ok_or_else(|| {
+                    WatchdogError::Conflict(
+                        "terminal worker dispatch response has no receipt".to_owned(),
+                    )
+                })?;
+                let completion = self.store.complete_worker_handoff_at(
+                    &tuple,
+                    &storage_receipt(receipt),
+                    now_ms,
+                )?;
+                let ack_response = match client.acknowledge_phase(
+                    &tuple,
+                    &witness.worker_boot_id,
+                    &completion.terminal_digest,
+                ) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        return self.defer_worker_error(
+                            "acknowledge",
+                            error,
+                            now_ms,
+                            pre_phase,
+                            report,
+                        );
+                    }
+                };
+                self.worker_phase_succeeded("acknowledge");
+                if !matches!(
+                    ack_response.status,
+                    AcknowledgeStatus::Acknowledged | AcknowledgeStatus::AlreadyAcknowledged
+                ) {
+                    return Err(WatchdogError::Conflict(
+                        "worker rejected terminal acknowledgment".to_owned(),
+                    ));
+                }
+                self.store.acknowledge_worker_handoff_at(
+                    &tuple,
+                    &completion.terminal_digest,
+                    now_ms,
+                )?;
+            }
+            DispatchStatus::Busy | DispatchStatus::Rejected => {
+                // The request was authorized and may have reached the worker;
+                // retain the durable may-have-been-dispatched reservation.
+            }
+        }
         Ok(())
     }
 
     /// Build a worker client only from the currently owned child.  Durable
     /// component identity rows are intentionally not consulted here: a PID or
     /// persisted creation token without a live RuntimeChild is not authority.
-    fn worker_client(&mut self, worker: &WorkerConfig) -> Result<Option<WorkerClient>> {
+    fn worker_client(
+        &mut self,
+        worker: &WorkerConfig,
+        budget: WorkerPhaseBudget,
+    ) -> std::result::Result<Option<WorkerClient>, WorkerPhaseError> {
         let Some(child) = self.children.get_mut(&worker.component_id) else {
             return Ok(None);
         };
@@ -172,7 +410,9 @@ impl Supervisor {
             peer,
         )?
         .with_timeout(Duration::from_millis(worker.timeout_ms))?;
-        WorkerClient::new(config, self.worker_boot_id.clone()).map(Some)
+        WorkerClient::new(config, self.worker_boot_id.clone())
+            .map(|client| Some(client.with_deadline(budget.deadline())))
+            .map_err(WorkerPhaseError::from_client_error)
     }
 
     fn ensure_worker_control(
@@ -181,7 +421,7 @@ impl Supervisor {
         worker_boot_id: &str,
         desired_mode: DesiredMode,
         now_ms: u64,
-    ) -> Result<WorkerControlWitness> {
+    ) -> std::result::Result<WorkerControlWitness, WorkerPhaseError> {
         let mode = worker_mode(desired_mode);
         if let Some(current) = self.store.current_worker_control()?
             && current.watchdog_boot_id == self.worker_boot_id
@@ -199,9 +439,9 @@ impl Supervisor {
                 })
             })?;
         if sequence > MAX_ATTEMPT_NUMBER {
-            return Err(WatchdogError::Conflict(
+            return Err(WorkerPhaseError::Fatal(WatchdogError::Conflict(
                 "worker control sequence exceeds the wire bound".to_owned(),
-            ));
+            )));
         }
         let binding: &WorkerBinding = client.config().binding();
         let scope = ControlScope {
@@ -211,7 +451,67 @@ impl Supervisor {
             mode,
             mode_sequence: sequence,
         };
-        client.set_control_mode_and_persist(&mut self.store, worker_boot_id, scope, now_ms)
+        let response = client.set_control_mode_phase(worker_boot_id, scope)?;
+        if response.status != ControlStatus::Accepted {
+            return Err(WorkerPhaseError::Unavailable(WatchdogError::Conflict(
+                "worker rejected the requested control mode".to_owned(),
+            )));
+        }
+        let control = WorkerControlWitness {
+            deployment_id: response.scope.deployment_id,
+            worker_owner_id: response.scope.worker_owner_id,
+            worker_profile_digest: response.scope.worker_profile_digest,
+            watchdog_boot_id: self.worker_boot_id.clone(),
+            worker_boot_id: worker_boot_id.to_owned(),
+            mode: storage_worker_mode(response.scope.mode),
+            mode_sequence: response.scope.mode_sequence,
+        };
+        self.store
+            .set_worker_control_at(&control, now_ms)
+            .map_err(Into::into)
+    }
+
+    fn defer_worker_error(
+        &mut self,
+        phase: &str,
+        error: WorkerPhaseError,
+        now_ms: u64,
+        pre_phase: bool,
+        report: &mut super::ReconcileReport,
+    ) -> Result<()> {
+        match error {
+            WorkerPhaseError::Unavailable(error) => {
+                if pre_phase {
+                    self.worker_phase_pre_failed = true;
+                }
+                // This edge-triggered audit is the only durable effect of a
+                // transport outage; no stop/unknown/claim state is changed
+                // and the next pass may retry the same exact IDs. Keep one
+                // bounded report entry for the current loop so health is
+                // honestly blocked without making a stop intent unfinishable.
+                if self.worker_deferred_phases.insert(phase.to_owned()) {
+                    self.store.audit(
+                        "worker_phase_deferred",
+                        &format!("{phase}: {error}"),
+                        now_ms,
+                    )?;
+                }
+                let marker = format!("worker phase {phase}:");
+                if !report
+                    .errors
+                    .iter()
+                    .any(|existing| existing.starts_with(&marker))
+                {
+                    report.errors.push(format!("{marker} {error}"));
+                }
+                Ok(())
+            }
+            WorkerPhaseError::Fatal(error) => Err(error),
+        }
+    }
+
+    fn worker_phase_succeeded(&mut self, phase: &str) {
+        self.worker_deferred_phases.remove(phase);
     }
 }
 
