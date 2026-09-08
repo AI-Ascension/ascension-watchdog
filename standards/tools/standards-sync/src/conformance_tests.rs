@@ -225,9 +225,21 @@ fn sync_is_pinned_repeatable_and_conflicts_do_not_partially_copy() -> TestResult
         repository: "AI-Ascension/.github".to_owned(),
         profile_id: "org-governance".to_owned(),
         owner: "ORG".to_owned(),
-        source_commit: commit,
+        source_commit: commit.clone(),
         ..Cli::default()
     };
+    // A syntactically valid 40-hex tree/blob must not count as a source commit.
+    for reference in [
+        format!("{commit}^{{tree}}"),
+        format!("{commit}:standards/BASELINE.md"),
+    ] {
+        let object = git_output(&source.0, &["rev-parse".to_owned(), reference])?;
+        args.source_commit = String::from_utf8(object)?.trim().to_owned();
+        assert!(sync_bundle(&args).is_err());
+        assert!(!target.0.join("standards").exists());
+        assert!(!target.0.join("standards.lock.json").exists());
+    }
+    args.source_commit = commit;
     sync_bundle(&args)?;
     validate_root(&target.0, Some(FIXTURE_AS_OF))?;
     let profile_path = target.0.join("standards-profile.toml");

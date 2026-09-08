@@ -36,7 +36,7 @@ repositories:
     repository_id: 1354378018
     node_id: R_kgDOULorIg
     default_branch: main
-    baseline_commit: 33ea48f3b549f08e19db80d8c68c1438fa12a60a
+    baseline_commit: d10c4460694d7372d95104d7b665e4e08133d500
     owner: GW
     profile_id: rust-service
     adoption: prepared
@@ -46,7 +46,7 @@ repositories:
     repository_id: 1354378057
     node_id: R_kgDOULorSQ
     default_branch: main
-    baseline_commit: eb89ab251665f263c2fe3e6b735eeae3d3e40c83
+    baseline_commit: 3739c0852bacdb1d377a5bf69c2262ffefb6cbee
     owner: MCP
     profile_id: rust-service
     adoption: prepared
@@ -56,7 +56,7 @@ repositories:
     repository_id: 1354378100
     node_id: R_kgDOULordA
     default_branch: main
-    baseline_commit: cb17b6c15262ce9356f1e85fd475af997aedc445
+    baseline_commit: b0cc4d72b3c5eaf386acafa2c288f70ca938555f
     owner: HARNESS
     profile_id: rust-service
     adoption: prepared
@@ -66,7 +66,7 @@ repositories:
     repository_id: 1354378136
     node_id: R_kgDOULormA
     default_branch: main
-    baseline_commit: 8874b0951289fd943c7e14dea36557fa24c401d1
+    baseline_commit: 6d7fb8591d3d4a4be5a7e4cfb055e81c86a2fc6d
     owner: PROTO
     profile_id: rust-pure
     adoption: prepared
@@ -76,7 +76,7 @@ repositories:
     repository_id: 1354466045
     node_id: R_kgDOULuC_Q
     default_branch: main
-    baseline_commit: d8fb867dede3ec1cde424d7f6f6f56e49dc21227
+    baseline_commit: 4ac61423777a481696d4ceb7b6c717e6166073b6
     owner: ORG
     profile_id: org-governance
     adoption: ready
@@ -86,7 +86,7 @@ repositories:
     repository_id: 1354473981
     node_id: R_kgDOULuh_Q
     default_branch: main
-    baseline_commit: e81dd4e9ff2f8e5f8ffafc8b1a489d1e1cc7ef9f
+    baseline_commit: 79269774bd6d0b7dbf2792607b39da0764adfede
     owner: ORG
     profile_id: web-static
     adoption: prepared
@@ -96,7 +96,7 @@ repositories:
     repository_id: 1357224960
     node_id: R_kgDOUOWcAA
     default_branch: main
-    baseline_commit: b25880376d3a3334c77f58637267db93581c4c77
+    baseline_commit: 28a48590afb75b07590e1b78ea47dae08f5c3ade
     owner: ORG
     profile_id: operations
     adoption: prepared
