@@ -39,7 +39,7 @@ fn bootstrap_schema_validates_owner_fixtures_and_rejects_structural_mutations()
             ),
             ("/component_id", json!("..")),
             ("/expected_peer/pid", json!(0)),
-            ("/expected_peer/pid", json!(4294967296_u64)),
+            ("/expected_peer/pid", json!(4_294_967_296_u64)),
             ("/expected_peer/executable", json!("relative.exe")),
             ("/expected_peer/creation_token", json!("01")),
             ("/expected_peer/executable_sha256", json!("A".repeat(64))),
