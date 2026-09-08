@@ -9,6 +9,7 @@
 #![cfg(windows)]
 
 use crate::PlatformError;
+use crate::protected_payload::{ProtectedPayload, ProtectedPayloadError};
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
@@ -871,16 +872,8 @@ fn read_protected_file_handle(
     file: &OwnedHandle,
     max_bytes: usize,
 ) -> Result<Vec<u8>, PlatformError> {
-    let mut bytes = Vec::with_capacity(max_bytes.min(16 * 1024));
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let remaining = max_bytes.saturating_add(1).saturating_sub(bytes.len());
-        if remaining == 0 {
-            return Err(PlatformError::Invalid(
-                "protected payload file exceeds the payload bound".to_owned(),
-            ));
-        }
-        let count = u32::try_from(remaining.min(buffer.len()))
+    let payload = ProtectedPayload::read_with(max_bytes, |buffer| {
+        let count = u32::try_from(buffer.len())
             .map_err(|_| PlatformError::Invalid("payload read size overflow".to_owned()))?;
         let mut read = 0_u32;
         let ok = unsafe {
@@ -900,19 +893,20 @@ fn read_protected_file_handle(
                 "payload read count exceeds requested buffer".to_owned(),
             ));
         }
-        if read == 0 {
-            break;
+        usize::try_from(read)
+            .map_err(|_| PlatformError::Invalid("payload read count overflow".to_owned()))
+    })
+    .map_err(|error| match error {
+        ProtectedPayloadError::Invalid(message) => PlatformError::Invalid(message.to_owned()),
+        ProtectedPayloadError::Oversized => {
+            PlatformError::Invalid("protected payload file exceeds the payload bound".to_owned())
         }
-        let read = usize::try_from(read)
-            .map_err(|_| PlatformError::Invalid("payload read count overflow".to_owned()))?;
-        bytes.extend_from_slice(&buffer[..read]);
-        if bytes.len() > max_bytes {
-            return Err(PlatformError::Invalid(
-                "protected payload file exceeds the payload bound".to_owned(),
-            ));
-        }
-    }
-    Ok(bytes)
+        ProtectedPayloadError::Source(error) => error,
+        ProtectedPayloadError::Allocation => PlatformError::Invalid(
+            "protected payload allocation failed within the payload bound".to_owned(),
+        ),
+    })?;
+    Ok(payload.into_vec())
 }
 
 #[allow(clippy::too_many_lines)]

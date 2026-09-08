@@ -18,6 +18,8 @@ pub use contract::{
 
 #[cfg(windows)]
 mod admin_pipe;
+#[cfg(any(windows, test))]
+mod protected_payload;
 #[cfg(windows)]
 pub use admin_pipe::{
     AdminPipeClient, AdminPipePeer, AdminPipeServer, MAX_ADMIN_PIPE_FRAME,
