@@ -8,7 +8,9 @@
 #![cfg(target_os = "linux")]
 
 use ascension_watchdog::WatchdogError;
-use ascension_watchdog::admin::{AdminResult, ReplyStatus};
+use ascension_watchdog::admin::{
+    AdminClient, AdminClientConfig, AdminResult, Capability, ReplyStatus,
+};
 use ascension_watchdog::config::{AdminConfig, WatchdogConfig};
 use ascension_watchdog::storage::{SingletonLock, Store, now_unix_ms};
 use serde_json::json;
@@ -23,6 +25,8 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const READINESS_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
 const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_CLI_OUTPUT_BYTES: usize = 256 * 1024;
 
@@ -42,7 +46,7 @@ fn actual_daemon_and_cli_processes_submit_complete_reopen_replay_and_deny_read()
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let mut daemon = DaemonGuard::start(&fixture.config_path, fixture.endpoint.clone())?;
+    let mut daemon = fixture.start_daemon()?;
     let payload = fixture.temp.path().join("submission.json");
     std::fs::write(&payload, br#"{"episode":7,"private":"owner-local"}"#)?;
     std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o600))?;
@@ -103,7 +107,7 @@ fn actual_daemon_and_cli_processes_submit_complete_reopen_replay_and_deny_read()
         )?;
     }
 
-    let mut reopened = DaemonGuard::start(&fixture.config_path, fixture.endpoint.clone())?;
+    let mut reopened = fixture.start_daemon()?;
     let replay_after_reopen_output =
         ProcessFixture::submit(&fixture.config_path, "process-job", &payload)?;
     assert!(
@@ -281,6 +285,10 @@ impl ProcessFixture {
         command
     }
 
+    fn start_daemon(&self) -> Result<DaemonGuard, Box<dyn std::error::Error>> {
+        DaemonGuard::start(&self.config_path, self.endpoint.clone(), &self.read_token)
+    }
+
     fn submit(
         config_path: &Path,
         key: &str,
@@ -327,7 +335,11 @@ struct DaemonGuard {
 }
 
 impl DaemonGuard {
-    fn start(config_path: &Path, endpoint: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    fn start(
+        config_path: &Path,
+        endpoint: PathBuf,
+        read_token: &Path,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let child = Command::new(env!("CARGO_BIN_EXE_watchdog"))
             .args(["daemon", "--config"])
             .arg(config_path)
@@ -338,24 +350,67 @@ impl DaemonGuard {
             child: Some(child),
             endpoint,
         };
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + DAEMON_STARTUP_TIMEOUT;
+        let client_config =
+            AdminClientConfig::new(guard.endpoint.clone(), read_token, Capability::Read)?;
+        let mut attempt = 0_u64;
+        let mut last_status_error = None;
         loop {
+            guard.ensure_child_running()?;
             if guard.endpoint_metadata_is_socket() {
-                return Ok(guard);
-            }
-            if let Some(status) = guard
-                .child
-                .as_mut()
-                .and_then(|child| child.try_wait().transpose())
-                .transpose()?
-            {
-                return Err(format!("watchdog daemon exited during startup: {status}").into());
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let timeout = remaining.min(READINESS_REQUEST_TIMEOUT);
+                if timeout < Duration::from_millis(1) {
+                    break;
+                }
+                let client = AdminClient::new(client_config.clone().with_timeout(timeout)?)?;
+                let key = format!("daemon-startup-readiness-{attempt}");
+                attempt = attempt.saturating_add(1);
+                match client.status(&key) {
+                    Ok(response)
+                        if response.status == ReplyStatus::Ok
+                            && response.health.ready
+                            && matches!(
+                                response.result.as_ref(),
+                                Some(AdminResult::Status(status)) if status.health.ready
+                            ) =>
+                    {
+                        guard.ensure_child_running()?;
+                        return Ok(guard);
+                    }
+                    Ok(response) => {
+                        last_status_error = Some(format!(
+                            "status was {:?} with readiness {:?}",
+                            response.status, response.health.ready
+                        ));
+                    }
+                    Err(error) => last_status_error = Some(error.to_string()),
+                }
             }
             if Instant::now() >= deadline {
-                return Err("watchdog daemon did not bind its admin endpoint".into());
+                break;
             }
             thread::sleep(Duration::from_millis(10));
         }
+        let detail = last_status_error
+            .map(|error| format!("; last status attempt: {error}"))
+            .unwrap_or_default();
+        Err(format!("watchdog daemon did not become ready before startup deadline{detail}").into())
+    }
+
+    fn ensure_child_running(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(status) = self
+            .child
+            .as_mut()
+            .and_then(|child| child.try_wait().transpose())
+            .transpose()?
+        {
+            return Err(format!("watchdog daemon exited during startup: {status}").into());
+        }
+        Ok(())
     }
 
     fn endpoint_metadata_is_socket(&self) -> bool {
