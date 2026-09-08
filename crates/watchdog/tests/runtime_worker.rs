@@ -11,6 +11,7 @@ use ascension_watchdog::Supervisor;
 use ascension_watchdog::config::{
     ComponentConfig, DesiredMode, WatchdogConfig, WorkerConfig, hex_digest,
 };
+#[cfg(unix)]
 use ascension_watchdog::service::ServiceLoop;
 use ascension_watchdog::storage::{
     Store, WORKER_HANDOFF_OPERATION, WORKER_HANDOFF_PAYLOAD_DIGEST, WORKER_HANDOFF_SCHEMA_DIGEST,
@@ -37,7 +38,7 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
             ComponentConfig {
                 id: "harness".to_owned(),
                 executable: executable.clone(),
-                args: vec!["30".to_owned()],
+                args: synthetic_arguments(),
                 cwd: None,
                 environment: BTreeMap::new(),
                 executable_sha256: Some(executable_digest.clone()),
@@ -46,7 +47,7 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
             ComponentConfig {
                 id: "gateway".to_owned(),
                 executable,
-                args: vec!["30".to_owned()],
+                args: synthetic_arguments(),
                 cwd: None,
                 environment: BTreeMap::new(),
                 executable_sha256: Some(executable_digest),
@@ -55,7 +56,11 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
         ],
         worker: Some(WorkerConfig {
             component_id: "harness".to_owned(),
-            endpoint: root.join("worker.sock"),
+            endpoint: if cfg!(windows) {
+                PathBuf::from(format!(r"\\.\pipe\ascension-worker-{}", Uuid::new_v4()))
+            } else {
+                root.join("worker.sock")
+            },
             credential_path: root.join("worker.token"),
             allowed_peer_sid: None,
             worker_profile_digest: "b".repeat(64),
@@ -70,10 +75,27 @@ fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
 
 fn synthetic_executable() -> PathBuf {
     if cfg!(target_os = "windows") {
-        PathBuf::from(r"C:\Windows\System32\timeout.exe")
+        std::env::current_exe().expect("test executable")
     } else {
         PathBuf::from("/bin/sleep")
     }
+}
+
+fn synthetic_arguments() -> Vec<String> {
+    if cfg!(windows) {
+        ["--exact", "runtime_worker_fixture_child", "--ignored"]
+            .map(str::to_owned)
+            .to_vec()
+    } else {
+        vec!["30".to_owned()]
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "owned subprocess fixture; invoked only by lifecycle tests"]
+fn runtime_worker_fixture_child() {
+    std::thread::sleep(std::time::Duration::from_secs(30));
 }
 
 fn seed_pending_handoff(config: &WatchdogConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -119,12 +141,13 @@ fn seed_pending_handoff(config: &WatchdogConfig) -> Result<(), Box<dyn std::erro
 #[test]
 fn supervisor_boot_identity_is_one_fresh_uuid_per_instance()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = tempfile::tempdir().map_err(|error| format!("create test directory: {error}"))?;
     let config = WatchdogConfig {
         database: temp.path().join("watchdog.sqlite"),
         ..WatchdogConfig::default()
     };
-    let mut first = Supervisor::initialize(config.clone())?;
+    let mut first = Supervisor::initialize(config.clone())
+        .map_err(|error| format!("initialize first supervisor: {error}"))?;
     let first_boot = first.worker_boot_id().to_owned();
     assert_eq!(Uuid::parse_str(&first_boot)?.get_version_num(), 4);
     first.reconcile_once(1_000)?;
@@ -176,8 +199,9 @@ fn draining_keeps_pending_handoff_barrier_without_live_child()
     Ok(())
 }
 
+#[cfg(unix)]
 fn assert_missing_worker_endpoint_does_not_abort_stop(
-    config: WatchdogConfig,
+    config: &WatchdogConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     std::fs::set_permissions(
@@ -217,10 +241,11 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
             .errors
             .iter()
             .any(|error| error.starts_with("worker phase probe:")),
-        "missing endpoint must be visible as a bounded worker-phase diagnostic"
+        "missing endpoint must be visible as a bounded worker-phase diagnostic: {:?}",
+        first.errors
     );
     assert!(service.health().snapshot().ready);
-    let running = Store::open_read_only(&database, &config)?;
+    let running = Store::open_read_only(&database, config)?;
     for id in ["harness", "gateway"] {
         let record = running.component(id)?.expect("component record");
         assert_eq!(
@@ -233,7 +258,7 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
     // Change only the durable operator intent through a second owner-local
     // SQLite connection. The ServiceLoop remains the sole process-cleanup
     // authority and must still run its stop path after the worker outage.
-    let mut intent = Store::open(&database, &config)?;
+    let mut intent = Store::open(&database, config)?;
     intent.set_desired_mode_at(DesiredMode::Stopped, 1_001)?;
     drop(intent);
     let stopped = service.reconcile(1_002)?;
@@ -244,7 +269,7 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
     let settled = service.reconcile(1_003)?;
     assert!(settled.started.is_empty());
     assert!(settled.errors.is_empty());
-    let read_only = Store::open_read_only(&database, &config)?;
+    let read_only = Store::open_read_only(&database, config)?;
     for id in ["harness", "gateway"] {
         let record = read_only.component(id)?.expect("component record");
         assert_eq!(
@@ -257,11 +282,40 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn missing_worker_endpoint_does_not_abort_loop_or_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
-    assert_missing_worker_endpoint_does_not_abort_stop(worker_config(&temp, DesiredMode::Running))
+    assert_missing_worker_endpoint_does_not_abort_stop(&worker_config(&temp, DesiredMode::Running))
+}
+
+#[cfg(windows)]
+#[test]
+fn worker_identity_failure_cannot_veto_durable_operator_stop()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let config = worker_config(&temp, DesiredMode::Running);
+    let mut supervisor = Supervisor::initialize(config.clone())?;
+    assert!(matches!(
+        supervisor.reconcile_once(1000),
+        Err(ascension_watchdog::WatchdogError::IdentityMismatch(_))
+    ));
+    assert!(supervisor.child_identity("harness").is_some());
+    let mut store = Store::open(&config.database, &config)?;
+    store.set_desired_mode_at(DesiredMode::Stopped, 1001)?;
+    drop(store);
+    let report = supervisor.reconcile_once(1002)?;
+    assert!(report.started.is_empty());
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.starts_with("worker identity blocked during stop:"))
+    );
+    assert!(supervisor.child_identity("harness").is_none());
+    assert!(supervisor.child_identity("gateway").is_none());
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -278,7 +332,7 @@ fn unready_worker_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
         .clone();
     let listener = std::os::unix::net::UnixListener::bind(&endpoint)?;
     drop(listener);
-    assert_missing_worker_endpoint_does_not_abort_stop(config)
+    assert_missing_worker_endpoint_does_not_abort_stop(&config)
 }
 
 #[test]

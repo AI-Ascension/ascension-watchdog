@@ -115,6 +115,8 @@ pub(crate) enum RuntimeObservation {
 pub(crate) struct RuntimeProcessManager {
     synthetic: bool,
     backend: Option<NativeBackend>,
+    #[cfg(test)]
+    injected_stop_result: Option<std::result::Result<RuntimeStopOutcome, String>>,
 }
 
 #[derive(Debug)]
@@ -136,7 +138,20 @@ impl RuntimeProcessManager {
         Self {
             synthetic: config.allow_synthetic_children,
             backend: None,
+            #[cfg(test)]
+            injected_stop_result: None,
         }
+    }
+
+    /// Inject one bounded stop result for the in-crate supervision regression
+    /// tests. This hook is compiled out of production binaries so the runtime
+    /// process manager always delegates to the real owned-child authority.
+    #[cfg(test)]
+    pub(crate) fn inject_stop_result(
+        &mut self,
+        result: std::result::Result<RuntimeStopOutcome, String>,
+    ) {
+        self.injected_stop_result = Some(result);
     }
 
     pub(crate) fn ensure_ready(&mut self, config: &WatchdogConfig) -> Result<()> {
@@ -343,6 +358,10 @@ impl RuntimeProcessManager {
     }
 
     pub(crate) fn stop(&mut self, child: &mut RuntimeChild) -> Result<RuntimeStopOutcome> {
+        #[cfg(test)]
+        if let Some(result) = self.injected_stop_result.take() {
+            return result.map_err(WatchdogError::Conflict);
+        }
         match &mut child.handle {
             RuntimeChildHandle::Synthetic(process) => {
                 let status = process.terminate(NATIVE_GRACEFUL_TIMEOUT)?;
@@ -370,6 +389,18 @@ impl RuntimeProcessManager {
 }
 
 impl RuntimeChild {
+    #[cfg(windows)]
+    pub(crate) fn worker_account_identity(&self) -> Result<(String, u32)> {
+        match &self.handle {
+            RuntimeChildHandle::Native(NativeChild::Windows(process)) => process
+                .account_identity()
+                .map_err(|error| WatchdogError::IdentityMismatch(error.to_string())),
+            RuntimeChildHandle::Synthetic(_) => Err(WatchdogError::IdentityMismatch(
+                "Windows worker requires a native owned account identity".to_owned(),
+            )),
+        }
+    }
+
     pub(crate) fn identity(&self) -> &ProcessIdentity {
         &self.portable_identity
     }
@@ -1583,6 +1614,7 @@ mod tests {
         let mut manager = RuntimeProcessManager {
             synthetic: false,
             backend: None,
+            injected_stop_result: None,
         };
 
         let result = manager.recover_intent(&WatchdogConfig::default(), &intent);
@@ -1646,6 +1678,7 @@ mod tests {
         let mut manager = RuntimeProcessManager {
             synthetic: false,
             backend: None,
+            injected_stop_result: None,
         };
         let native = NativeChild::Linux(OwnedProcess {
             identity: PlatformProcessIdentity {
