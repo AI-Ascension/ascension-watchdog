@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "launch_nonce": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "watchdog_boot_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "component_id": "harness",
+  "expected_peer": {
+    "platform": "windows",
+    "pid": 42,
+    "creation_token": "134000000000000000",
+    "executable": "C:\\Ascension\\watchdog.exe",
+    "executable_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "session_id": 0,
+    "sid": "S-1-5-18"
+  }
+}
