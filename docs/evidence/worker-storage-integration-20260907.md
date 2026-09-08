@@ -50,3 +50,26 @@ traverse the daemon-to-harness execution/receipt/acknowledgment path.
 
 No service installation, provider/game launch, reboot, release activation,
 remote publication or full recovery soak is established by this integration.
+
+## Later candidate status
+
+Commit `47b3c29930ec8c1bcd203dd3c4ecba3126ebab6b` adds bounded, read-only discovery
+of the oldest pending handoff and current control evidence after restart. Tests
+retain prepared/uncertain records, return completed receipts awaiting ACK, exclude
+acknowledged records, and rediscover the original tuple after store reopen while
+stopped. The 15 worker-storage tests and full workspace Clippy passed.
+
+Its subsequent full workspace test run failed three `adversarial_core` synthetic
+process cleanup tests; a serial repeat reproduced all three failures. The exact
+test processes were observed as zombies adopted by the WSL relay. This does not
+prove that the cause is exclusively environmental: diagnosis remains open. The
+later full-workspace gate is failed, not superseded by the earlier passing run.
+
+Commit `52f0d6bc552e9bbea7173a4be757ae496ddac84f` integrates the independently
+reviewed configuration candidate `043b0bd1db9de17164e136f6d59244e3935b0d37`.
+The reviewer accepted its pure configuration scope, with eight Linux tests,
+formatting, package Clippy and Windows GNU test compilation passing. Root had
+also executed the eight configuration tests natively on Windows before this
+integration. None of these checks prove IPC authentication or service behavior.
+Client activation must validate actual protected file/endpoint identities;
+lexical path separation alone is insufficient against aliases.
