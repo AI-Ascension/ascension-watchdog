@@ -55,6 +55,20 @@ fn absent_worker_remains_disabled_and_does_not_change_serialized_defaults() {
     assert!(encoded.get("worker").is_none());
     let decoded: WatchdogConfig = serde_json::from_value(encoded).unwrap();
     assert!(decoded.worker.is_none());
+    assert!(decoded.worker_binding().unwrap().is_none());
+}
+
+#[test]
+fn worker_binding_uses_harness_digest_and_configured_component_owner() {
+    let config = configured();
+    let binding = config.worker_binding().unwrap().unwrap();
+    assert_eq!(binding.worker_owner_id, "harness");
+    assert_eq!(binding.deployment_id, config.deployment_id);
+    assert_eq!(binding.config_digest, "d".repeat(64));
+    assert_ne!(binding.config_digest, config.digest().unwrap());
+    let mut invalid = config;
+    invalid.worker.as_mut().unwrap().component_id = "caller-selected".into();
+    assert!(invalid.worker_binding().is_err());
 }
 
 #[test]

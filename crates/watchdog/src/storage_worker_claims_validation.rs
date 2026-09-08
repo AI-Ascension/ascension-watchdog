@@ -37,13 +37,10 @@ pub(super) fn validate_binding(conn: &Connection, binding: &WorkerBinding) -> Re
             "worker binding schema digest is not the frozen worker-handoff-v1 schema".to_owned(),
         ));
     }
-    let stored_config = metadata_from_conn(conn, "config_digest")?
-        .ok_or_else(|| WatchdogError::Conflict("config_digest metadata is missing".to_owned()))?;
-    if binding.config_digest != stored_config {
-        return Err(WatchdogError::Conflict(
-            "worker binding config digest differs from the owner-local configuration".to_owned(),
-        ));
-    }
+    // This digest binds the approved harness worker configuration, not the
+    // enclosing watchdog configuration in owner-local metadata. The latter
+    // includes the worker digest and therefore cannot equal it by construction.
+    // configure_worker_binding_at preserves the exact immutable historical row.
     Ok(())
 }
 

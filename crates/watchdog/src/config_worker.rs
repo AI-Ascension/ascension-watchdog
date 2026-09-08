@@ -31,6 +31,26 @@ impl std::fmt::Debug for WorkerConfig {
     }
 }
 
+impl WatchdogConfig {
+    /// Derive the worker's immutable binding from approved configuration only.
+    /// The wire config digest belongs to the harness; `digest()` separately
+    /// identifies the enclosing watchdog configuration.
+    pub fn worker_binding(&self) -> Result<Option<crate::storage::WorkerBinding>> {
+        self.validate()?;
+        Ok(self
+            .worker
+            .as_ref()
+            .map(|worker| crate::storage::WorkerBinding {
+                deployment_id: self.deployment_id.clone(),
+                worker_owner_id: worker.component_id.clone(),
+                worker_profile_digest: worker.worker_profile_digest.clone(),
+                release_digest: worker.release_digest.clone(),
+                config_digest: worker.worker_config_digest.clone(),
+                schema_digest: worker.schema_digest.clone(),
+            }))
+    }
+}
+
 impl WorkerConfig {
     /// Validation performs no filesystem, IPC, store or process operations.
     pub fn validate(&self, config: &WatchdogConfig) -> Result<()> {

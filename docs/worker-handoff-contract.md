@@ -51,6 +51,12 @@ worker_profile_digest, run_id, episode_id, trajectory_id, payload_digest)`.
 `job_id` and `attempt_id` are exactly the watchdog's existing durable IDs.
 `attempt_number` is its checked positive attempt sequence. `worker_owner_id` is
 the stable configured component identity, not a caller-selected worker string.
+For watchdog configuration this is the validated `worker.component_id` (`harness`).
+The wire `config_digest` is `worker.worker_config_digest`, the approved harness
+worker/runtime configuration digest. It is not the enclosing watchdog
+configuration digest stored in watchdog metadata. Existing worker binding rows
+remain exact and immutable: a changed digest requires explicit owner migration,
+never acceptance of either digest or silent conversion of historical rows.
 The watchdog allocates distinct random UUIDv4 run/episode/trajectory identities
 and persists the entire tuple with the claim before any worker IPC. Each tuple
 has a separately allocated random UUIDv4 `handoff_id`; it is **not** a concatenated
