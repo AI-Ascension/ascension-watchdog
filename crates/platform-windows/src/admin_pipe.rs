@@ -673,6 +673,22 @@ impl AdminPipeClient {
         Ok(session_id)
     }
 
+    /// Require the connected server's account/session to match trusted policy.
+    pub fn verify_server_account(
+        &self,
+        expected_sid: &str,
+        expected_session: u32,
+    ) -> Result<(), PlatformError> {
+        validate_sid(expected_sid)?;
+        if self.server_user_sid()? != expected_sid || self.server_session_id()? != expected_session
+        {
+            return Err(PlatformError::IdentityMismatch(
+                "worker server account or session does not match launch policy".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Exact image path observed while the server process handle was held.
     #[must_use]
     pub fn server_executable(&self) -> &Path {
@@ -1464,7 +1480,7 @@ fn current_user_sid() -> Result<String, PlatformError> {
     token_user_sid(token.raw())
 }
 
-fn process_user_sid(process: HANDLE) -> Result<String, PlatformError> {
+pub(crate) fn process_user_sid(process: HANDLE) -> Result<String, PlatformError> {
     let mut token = null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 {
         return Err(last_error("OpenProcessToken(pipe peer)"));
@@ -1761,7 +1777,17 @@ mod ancestor_lock_tests {
         let expected_digest = crate::native::executable_sha256(&executable)?;
         assert_eq!(client.worker_image_digest(), Some(expected_digest.as_str()));
         assert_eq!(client.server_user_sid()?, current_user_sid()?);
-        let _observed_session = client.server_session_id()?;
+        let observed_session = client.server_session_id()?;
+        let owner = current_user_sid()?;
+        client.verify_server_account(&owner, observed_session)?;
+        assert!(matches!(
+            client.verify_server_account("S-1-0-0", observed_session),
+            Err(PlatformError::IdentityMismatch(_))
+        ));
+        assert!(matches!(
+            client.verify_server_account(&owner, observed_session ^ 1),
+            Err(PlatformError::IdentityMismatch(_))
+        ));
         client.write_frame(b"request", Duration::from_secs(2))?;
         let mut received = [0_u8; 11];
         read_exact_poll(

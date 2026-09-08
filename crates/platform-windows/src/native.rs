@@ -318,6 +318,14 @@ impl std::fmt::Debug for JobOwnedProcess {
 }
 
 impl JobOwnedProcess {
+    /// Capture account/session policy from this supervisor-owned process handle.
+    /// This is not an observation of an untrusted IPC endpoint.
+    pub fn account_identity(&self) -> Result<(String, u32), PlatformError> {
+        self.verify_identity()?;
+        let account = crate::admin_pipe::process_user_sid(self.process.raw())?;
+        Ok((account, self.identity.session_id))
+    }
+
     /// Return the immutable creation identity.
     #[must_use]
     pub fn identity(&self) -> &ProcessIdentity {

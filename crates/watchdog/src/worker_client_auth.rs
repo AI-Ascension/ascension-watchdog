@@ -45,6 +45,8 @@ pub struct WorkerPeerIdentity {
     /// OS process-start token (Linux `/proc/<pid>/stat` start time or the
     /// Windows creation timestamp rendered as decimal text).
     pub(crate) creation_token: String,
+    #[cfg(windows)]
+    pub(crate) windows_account: Option<(String, u32)>,
     #[cfg(target_os = "linux")]
     configured_image_identity: LinuxFileIdentity,
 }
@@ -63,6 +65,8 @@ impl std::fmt::Debug for WorkerPeerIdentity {
         {
             debug.field("configured_image_identity", &self.configured_image_identity);
         }
+        #[cfg(windows)]
+        debug.field("windows_account", &"<protected-policy>");
         debug.finish()
     }
 }
@@ -82,6 +86,8 @@ impl WorkerPeerIdentity {
             gid: None,
             pid,
             creation_token: creation_token.into(),
+            #[cfg(windows)]
+            windows_account: None,
             #[cfg(target_os = "linux")]
             configured_image_identity: LinuxFileIdentity {
                 device: 0,
@@ -124,6 +130,28 @@ impl WorkerPeerIdentity {
         self.uid = Some(uid);
         self.gid = Some(gid);
         self.validate()
+    }
+
+    /// Bind the expected Windows account and session from trusted launch policy.
+    /// Never populate these values from the connected peer being authenticated.
+    #[cfg(windows)]
+    pub fn with_windows_account(mut self, sid: String, session_id: u32) -> Result<Self> {
+        let executable = self.executable.to_str().ok_or_else(|| {
+            WatchdogError::IdentityMismatch("worker image path is not Unicode".to_owned())
+        })?;
+        crate::worker_bootstrap::WindowsPeer::new(
+            self.pid,
+            self.creation_token.clone(),
+            executable,
+            self.executable_sha256.clone(),
+            session_id,
+            sid.clone(),
+        )
+        .map_err(|_| {
+            WatchdogError::IdentityMismatch("invalid Windows worker account policy".to_owned())
+        })?;
+        self.windows_account = Some((sid, session_id));
+        Ok(self)
     }
 
     /// Configured executable path, exposed for platform adapter wiring only.

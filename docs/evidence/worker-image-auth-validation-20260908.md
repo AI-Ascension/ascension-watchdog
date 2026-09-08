@@ -108,3 +108,22 @@ transport now share the validator. The review did not establish harness endpoint
 compatibility, and its broader authentication acceptance remains on hold. This
 checkpoint commit is a partial repair, not completion of Windows authentication
 or any release gate.
+
+## SID/session enforcement candidate after the checkpoint
+
+The worker client now requires explicit trusted account/session policy before
+connecting on Windows and compares observed SID/session before credential access.
+The builder reuses the existing strict Windows bootstrap identity validation.
+Native tests `missing_windows_account_rejects_before_endpoint_or_credential_access`
+and `windows_account_policy_is_explicit_validated_and_redacted` passed (2 tests,
+exit 0). These establish missing-policy rejection and constructor/redaction
+behavior, not a successful authenticated cross-process exchange. Trusted
+supervisor policy propagation and native mismatched-peer coverage remain open.
+
+Follow-up native coverage now exercises `verify_server_account` on a real
+same-process byte-pipe connection: matching account/session succeeds; null SID
+and a different session each return identity mismatch. The exchange test passed
+(exit 0, 1.25s), and final Windows-target strict Clippy passed. Worker transport
+calls this same check before credential access. This closes the local mismatch
+predicate test gap, but does not prove distinct-process credential non-disclosure
+or trusted supervisor policy propagation.

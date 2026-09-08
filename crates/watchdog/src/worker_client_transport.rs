@@ -20,6 +20,41 @@ use zeroize::Zeroizing;
 /// frame.  The token is never logged, persisted, or included in a response.
 const AUTH_MAGIC: &[u8] = b"ascension-worker-auth-v1\0";
 
+#[cfg(all(test, windows))]
+#[test]
+fn missing_windows_account_rejects_before_endpoint_or_credential_access() -> Result<()> {
+    let peer = WorkerPeerIdentity::new(r"C:\not-opened\worker.exe", "a".repeat(64), 1, "1")?;
+    let result = exchange_named_pipe(
+        Path::new("not-a-pipe"),
+        &peer,
+        Path::new("not-a-credential"),
+        b"unused",
+        Instant::now(),
+    );
+    assert!(
+        matches!(result, Err(WatchdogError::IdentityMismatch(message))
+        if message.contains("requires trusted SID and session"))
+    );
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_account_policy_is_explicit_validated_and_redacted() -> Result<()> {
+    let peer = WorkerPeerIdentity::new(r"C:\not-opened\worker.exe", "a".repeat(64), 1, "1")?;
+    for sid in ["", "S-1-", "S-1-5-01", "S-1-5-not-numeric"] {
+        assert!(
+            peer.clone()
+                .with_windows_account(sid.to_owned(), 0)
+                .is_err()
+        );
+    }
+    let policy = peer.with_windows_account("S-1-5-18".to_owned(), 0)?;
+    assert_eq!(policy.windows_account, Some(("S-1-5-18".to_owned(), 0)));
+    assert!(!format!("{policy:?}").contains("S-1-5-18"));
+    Ok(())
+}
+
 pub(crate) fn exchange(
     endpoint: &Path,
     credential_path: &Path,
@@ -370,6 +405,12 @@ fn exchange_named_pipe(
 ) -> Result<Frame> {
     use ascension_platform_windows::AdminPipeClient;
 
+    let (account_policy, expected_session) = peer.windows_account.as_ref().ok_or_else(|| {
+        WatchdogError::IdentityMismatch(
+            "Windows worker requires trusted SID and session policy".to_owned(),
+        )
+    })?;
+
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(WatchdogError::Timeout(
@@ -401,6 +442,8 @@ fn exchange_named_pipe(
     }
     // The credential is opened only after the exact named-pipe server PID,
     // creation timestamp, image path, and image digest have been checked.
+    pipe.verify_server_account(account_policy, *expected_session)
+        .map_err(|error| WatchdogError::IdentityMismatch(error.to_string()))?;
     let credential = read_credential(credential_path, deadline)?;
     let mut auth_body = Zeroizing::new(Vec::with_capacity(
         AUTH_MAGIC.len() + credential.bytes().len(),
