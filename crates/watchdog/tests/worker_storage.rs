@@ -771,6 +771,76 @@ fn current_recovery_completes_old_handoff_after_reopen_without_redispatch_or_res
 }
 
 #[test]
+fn historical_terminal_recovery_rejects_every_changed_control_field_without_writes() {
+    with_reopened_replaced_pending_handoff(|store, _, old, current, _, tuple| {
+        let receipt = WorkerTerminalReceipt {
+            status: WorkerTerminalStatus::Completed,
+            checkpoint_sequence: 2,
+            terminal_ref: "current-control-only".to_owned(),
+            result_digest: "e".repeat(64),
+        };
+        let mut invalid = vec![old.clone()];
+        for field in 0..7 {
+            let mut witness = current.clone();
+            match field {
+                0 => witness.deployment_id.push('x'),
+                1 => witness.worker_owner_id.push('x'),
+                2 => witness.worker_profile_digest = "f".repeat(64),
+                3 => witness.watchdog_boot_id = old.watchdog_boot_id.clone(),
+                4 => witness.worker_boot_id = old.worker_boot_id.clone(),
+                5 => witness.mode = WorkerControlMode::Running,
+                _ => witness.mode_sequence += 1,
+            }
+            invalid.push(witness);
+        }
+        let before = store.worker_handoff(&tuple.handoff_id).expect("pending");
+        for witness in &invalid {
+            assert!(
+                store
+                    .complete_worker_handoff_with_recovery_at(tuple, &receipt, witness, 8,)
+                    .is_err()
+            );
+            assert_eq!(
+                store.worker_handoff(&tuple.handoff_id).expect("unchanged"),
+                before
+            );
+        }
+        let terminal = store
+            .complete_worker_handoff_with_recovery_at(tuple, &receipt, current, 8)
+            .expect("current completion");
+        let before_ack = store.worker_handoff(&tuple.handoff_id).expect("terminal");
+        for witness in &invalid {
+            assert!(
+                store
+                    .acknowledge_worker_handoff_with_recovery_at(
+                        tuple,
+                        &terminal.terminal_digest,
+                        witness,
+                        9,
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                store.worker_handoff(&tuple.handoff_id).expect("unchanged"),
+                before_ack
+            );
+        }
+        store
+            .acknowledge_worker_handoff_with_recovery_at(
+                tuple,
+                &terminal.terminal_digest,
+                current,
+                9,
+            )
+            .expect("current acknowledgment");
+        assert_eq!(
+            store.desired_mode().expect("stop remains"),
+            DesiredMode::Stopped
+        );
+    });
+}
+
+#[test]
 fn stop_after_dispatch_blocks_new_claims_but_allows_same_incarnation_settlement() {
     let temp = tempfile::tempdir().expect("tempdir");
     let (mut store, config) = fixture(&temp);

@@ -23,9 +23,29 @@ because it requires approved writable delegation and a real helper entrypoint.
 This is not a native service test pass. This workspace has no `repo-policy`
 package; no such checker pass is claimed.
 
+Historical completion after worker/watchdog boot replacement is integrated as
+`59672d416037fbb24390f75290e6994c4c7f3767` from independently authored candidate
+`4fa327e3b80b29e5fc225708888c882d0bd7ba97`. Root inspected the production changes
+and reran all four commands above successfully on source `0d5c399d02014eec69a9c4157bc540a1435baf29`.
+The worker storage suite passed all 14 tests. The library suite passed 76 tests
+with two native-environment gates ignored. These are component checks, including
+store close/reopen, not worker-process replacement or authenticated IPC evidence.
+
+The original parallel library run exposed a test-only descriptor-number reuse
+race. Commit `0d5c399` changes the cleanup assertion to compare the original
+device/inode identity: a closed descriptor may be immediately reused by another
+test. No production launcher behavior changed.
+
+A subsequent root-authored negative regression changes each current control
+witness field independently and tries the fully stale witness. Both completion
+and acknowledgment reject these witnesses while preserving the handoff record;
+the valid current witness still finishes accounting without clearing stop.
+`cargo test --locked -p ascension-watchdog --test worker_storage` passed all 15
+tests after this test-only addition. Full workspace/all-target/all-feature Clippy
+with warnings denied also passed again; formatting was applied and checked.
+
 The production Supervisor still needs its dedicated worker client/configuration
-wiring. Historical completion after worker/watchdog boot replacement remains a
-separate repair. Storage APIs and passing storage tests do not prove that jobs
+wiring. Storage APIs and passing storage tests do not prove that jobs
 traverse the daemon-to-harness execution/receipt/acknowledgment path.
 
 No service installation, provider/game launch, reboot, release activation,
