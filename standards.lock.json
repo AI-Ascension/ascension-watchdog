@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "4d774b58c4e18f7090df5a3799703f52940c998d",
-    "bundle_digest": "sha256:0a444bf2404d384aabcef34fee47b7ab73b2735c3210b6852ea4a23f1f60f4f0",
+    "commit": "eed9921b5c5d5c41380655bded84f9e2d0aab599",
+    "bundle_digest": "sha256:cef00213abf2113a99137411e3eee67dc4ee0dd57c3044b2cd4514854161091d",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "eb42680479af76e173a29426b2d97ec97fc7e7eee8bc4bbcb464efbfa6e029f7",
+  "profile_sha256": "83dd00bee69668249266a57281a7b0575bb967b0ec2e63fa7c05fd6179dd16c9",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -93,7 +93,7 @@
     },
     {
       "path": "standards/repositories.yaml",
-      "sha256": "09c7cad87e5f779750080e3785020818ea1b1b65b40dcf5014982243fb822135"
+      "sha256": "92a3fcb513f54dba74ba10a8894274e4a53232d7d6274b277837fb90f94c69cf"
     },
     {
       "path": "standards/rules.yaml",
