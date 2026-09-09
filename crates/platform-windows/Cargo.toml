@@ -7,6 +7,11 @@ edition = "2024"
 rust-version = "1.97"
 license = "MIT"
 
+[features]
+# Test-only knob for the native worker-pipe saturation regression.  It is not
+# enabled by default and has no effect on ordinary production launches.
+native-worker-test-hooks = []
+
 [lib]
 path = "src/lib.rs"
 
