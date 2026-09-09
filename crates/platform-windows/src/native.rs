@@ -18,7 +18,7 @@ use std::mem::{align_of, size_of};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -186,6 +186,7 @@ pub struct JobOwnedProcess {
     integrity: Arc<IntegrityGuards>,
     graceful_timeout: Duration,
     force_timeout: Duration,
+    live_identity_verified: AtomicBool,
 }
 
 /// Classification for failures after Windows has created a child in the
@@ -460,6 +461,7 @@ impl JobOwnedProcess {
             integrity,
             graceful_timeout,
             force_timeout,
+            live_identity_verified: AtomicBool::new(false),
         };
         owner.verify_identity()?;
         if owner.is_running()? {
@@ -478,26 +480,12 @@ impl JobOwnedProcess {
     }
 
     fn verify_identity(&self) -> Result<(), PlatformError> {
+        let live_identity_verified = self.live_identity_verified.load(Ordering::Acquire);
         let pid = unsafe { GetProcessId(self.process.raw()) };
         if pid == 0 || pid != self.identity.pid {
             return Err(PlatformError::IdentityMismatch(
                 "process handle PID differs from recorded identity".to_owned(),
             ));
-        }
-        // A terminated process handle is still the exact launch authority,
-        // but Windows may reject image-path queries after teardown with a
-        // transient ERROR_GEN_FAILURE. The signaled handle is conclusive and
-        // must be observed before querying identity fields that no longer
-        // exist in the kernel process object.
-        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
-        if process_state == WAIT_OBJECT_0 {
-            return Ok(());
-        }
-        if process_state != WAIT_TIMEOUT {
-            return Err(PlatformError::Win32 {
-                operation: "WaitForSingleObject(identity)".to_owned(),
-                code: process_state,
-            });
         }
         let creation = process_creation_time(self.process.raw())?;
         if creation != self.identity.creation_time_100ns {
@@ -505,31 +493,77 @@ impl JobOwnedProcess {
                 "process creation time differs from recorded identity".to_owned(),
             ));
         }
-        let executable = query_image_path(self.process.raw())?;
-        if normalize_path(&executable) != normalize_path(&self.identity.executable) {
-            return Err(PlatformError::IdentityMismatch(
-                "process executable differs from recorded identity".to_owned(),
-            ));
-        }
         if self.identity.executable_sha256 != self.integrity.digest() {
             return Err(PlatformError::IdentityMismatch(
                 "recorded executable digest differs from the immutable release handle".to_owned(),
             ));
         }
-        if process_session(pid)? != self.identity.session_id {
+        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
+        if process_state != WAIT_TIMEOUT && process_state != WAIT_OBJECT_0 {
+            return Err(PlatformError::Win32 {
+                operation: "WaitForSingleObject(identity)".to_owned(),
+                code: process_state,
+            });
+        }
+        if process_state == WAIT_OBJECT_0 && live_identity_verified {
+            // Windows may no longer expose image metadata after a process has
+            // terminated. The held process handle's PID and creation token,
+            // plus the retained immutable release digest, still bind this
+            // terminal owner after its full live identity was verified; no
+            // live-process identity is being authorized.
+            return Ok(());
+        }
+        if process_state == WAIT_OBJECT_0 {
             return Err(PlatformError::IdentityMismatch(
-                "process session differs from recorded identity".to_owned(),
+                "terminal process has no previously verified live ownership witness".to_owned(),
             ));
         }
-        let mut member = 0;
-        let ok = unsafe { IsProcessInJob(self.process.raw(), self.job.raw(), &raw mut member) };
-        if ok == 0 {
-            return Err(last_error("IsProcessInJob(identity)"));
-        }
-        if member == 0 {
+        let executable = match query_image_path(self.process.raw()) {
+            Ok(executable) => executable,
+            Err(error) => {
+                // A process can exit between the first wait and the image
+                // query. Treat that narrow race like the already-terminal
+                // case, but preserve every query error while it remains live.
+                if live_identity_verified
+                    && unsafe { WaitForSingleObject(self.process.raw(), 0) } == WAIT_OBJECT_0
+                {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
+        if normalize_path(&executable) != normalize_path(&self.identity.executable) {
             return Err(PlatformError::IdentityMismatch(
-                "process is not a member of its named Job Object".to_owned(),
+                "process executable differs from recorded identity".to_owned(),
             ));
+        }
+        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
+        if process_state == WAIT_TIMEOUT {
+            if process_session(pid)? != self.identity.session_id {
+                return Err(PlatformError::IdentityMismatch(
+                    "process session differs from recorded identity".to_owned(),
+                ));
+            }
+            let mut member = 0;
+            let ok = unsafe { IsProcessInJob(self.process.raw(), self.job.raw(), &raw mut member) };
+            if ok == 0 {
+                return Err(last_error("IsProcessInJob(identity)"));
+            }
+            if member == 0 {
+                return Err(PlatformError::IdentityMismatch(
+                    "process is not a member of its named Job Object".to_owned(),
+                ));
+            }
+            self.live_identity_verified.store(true, Ordering::Release);
+        } else if process_state == WAIT_OBJECT_0 && !live_identity_verified {
+            return Err(PlatformError::IdentityMismatch(
+                "process exited before its live ownership witness was verified".to_owned(),
+            ));
+        } else if process_state != WAIT_OBJECT_0 {
+            return Err(PlatformError::Win32 {
+                operation: "WaitForSingleObject(identity)".to_owned(),
+                code: process_state,
+            });
         }
         Ok(())
     }
@@ -834,6 +868,7 @@ impl WindowsProcessLauncher {
             integrity: Arc::clone(&integrity),
             graceful_timeout: Duration::from_millis(u64::from(specification.graceful_timeout_ms)),
             force_timeout: Duration::from_millis(u64::from(specification.force_timeout_ms)),
+            live_identity_verified: AtomicBool::new(false),
         };
         if let Err(error) = owner.verify_identity() {
             return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
