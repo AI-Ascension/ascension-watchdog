@@ -821,14 +821,44 @@ fn read_frame(
 #[cfg(all(test, windows))]
 mod windows_config_tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn protected_auth_files() -> Result<(tempfile::TempDir, PathBuf, PathBuf)> {
+        let directory = tempfile::tempdir()?;
+        let read_token = directory.path().join("read.token");
+        let admin_token = directory.path().join("admin.token");
+        fs::write(&read_token, b"read-test-token")?;
+        fs::write(&admin_token, b"admin-test-token")?;
+        let status = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r"
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+foreach ($path in @($env:ASCENSION_TEST_READ_TOKEN, $env:ASCENSION_TEST_ADMIN_TOKEN)) {
+    $acl = [System.Security.AccessControl.FileSecurity]::new()
+    $acl.SetOwner($sid)
+    $acl.SetAccessRuleProtection($true, $false)
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+    $acl.AddAccessRule($rule)
+    Set-Acl -LiteralPath $path -AclObject $acl
+}
+                ",
+            ])
+            .env("ASCENSION_TEST_READ_TOKEN", &read_token)
+            .env("ASCENSION_TEST_ADMIN_TOKEN", &admin_token)
+            .status()?;
+        assert!(status.success(), "protect synthetic auth fixtures");
+        Ok((directory, read_token, admin_token))
+    }
 
     #[test]
     fn exclusive_endpoint_defaults_to_one_worker_and_rejects_more() -> Result<()> {
-        let executable = std::env::current_exe()?;
-        let auth = AuthReferences::for_test(
-            executable.with_file_name("read.token"),
-            executable.with_file_name("admin.token"),
-        );
+        let (_directory, read_token, admin_token) = protected_auth_files()?;
+        let auth = AuthReferences::new(read_token, admin_token)?;
         let config = AdminServerConfig::new(r"\\.\pipe\ascension-watchdog-config-test", auth)?;
         assert_eq!(config.worker_count, 1);
         assert!(config.with_worker_count(2).is_err());

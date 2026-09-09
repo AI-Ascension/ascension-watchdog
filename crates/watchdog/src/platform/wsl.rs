@@ -1,6 +1,6 @@
 //! Explicit WSL invocation validation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_DISTRO_BYTES: usize = 128;
 const MAX_ARGUMENTS: usize = 32;
@@ -29,12 +29,7 @@ impl WslInvocation {
                 "distribution is invalid".to_owned(),
             ));
         }
-        // This path is interpreted inside the Linux WSL distribution, not by
-        // the Windows host.  `Path::is_absolute` would reject `/opt/...` on
-        // Windows because it applies Windows drive/UNC rules, so validate the
-        // WSL path grammar textually at this boundary.
-        let executable = self.executable.to_string_lossy();
-        if executable.is_empty() || !executable.starts_with('/') {
+        if !is_absolute_guest_path(&self.executable) {
             return Err(WslInvocationError::Invalid(
                 "WSL executable must be an absolute path".to_owned(),
             ));
@@ -69,6 +64,19 @@ impl WslInvocation {
         arguments.extend(self.arguments.clone());
         Ok(arguments)
     }
+}
+
+/// WSL receives a Linux guest path even when this crate is compiled for the
+/// Windows host.  `Path::is_absolute` follows the host's path grammar, so it
+/// would reject a valid `/opt/...` guest path on Windows.
+fn is_absolute_guest_path(path: &Path) -> bool {
+    let Some(path) = path.to_str() else {
+        return false;
+    };
+    !path.is_empty()
+        && path.len() <= MAX_ARGUMENT_BYTES
+        && path.starts_with('/')
+        && !path.contains('\0')
 }
 
 fn valid_loopback_endpoint(value: &str) -> bool {
@@ -143,5 +151,19 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid.expected_endpoint = "127.0.0.1:not-a-port".to_owned();
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn guest_executable_path_uses_posix_absolute_semantics() {
+        let mut invocation = invocation();
+        assert!(invocation.validate().is_ok());
+        invocation.executable = PathBuf::from("opt/ascension/bin/gateway");
+        assert!(invocation.validate().is_err());
+        invocation.executable = PathBuf::from(r"C:\ascension\bin\gateway.exe");
+        assert!(invocation.validate().is_err());
+        invocation.executable = PathBuf::from(format!("/{}", "x".repeat(MAX_ARGUMENT_BYTES)));
+        assert!(invocation.validate().is_err());
+        invocation.executable = PathBuf::from("/opt/ascension/bin/gateway\0");
+        assert!(invocation.validate().is_err());
     }
 }
