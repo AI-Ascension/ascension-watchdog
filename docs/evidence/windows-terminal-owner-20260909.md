@@ -12,7 +12,7 @@ owner. A fresh reopened owner starts without the witness and must validate image
 while live; persisted PID/birth fields cannot manufacture it. A fresh terminal
 reopen, including exit during the final session/membership checks, is rejected
 without a prior local witness. This intentionally favors closed admission over
-adoption when terminal metadata cannot prove complete ownership. Live image-query errors
+adoption when terminal metadata cannot prove complete ownership. Initial unwitnessed image-query errors
 still fail closed. Cleanup assertions wait on their exact retained handles within
 the existing five-second test bound after Job termination.
 
@@ -58,3 +58,31 @@ a zero-delay process exit and the forged terminal reopen regression. Exact hashe
 - Synthetic suite: `6767c9891ce61796a53d7e134b7c69d631431428b131ae9d8731eaf3c645a8ba`
 - Worker suite: `f33b20c87843cfc7d23b0424abf05b579cdca1af6f9797bcc72b6fc2e7c04383`
 - Synthetic fixture: `edb4d615091ac47bf8809703e155c07d2b7422595ea4d932a48c62f9dcef52fc`
+
+## Verified-owner metadata teardown window
+
+Hosted run `34310012164` at `6d862658a58e417237819e58a9b75fec98d238fe`
+failed `native_leader_exit_still_forces_job_descendant_cleanup` with
+`QueryFullProcessImageNameW` error 5. Source inspection identifies a remaining
+race: image metadata may become unavailable during termination before the held
+process handle reports signaled. The observed error is not treated as a generic
+termination signal.
+
+The private per-owner live witness now avoids subsequent image/session/Job
+re-query after every held-handle PID, creation token, immutable digest and wait
+status check. Its acquire/release semantics and initial full verification remain
+unchanged. A fresh reopen has no witness and cannot inherit it from serialized
+identity. No blanket access-denied fallback, PID-only authority, or containment
+relaxation was introduced. Independent source review found no blocker.
+
+Root rebuilt the integrated native synthetic target and copied it with its
+checked-in fixture, verifying both SHA-256 values. All seven tests passed in
+three consecutive native runs: 9.52, 9.14 and 9.15 seconds, each exit 0. This
+includes leader/descendant cleanup and the unchanged rejection of a forged
+terminal reopen without a local live witness.
+
+- Test artifact: `3129def84f296d81ec2fddcc499d227f4a2721a7d005769a5fd9ecb0f47838e6`
+- Synthetic fixture: `1964c7d896469b76614e0208044649abe6a881d2e550178c6eec18c6ddc7437f`
+
+These are native subprocess results, not installed-service or reboot evidence.
+The new exact-revision hosted run remains required.
