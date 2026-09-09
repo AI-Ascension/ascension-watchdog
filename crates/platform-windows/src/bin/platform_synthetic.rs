@@ -6,6 +6,7 @@
 
 use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::thread;
@@ -43,8 +44,38 @@ fn main() {
             thread::sleep(Duration::from_millis(delay));
             process::exit(41);
         }
+        "--read-worker-bootstrap" => {
+            let Some(marker) = arguments.next().map(PathBuf::from) else {
+                process::exit(2);
+            };
+            read_worker_bootstrap(&marker);
+        }
         _ => process::exit(2),
     }
+}
+
+fn read_worker_bootstrap(marker: &Path) -> ! {
+    const MAGIC: &[u8; 8] = b"ASC-WB01";
+    const PREFIX_BYTES: usize = 12;
+    const MAX_PAYLOAD_BYTES: usize = 16_384;
+    let mut stdin = io::stdin().lock();
+    let mut prefix = [0_u8; PREFIX_BYTES];
+    if stdin.read_exact(&mut prefix).is_err() || &prefix[..MAGIC.len()] != MAGIC {
+        process::exit(2);
+    }
+    let payload_length = usize::try_from(u32::from_be_bytes([
+        prefix[8], prefix[9], prefix[10], prefix[11],
+    ]))
+    .unwrap_or(0);
+    if payload_length == 0 || payload_length > MAX_PAYLOAD_BYTES {
+        process::exit(2);
+    }
+    let mut frame = prefix.to_vec();
+    frame.resize(PREFIX_BYTES + payload_length, 0);
+    if stdin.read_exact(&mut frame[PREFIX_BYTES..]).is_err() || fs::write(marker, &frame).is_err() {
+        process::exit(2);
+    }
+    loop_forever();
 }
 
 fn spawn_descendant(marker: &Path) -> ! {

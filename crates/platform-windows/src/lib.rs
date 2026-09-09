@@ -10,11 +10,13 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod contract;
+mod native_worker_bootstrap;
 pub mod service_command;
 pub use contract::{
     ComponentKind, LifecycleCapability, LifecycleFrame, LifecycleRequest, PlatformError,
     ProcessIdentity, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,
 };
+pub use native_worker_bootstrap::{MAX_WORKER_BOOTSTRAP_FRAME_BYTES, WorkerBootstrapLaunch};
 
 #[cfg(windows)]
 mod admin_pipe;
@@ -30,9 +32,10 @@ pub use admin_pipe::{
 mod native;
 #[cfg(windows)]
 pub use native::{
-    ActiveSession, JobOwnedProcess, NamedPipePeer, NamedPipeServer, ScmHealthChecker,
-    ServiceBinding, ServiceInstallPlan, ServiceRuntime, StopOutcome, StoppedServiceWitness,
-    WindowsLaunchError, WindowsProcessLauncher, executable_sha256, select_active_session,
+    ActiveSession, CurrentControllerIdentity, JobOwnedProcess, NamedPipePeer, NamedPipeServer,
+    ScmHealthChecker, ServiceBinding, ServiceInstallPlan, ServiceRuntime, StopOutcome,
+    StoppedServiceWitness, WindowsLaunchError, WindowsProcessLauncher, capture_current_controller,
+    executable_sha256, select_active_session,
 };
 
 /// Report whether this crate's native Windows boundary is available.
