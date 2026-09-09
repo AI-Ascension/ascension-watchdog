@@ -12,7 +12,7 @@ records `model: gpt-5.6-luna`, `effort: max`. A child self-description is not us
 as model verification. Deeper routing and enforced leaf restrictions remain
 unverified pending the nested tasks and policy inspection.
 
-The existing global configuration has a 50-thread ceiling and `max_depth = 3`.
+The initial global configuration observation had a 50-thread ceiling and `max_depth = 3`.
 This does not establish what the current runtime enforces. Root allocates a
 stricter aggregate 12-descendant budget; reservations include managers. No global
 configuration or approval/sandbox policy was changed.
@@ -46,13 +46,25 @@ independent implementation and verification continued without an alternate clien
 
 The project configuration and explicit lead/coordinator/leaf role files were
 parsed by the installed client. A fresh `config/read` with layers reports the
-project layer disabled because this newly created repository is not individually
-trusted. The effective diagnostic configuration therefore remains the global
+project layer disabled because this newly created repository was not individually
+trusted. That diagnostic's effective configuration therefore used the then-global
 50-thread default. No trust, hook, permission or approval setting was changed to
 force loading. Native root spawn arguments still independently establish Luna/max;
 the root registry bounds actual descendants. Custom role selection is not exposed
 by the current root spawn schema, so the leaf's `agents.enabled = false` setting
 is prepared configuration, not observed leaf-tool enforcement.
+
+On 2026-09-09, a fresh read-only probe still reported `codex-cli 0.153.4` and
+observed a global configured ceiling of 250 with `max_depth = 3`. This task did
+not make that global change. The root's project budget remains 12 descendants;
+the larger configured ceiling does not prove current-session capacity or nested
+tool availability. The earlier trust-layer diagnostic was not rerun, so its
+historical result is not asserted as current effective configuration.
+
+The 2026-09-09 replay reviewer again reported no callable collaboration/spawn
+functions in its supplied tool surface and could not create descendants. Root
+released its two reserved nested-work slots. Depth-1 Luna/max work continued;
+depth-2/3 execution and depth-4 rejection remain unverified, not waived.
 
 The original objective is preserved with a final newline added; no semantic text
 was changed. Original SHA-256:
