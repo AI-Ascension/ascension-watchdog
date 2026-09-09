@@ -154,7 +154,7 @@ fn derived_worker_endpoint_constructs_client_and_rejects_admin_namespace()
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            r#"
+            r"
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl = [System.Security.AccessControl.FileSecurity]::new()
@@ -163,7 +163,7 @@ $acl.SetAccessRuleProtection($true, $false)
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
 $acl.AddAccessRule($rule)
 Set-Acl -LiteralPath $env:ASCENSION_TEST_CREDENTIAL_PATH -AclObject $acl
-"#,
+            ",
         ])
         .env("ASCENSION_TEST_CREDENTIAL_PATH", &credential)
         .status()?;

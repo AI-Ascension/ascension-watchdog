@@ -77,8 +77,20 @@ fn policy() -> BrokerPolicy {
         arguments: Vec::new(),
         working_directory: PathBuf::from("/"),
         environment: Vec::new(),
-        target_uid: 1001,
-        target_gid: 1001,
+        // Keep the synthetic launch identity separate from the invoking test
+        // peer on hosted runners, where the runner itself may be UID/GID
+        // 1001.  This is a fixture-only identity; the fake backend never
+        // attempts an account lookup or privilege transition.
+        target_uid: if rustix::process::getuid().as_raw() == 65_534 {
+            65_533
+        } else {
+            65_534
+        },
+        target_gid: if rustix::process::getgid().as_raw() == 65_534 {
+            65_533
+        } else {
+            65_534
+        },
         capabilities: CapabilityPolicy {
             bounding_set: 0,
             ambient_set: 0,
