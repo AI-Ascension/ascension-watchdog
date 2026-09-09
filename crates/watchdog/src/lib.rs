@@ -29,6 +29,7 @@ pub mod policy;
 pub mod preflight;
 pub mod process;
 pub mod release;
+pub mod release_staged;
 pub mod runtime;
 pub mod service;
 pub mod storage;
