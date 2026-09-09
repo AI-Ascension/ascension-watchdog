@@ -164,6 +164,31 @@ socket-policy change. An intermediate experiment that also disabled send
 buffering exceeded the outer deadline and its exact owned test process was
 stopped; that experiment is not passing evidence.
 
+### Absolute nonblocking write deadline, 2026-09-09
+
+Hosted run `34312926666` at `7ef567d2e492f4ccdd5e2bb58e67367ae57af4a2`
+still failed the fixture writer test. Production fixture writes now use
+nonblocking, bounded 16 KiB chunks with one absolute two-second deadline,
+including interrupted and temporarily unwritable iterations. The original
+blocking mode is restored on both success and failure. A new expired-deadline
+regression requires zero bytes to be sent even when the socket is writable.
+
+The test retains its unread accepted peer and bounds accept and prefill. Windows
+uses zero receive buffering but a positive 4 KiB send buffer, with 1 KiB prefill
+chunks. A diagnostic variant with zero send buffering hung inside prefill and
+was stopped through its held process handle; it is not passing evidence.
+
+After removing temporary diagnostic output, root cross-built the exact test
+image, verified its staged SHA-256, and ran it natively on Windows with a
+12-second outer deadline and bounded exact-process cleanup. All nine tests
+passed in 2.01 seconds, exit 0; the outer deadline did not fire. Image SHA-256:
+`c99e57839729839652e36e511148a48667075fc242aef536bb8e71ad771ee72c`.
+The Linux library tests also passed all nine tests. Root's integrated format,
+warnings-as-errors Clippy, and workspace/all-target/all-feature locked tests
+exited 0; explicitly gated native tests remained ignored in the default matrix.
+A fresh hosted exact-commit Windows workspace run is still required. This does
+not establish Windows service installation or harness/gameplay compatibility.
+
 Root's final native artifact passed all eight tests in five consecutive runs:
 2.21, 2.27, 2.29, 2.23 and 2.29 seconds, each exit 0. Artifact SHA-256:
 `a7ad4502e22057e126ec0fea41d763e1d575a513bbc53545dc03958a5a59389e`.
