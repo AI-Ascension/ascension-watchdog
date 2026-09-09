@@ -53,3 +53,25 @@ and diff checks passed. Root verified and executed that artifact natively:
 `--test-threads=1 --nocapture` under a 55-second outer deadline. SHA-256:
 `ee9ec5a5af3b71840f3f630c1870b3768faddd4839d0906500e855cbe7eb609b`.
 The hosted Windows lane still requires an exact-revision rerun.
+
+## Preflight byte-bound fixture
+
+CI run `34302144585` at `fe77c9e129b9a47f001f341f98a2e88c9db22e96` passed
+the repaired Windows library suite, then failed the oversized-configuration
+preflight assertion. Two fixture assumptions required correction: Windows
+configuration reads require protected owner ACLs, and the Windows bounded-reader
+error differs from the Unix reader's text. Applying ACLs alone still failed in
+root's native run; that intermediate artifact is not a passing result.
+
+The corrected test requires the platform-specific size rejection at 65,537
+bytes, then rewrites the same protected file to 65,536 whitespace bytes and
+requires a JSON parse error. This proves the exact bound reaches parsing and
+distinguishes the oversized rejection from an unrelated ACL/path failure.
+Production reader limits and security policy are unchanged.
+
+Root's Linux `cargo test --locked -p ascension-watchdog --test preflight` passed
+all six tests. The corrected Windows test compiled and ran natively with
+`--exact oversized_configuration_is_rejected_before_parsing --nocapture`:
+one passed, four filtered out, 0.34 seconds, exit 0. SHA-256:
+`5aeea566e01ea9ac48e8c707f1bcecfe6ac83fe670f082c965b98c2646d08fc6`.
+This focused native result does not establish a full Windows workspace pass.
