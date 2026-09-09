@@ -22,11 +22,98 @@ mod release_staged_proof;
 use release_staged_proof::{
     FileIdentity, HeldArtifact, HeldDirectory, clone_directory, open_directory_child,
     open_directory_path, open_manifest, open_relative_file, platform_protection,
-    validate_directory_handle, validate_directory_identity, validate_file_handle,
+    validate_ancestor_directory_identity, validate_directory_handle, validate_directory_identity,
+    validate_file_handle,
 };
 
 const MAX_RELEASE_ID_BYTES: usize = 128;
 const MANIFEST_NAMES: [&str; 2] = ["release-manifest.json", "manifest.json"];
+
+/// The source of a catalog-owner policy.  A policy is intentionally created
+/// only from an explicit caller-supplied Unix UID; an observed filesystem UID
+/// is never promoted to activation trust.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogOwnerPolicyOrigin {
+    /// The deployment caller supplied the expected Unix UID explicitly.
+    CallerSuppliedUnixUid,
+}
+
+/// Independently approved owner input for a protected release catalog.
+///
+/// This value carries no observed filesystem state.  The caller must obtain
+/// and approve the UID through its deployment policy, then pass it to
+/// [`ProtectedReleaseCatalog::new_with_owner_policy`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CatalogOwnerPolicy {
+    expected_unix_uid: u64,
+    origin: CatalogOwnerPolicyOrigin,
+}
+
+impl CatalogOwnerPolicy {
+    /// Construct a policy from an explicitly approved Unix UID.
+    #[must_use]
+    pub const fn approved_unix_uid(expected_unix_uid: u64) -> Self {
+        Self {
+            expected_unix_uid,
+            origin: CatalogOwnerPolicyOrigin::CallerSuppliedUnixUid,
+        }
+    }
+
+    /// Return the UID supplied by the caller, before any catalog is opened.
+    #[must_use]
+    pub const fn expected_unix_uid(self) -> u64 {
+        self.expected_unix_uid
+    }
+
+    /// Return the explicit source of this policy.
+    #[must_use]
+    pub const fn origin(self) -> CatalogOwnerPolicyOrigin {
+        self.origin
+    }
+}
+
+/// Owner proof retained by a staged capability.  The existing constructor
+/// records an observed owner for inspection only.  The approved variant is
+/// minted only after the caller-supplied UID matches the catalog root and every
+/// protected release object is checked against that same UID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogOwnerProof {
+    /// Narrow inspection proof from [`ProtectedReleaseCatalog::new`].
+    ObservedCatalogOwner { observed_unix_uid: u64 },
+    /// Caller-approved owner proof from [`ProtectedReleaseCatalog::new_with_owner_policy`].
+    ApprovedCatalogOwner {
+        policy: CatalogOwnerPolicy,
+        observed_unix_uid: u64,
+    },
+}
+
+impl CatalogOwnerProof {
+    /// Whether this proof contains an independently supplied owner policy.
+    #[must_use]
+    pub const fn is_approved(self) -> bool {
+        matches!(self, Self::ApprovedCatalogOwner { .. })
+    }
+
+    /// Return the explicit policy, if this is an approved proof.
+    #[must_use]
+    pub const fn policy(self) -> Option<CatalogOwnerPolicy> {
+        match self {
+            Self::ObservedCatalogOwner { .. } => None,
+            Self::ApprovedCatalogOwner { policy, .. } => Some(policy),
+        }
+    }
+
+    /// Return the UID observed on the catalog root after opening it.
+    #[must_use]
+    pub const fn observed_unix_uid(self) -> u64 {
+        match self {
+            Self::ObservedCatalogOwner { observed_unix_uid }
+            | Self::ApprovedCatalogOwner {
+                observed_unix_uid, ..
+            } => observed_unix_uid,
+        }
+    }
+}
 
 /// The proof retained by a staged capability.  A capability is never created
 /// on platforms where no bounded protected-handle strategy is available.
@@ -49,7 +136,7 @@ impl ReleaseProtection {
     pub const fn limitations(self) -> &'static str {
         match self {
             Self::LinuxSecureDescriptors => {
-                "descriptor identity, regular-file link count, owner, and read-only mode are checked; this is not an immutable handoff because the catalog owner can still chmod and a pre-opened or privileged writer can still write through another handle, so activation must enforce its independently trusted-owner policy and consume or seal the held handles immediately after final verification; returned paths are informational and never launch authority"
+                "descriptor identity, regular-file link count, owner, and read-only mode are checked; normal above-catalog path components are retained as no-follow directories, with trusted-owner checks only when an independent owner policy is supplied; this is not an immutable handoff because the catalog owner can still chmod and a pre-opened or privileged writer can still write through another handle, so activation must require independently approved ownership and consume or seal the held handles immediately after final verification; the observed-owner constructor remains inspection-only and returned paths are informational, never launch authority"
             }
         }
     }
@@ -87,13 +174,12 @@ impl ReleaseRoleBinding {
 /// configuration input; callers select within it using only a logical release
 /// ID.  The root handle is retained so a later path replacement cannot turn a
 /// staged capability into an arbitrary directory.
-/// The catalog owner is observed, not independently authorized by this API;
-/// parent directories above the catalog are not retained. Activation needs a
-/// separate trusted-owner and ancestor policy plus a protected byte handoff.
 #[derive(Debug)]
 pub struct ProtectedReleaseCatalog {
     root: HeldDirectory,
+    ancestors: Vec<HeldDirectory>,
     protection: ReleaseProtection,
+    owner_policy: Option<CatalogOwnerPolicy>,
 }
 
 impl ProtectedReleaseCatalog {
@@ -103,19 +189,46 @@ impl ProtectedReleaseCatalog {
     /// # Errors
     /// Rejects relative/dot/traversal roots, links/reparse points, writable
     /// catalog roots, and platforms without a protected-handle implementation.
+    /// The observed owner is retained only for same-owner inspection checks;
+    /// this constructor does not mint an independently approved owner proof.
     pub fn new(root: impl AsRef<Path>) -> Result<Self, String> {
-        let root = normalized_absolute_directory(root.as_ref())?;
+        Self::open(root.as_ref(), None)
+    }
+
+    /// Open a protected release catalog using an independently approved owner
+    /// policy. The UID is supplied by the caller and is checked against the
+    /// catalog root, selected release directory, manifest, every fixed role,
+    /// and all release-relative ancestors. No observed UID is used to create
+    /// this policy.
+    ///
+    /// # Errors
+    /// Rejects malformed or indirect paths, writable/untrusted ancestors,
+    /// owner mismatches, and platforms without the Linux no-follow descriptor
+    /// proof.
+    pub fn new_with_owner_policy(
+        root: impl AsRef<Path>,
+        policy: CatalogOwnerPolicy,
+    ) -> Result<Self, String> {
+        Self::open(root.as_ref(), Some(policy))
+    }
+
+    fn open(root: &Path, owner_policy: Option<CatalogOwnerPolicy>) -> Result<Self, String> {
+        let root = normalized_absolute_directory(root)?;
         crate::release::require_real_root(&root)?;
         let protection = platform_protection()?;
-        let file = open_directory_path(&root)?;
-        let identity = validate_directory_handle(&file, &root, None, "release catalog root")?;
+        let expected_owner = owner_policy.map(CatalogOwnerPolicy::expected_unix_uid);
+        let opened = open_directory_path(&root, expected_owner)?;
+        let identity =
+            validate_directory_handle(&opened.file, &root, expected_owner, "release catalog root")?;
         Ok(Self {
             root: HeldDirectory {
                 path: root,
-                file,
+                file: opened.file,
                 identity,
             },
+            ancestors: opened.ancestors,
             protection,
+            owner_policy,
         })
     }
 
@@ -131,6 +244,26 @@ impl ProtectedReleaseCatalog {
         self.protection
     }
 
+    /// Return the owner proof type retained by this catalog. `new` exposes
+    /// only an observed-owner inspection proof; `new_with_owner_policy`
+    /// exposes the caller-approved variant.
+    #[must_use]
+    pub fn owner_proof(&self) -> CatalogOwnerProof {
+        owner_proof(self.owner_policy, self.root.identity.owner)
+    }
+
+    fn verify_held(&self) -> Result<(), String> {
+        for ancestor in &self.ancestors {
+            validate_ancestor_directory_identity(
+                ancestor,
+                self.owner_policy.map(CatalogOwnerPolicy::expected_unix_uid),
+                "release catalog ancestor",
+            )?;
+        }
+        let expected_owner = self.owner_policy.map(CatalogOwnerPolicy::expected_unix_uid);
+        validate_directory_identity(&self.root, expected_owner, "release catalog root")
+    }
+
     /// Validate and stage one release selected by its logical ID.
     ///
     /// `approved` and `current_schemas` are independent owner inputs.  The
@@ -140,7 +273,7 @@ impl ProtectedReleaseCatalog {
     ///
     /// # Errors
     /// Rejects malformed IDs/manifests, ambiguous or indirect manifest paths,
-    /// writable/replaced files or ancestors within the catalog, incomplete role sets, mixed
+    /// writable/replaced files or ancestors, incomplete role sets, mixed
     /// compatibility identities, and component paths or hashes that do not
     /// equal the selected release bindings.
     pub fn stage(
@@ -157,12 +290,18 @@ impl ProtectedReleaseCatalog {
             .validate()
             .map_err(|error| format!("deployment configuration is invalid: {error}"))?;
 
+        self.verify_held()?;
+        let expected_owner = self
+            .owner_policy
+            .map(CatalogOwnerPolicy::expected_unix_uid)
+            .or(Some(self.root.identity.owner));
+
         let release_path = self.root.path.join(release_id);
         let release_file = open_directory_child(&self.root.file, &release_path, release_id)?;
         let release_identity = validate_directory_handle(
             &release_file,
             &release_path,
-            Some(self.root.identity.owner),
+            expected_owner,
             "selected release directory",
         )?;
         let release = HeldDirectory {
@@ -178,7 +317,7 @@ impl ProtectedReleaseCatalog {
             &manifest_path,
             None,
             None,
-            Some(self.root.identity.owner),
+            expected_owner,
             "release manifest",
         )?;
         let manifest_bytes = read_bounded(&manifest_file, MAX_MANIFEST_BYTES)?;
@@ -217,7 +356,7 @@ impl ProtectedReleaseCatalog {
                 &absolute_path,
                 Some(artifact.bytes),
                 Some(&artifact.sha256),
-                Some(self.root.identity.owner),
+                expected_owner,
                 "release artifact",
             )?;
             #[cfg(unix)]
@@ -258,7 +397,13 @@ impl ProtectedReleaseCatalog {
             held_directories,
             held_artifacts,
             catalog_root: clone_directory(&self.root)?,
+            catalog_ancestors: self
+                .ancestors
+                .iter()
+                .map(clone_directory)
+                .collect::<Result<Vec<_>, _>>()?,
             protection: self.protection,
+            owner_proof: owner_proof(self.owner_policy, self.root.identity.owner),
         };
         capability.verify_held()?;
         Ok(capability)
@@ -280,7 +425,9 @@ pub struct ReleaseStagedCapability {
     held_directories: Vec<HeldDirectory>,
     held_artifacts: Vec<HeldArtifact>,
     catalog_root: HeldDirectory,
+    catalog_ancestors: Vec<HeldDirectory>,
     protection: ReleaseProtection,
+    owner_proof: CatalogOwnerProof,
 }
 
 impl ReleaseStagedCapability {
@@ -295,6 +442,28 @@ impl ReleaseStagedCapability {
         config: &WatchdogConfig,
     ) -> Result<Self, String> {
         let catalog = ProtectedReleaseCatalog::new(root)?;
+        catalog.stage(
+            release_id,
+            expected_manifest_sha256,
+            approved,
+            current_schemas,
+            config,
+        )
+    }
+
+    /// Convenience constructor for a caller-approved owner policy.  The
+    /// expected Unix UID is supplied before the catalog is opened; this method
+    /// does not infer trust from the observed filesystem owner.
+    pub fn stage_with_owner_policy(
+        root: impl AsRef<Path>,
+        policy: CatalogOwnerPolicy,
+        release_id: &str,
+        expected_manifest_sha256: &str,
+        approved: &Compatibility,
+        current_schemas: &[(&str, u32)],
+        config: &WatchdogConfig,
+    ) -> Result<Self, String> {
+        let catalog = ProtectedReleaseCatalog::new_with_owner_policy(root, policy)?;
         catalog.stage(
             release_id,
             expected_manifest_sha256,
@@ -373,29 +542,43 @@ impl ReleaseStagedCapability {
         self.protection
     }
 
+    /// Return the owner-policy proof retained by this capability.  An
+    /// `ObservedCatalogOwner` proof is inspection-only; only an
+    /// `ApprovedCatalogOwner` proof carries the caller-supplied policy.
+    #[must_use]
+    pub const fn owner_proof(&self) -> CatalogOwnerProof {
+        self.owner_proof
+    }
+
     /// Recheck every retained directory, manifest handle, role handle, exact
     /// digest and path identity.  This is the handoff gate for a future
     /// selector/runtime adapter; this module itself performs no handoff.
     pub fn verify_held(&self) -> Result<(), String> {
-        validate_directory_identity(&self.catalog_root, None, "release catalog root")?;
-        validate_directory_identity(
-            &self.release,
-            Some(self.catalog_root.identity.owner),
-            "selected release directory",
-        )?;
-        for directory in &self.held_directories {
-            validate_directory_identity(
-                directory,
-                Some(self.catalog_root.identity.owner),
-                "release artifact ancestor",
+        for ancestor in &self.catalog_ancestors {
+            validate_ancestor_directory_identity(
+                ancestor,
+                self.owner_proof
+                    .policy()
+                    .map(CatalogOwnerPolicy::expected_unix_uid),
+                "release catalog ancestor",
             )?;
+        }
+        let expected_owner = self
+            .owner_proof
+            .policy()
+            .map(CatalogOwnerPolicy::expected_unix_uid)
+            .or(Some(self.owner_proof.observed_unix_uid()));
+        validate_directory_identity(&self.catalog_root, expected_owner, "release catalog root")?;
+        validate_directory_identity(&self.release, expected_owner, "selected release directory")?;
+        for directory in &self.held_directories {
+            validate_directory_identity(directory, expected_owner, "release artifact ancestor")?;
         }
         let manifest_identity = validate_file_handle(
             &self.manifest_file,
             &self.manifest_path,
             None,
             None,
-            Some(self.catalog_root.identity.owner),
+            expected_owner,
             "release manifest",
         )?;
         if manifest_identity != self.manifest_identity {
@@ -411,7 +594,7 @@ impl ReleaseStagedCapability {
                 &artifact.binding.absolute_path,
                 Some(artifact.binding.bytes),
                 Some(&artifact.binding.sha256),
-                Some(self.catalog_root.identity.owner),
+                expected_owner,
                 "release artifact",
             )?;
             if identity != artifact.identity {
@@ -422,6 +605,16 @@ impl ReleaseStagedCapability {
             }
         }
         Ok(())
+    }
+}
+
+fn owner_proof(policy: Option<CatalogOwnerPolicy>, observed_unix_uid: u64) -> CatalogOwnerProof {
+    match policy {
+        Some(policy) => CatalogOwnerProof::ApprovedCatalogOwner {
+            policy,
+            observed_unix_uid,
+        },
+        None => CatalogOwnerProof::ObservedCatalogOwner { observed_unix_uid },
     }
 }
 

@@ -4,8 +4,14 @@ use ascension_watchdog::release::{
 };
 #[cfg(target_os = "linux")]
 use ascension_watchdog::release_staged::ReleaseProtection;
+#[cfg(target_os = "linux")]
+use ascension_watchdog::release_staged::{
+    CatalogOwnerPolicy, CatalogOwnerPolicyOrigin, CatalogOwnerProof,
+};
 use ascension_watchdog::release_staged::{ProtectedReleaseCatalog, ReleaseStagedCapability};
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -158,6 +164,100 @@ fn stage(fixture: &Fixture) -> Result<ReleaseStagedCapability, String> {
 }
 
 #[cfg(target_os = "linux")]
+fn approved_owner(fixture: &Fixture) -> CatalogOwnerPolicy {
+    use std::os::unix::fs::MetadataExt;
+    CatalogOwnerPolicy::approved_unix_uid(
+        fs::metadata(&fixture.catalog_root)
+            .expect("catalog metadata")
+            .uid()
+            .into(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn caller_approved_catalog_owner_policy_is_recorded_and_bound() {
+    let fixture = fixture();
+    let policy = approved_owner(&fixture);
+    let catalog = ProtectedReleaseCatalog::new_with_owner_policy(&fixture.catalog_root, policy)
+        .expect("approved owner catalog");
+    assert_eq!(
+        catalog.owner_proof(),
+        CatalogOwnerProof::ApprovedCatalogOwner {
+            policy,
+            observed_unix_uid: policy.expected_unix_uid(),
+        }
+    );
+    let capability = catalog
+        .stage(
+            "release-1",
+            &hex_digest(&fixture.manifest_bytes),
+            &fixture.compatibility,
+            &schemas(),
+            &fixture.config,
+        )
+        .expect("approved owner stage");
+    assert_eq!(capability.owner_proof(), catalog.owner_proof());
+    assert!(capability.owner_proof().is_approved());
+    assert_eq!(
+        capability
+            .owner_proof()
+            .policy()
+            .expect("approved policy")
+            .origin(),
+        CatalogOwnerPolicyOrigin::CallerSuppliedUnixUid
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn caller_approved_catalog_owner_policy_rejects_wrong_uid() {
+    let fixture = fixture();
+    let observed = fs::metadata(&fixture.catalog_root)
+        .expect("catalog metadata")
+        .uid();
+    let wrong = u64::from(observed == 0);
+    let error = ProtectedReleaseCatalog::new_with_owner_policy(
+        &fixture.catalog_root,
+        CatalogOwnerPolicy::approved_unix_uid(wrong),
+    )
+    .expect_err("wrong approved owner must not open catalog");
+    assert!(error.contains("owner"), "unexpected owner error: {error}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn approved_policy_detects_replaced_above_catalog_ancestor() {
+    let fixture = fixture();
+    let policy = approved_owner(&fixture);
+    let capability = ReleaseStagedCapability::stage_with_owner_policy(
+        &fixture.catalog_root,
+        policy,
+        "release-1",
+        &hex_digest(&fixture.manifest_bytes),
+        &fixture.compatibility,
+        &schemas(),
+        &fixture.config,
+    )
+    .expect("approved owner stage");
+
+    let original_parent = fixture
+        .catalog_root
+        .parent()
+        .expect("catalog parent")
+        .to_owned();
+    let moved_parent = original_parent.with_extension("moved");
+    fs::rename(&original_parent, &moved_parent).expect("move original catalog ancestor");
+    fs::create_dir(&original_parent).expect("replace catalog ancestor");
+    assert!(
+        capability.verify_held().is_err(),
+        "ancestor replacement must invalidate retained proof"
+    );
+    fs::remove_dir(&original_parent).expect("remove replacement ancestor");
+    fs::rename(moved_parent, original_parent).expect("restore original catalog ancestor");
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn stages_exact_manifest_digest_six_roles_and_checked_component_bindings() {
     let fixture = fixture();
@@ -188,6 +288,11 @@ fn stages_exact_manifest_digest_six_roles_and_checked_component_bindings() {
             .limitations()
             .contains("never launch authority")
     );
+    assert!(!capability.owner_proof().is_approved());
+    assert!(matches!(
+        capability.owner_proof(),
+        CatalogOwnerProof::ObservedCatalogOwner { .. }
+    ));
     capability.verify_held().expect("held proof");
     let mut handle = capability
         .role_handle(ArtifactRole::Gateway)
