@@ -29,3 +29,18 @@ Author validation on the isolated CI branch:
 
 Integrated candidate and hosted CI validation must be recorded separately.
 No service, gameplay, reboot, or live recovery evidence is implied.
+
+## Fixture initialization boundary
+
+At integrated `52c1c81`, the hosted Linux library suite passed all image-readiness
+regressions. Its remaining failure was the abrupt-exit helper's five-second
+whole-process deadline, with the bounded diagnostic reporting
+`initializing-supervisor`. The fixture now has a separate 30-second initialization
+budget for synchronous SQLite/WAL/schema setup. A separate readiness marker cannot
+be overwritten by later phase diagnostics. The original five-second deadline is
+retained for the post-initialization abrupt-stop sequence; no production timer is
+changed. Both marker and diagnostic reads are bounded to 128 bytes.
+
+Author-focused regression passed in 10.65 seconds including setup. This is not a
+ten-second stop measurement. Integrated/hosted validation of this fixture change
+remains separate.

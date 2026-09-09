@@ -131,6 +131,14 @@ const ABORT_HELPER_ENV: &str = "ASCENSION_WATCHDOG_STOP_UNCERTAINTY_ABORT_HELPER
 const ABORT_CONFIG_ENV: &str = "ASCENSION_WATCHDOG_STOP_UNCERTAINTY_CONFIG";
 #[cfg(unix)]
 const HELPER_EXIT_CODE: i32 = 91;
+#[cfg(unix)]
+// Initialization includes synchronous SQLite/WAL schema bootstrap and can be
+// delayed by hosted-runner I/O contention. This fixture-only budget is kept
+// separate from the measured post-initialization stop phase and does not alter
+// any production startup or stop timeout.
+const HELPER_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(unix)]
+const HELPER_POST_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
 struct HelperProcessGuard {
@@ -476,10 +484,14 @@ fn supervisor_stop_error_retains_owned_child_and_blocks_running_replacement()
 fn aborting_supervisor_process() -> std::result::Result<(), Box<dyn Error>> {
     let config_path = std::env::var_os(ABORT_CONFIG_ENV).ok_or("missing helper config path")?;
     let stage_path = PathBuf::from(&config_path).with_extension("stage");
+    let initialized_path = PathBuf::from(&config_path).with_extension("initialized");
     std::fs::write(&stage_path, "reading-config")?;
     let config = WatchdogConfig::from_file(config_path)?;
     std::fs::write(&stage_path, "initializing-supervisor")?;
     let mut supervisor = Supervisor::initialize(config)?;
+    // This marker is intentionally separate from the phase file: later phase
+    // writes must not erase a readiness event before the parent observes it.
+    std::fs::write(&initialized_path, "supervisor-initialized")?;
     std::fs::write(&stage_path, "launching-child")?;
     let start_report = supervisor.reconcile_once(4_000)?;
     assert_eq!(
@@ -524,6 +536,37 @@ fn process_still_matches(identity: &crate::process::ProcessIdentity) -> bool {
 }
 
 #[cfg(unix)]
+fn read_helper_phase(path: &std::path::Path) -> String {
+    use std::io::Read;
+    let mut phase = String::new();
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.take(128).read_to_string(&mut phase);
+    }
+    phase
+}
+
+#[cfg(unix)]
+fn wait_for_helper_initialization(
+    initialized_path: &std::path::Path,
+    stage_path: &std::path::Path,
+    deadline: Instant,
+) -> std::result::Result<(), Box<dyn Error>> {
+    loop {
+        if read_helper_phase(initialized_path) == "supervisor-initialized" {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let phase = read_helper_phase(stage_path);
+            return Err(format!(
+                "abrupt supervisor helper did not finish initialization before its bounded fixture deadline; phase={phase:?}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn abrupt_supervisor_exit_reopens_uncertainty_without_replacement()
 -> std::result::Result<(), Box<dyn Error>> {
@@ -534,6 +577,8 @@ fn abrupt_supervisor_exit_reopens_uncertainty_without_replacement()
     let directory = tempfile::tempdir()?;
     let config = config(&directory);
     let config_path = directory.path().join("watchdog.json");
+    let initialized_path = config_path.with_extension("initialized");
+    let stage_path = config_path.with_extension("stage");
     config.to_file(&config_path)?;
     let helper = Command::new(std::env::current_exe()?)
         .args([
@@ -549,7 +594,14 @@ fn abrupt_supervisor_exit_reopens_uncertainty_without_replacement()
         .stderr(Stdio::null())
         .spawn()?;
     let mut helper = HelperProcessGuard::new(helper);
-    let Some(helper_status) = helper.wait_bounded(Instant::now() + Duration::from_secs(5))? else {
+    wait_for_helper_initialization(
+        &initialized_path,
+        &stage_path,
+        Instant::now() + HELPER_INITIALIZATION_TIMEOUT,
+    )?;
+    let Some(helper_status) =
+        helper.wait_bounded(Instant::now() + HELPER_POST_INITIALIZATION_TIMEOUT)?
+    else {
         // This file contains only fixed fixture phase labels. Bound the
         // diagnostic read even if a failing fixture writes unexpected data.
         use std::io::Read;
