@@ -20,7 +20,8 @@ use super::contract::{
     AdapterError, ComponentKind, ContainmentId, LaunchSpec, Observation, OwnedProcess,
     ProcessAdapter, ProcessCreation, ProcessIdentity, SessionSelector, StopOutcome,
 };
-use super::linux_launcher::TrustedLinuxLauncher;
+use super::gateway_health::GatewayHealthBootstrap;
+use super::linux_launcher::{PendingLaunch, TrustedLinuxLauncher};
 use crate::worker_bootstrap::WorkerBootstrapLaunch;
 use rustix::fs::{SealFlags, fcntl_get_seals};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
@@ -30,7 +31,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CGROUP_PREFIX: &str = "cgroup-v2:";
@@ -271,6 +272,33 @@ impl LinuxProcessAdapter {
         )
     }
 
+    /// Launch a Gateway with a durable containment identity and a fixed,
+    /// one-shot health bootstrap delivered through the target's exclusive
+    /// standard input.
+    ///
+    /// The health frame is not part of the helper control stream and is never
+    /// copied into command-line arguments, environment variables, or config.
+    /// The helper validates its magic, fixed length, Gateway role, and exact
+    /// launch nonce after GO before replacing itself with the approved target.
+    pub fn launch_with_planned_containment_and_gateway_health_bootstrap(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: &ContainmentId,
+        gateway_health: &GatewayHealthBootstrap,
+    ) -> Result<OwnedProcess, AdapterError> {
+        let expected = Self::planned_containment_for(specification)?;
+        if &expected != planned_containment {
+            return Err(AdapterError::IdentityMismatch(
+                "planned Linux containment does not match the launch identity".to_owned(),
+            ));
+        }
+        self.launch_with_containment_and_gateway_health(
+            specification,
+            Some(planned_containment),
+            gateway_health,
+        )
+    }
+
     fn maybe_cgroup_for_identity(
         &self,
         identity: &ProcessIdentity,
@@ -308,15 +336,14 @@ impl LinuxProcessAdapter {
     ) -> Result<Observation, AdapterError> {
         let pids = cgroup.pids()?;
         if pids.is_empty() {
-            let exit_code = self
-                .children
-                .get_mut(identity.containment.as_str())
-                .and_then(ManagedProcess::exit_code);
-            return Ok(
-                exit_code.map_or(Observation::Exited { code: None }, |code| {
-                    Observation::Exited { code: Some(code) }
-                }),
-            );
+            // An empty cgroup is not itself proof that the exact target died:
+            // a membership read can race a still-running child or a cgroup
+            // implementation can report an empty snapshot during teardown.
+            // Require the retained Child handle to observe an actual exit.
+            return Ok(match self.child_state(identity.containment.as_str())? {
+                ManagedChildState::Exited(code) => Observation::Exited { code },
+                ManagedChildState::Alive | ManagedChildState::Unknown => Observation::Ambiguous,
+            });
         }
         if !pids.contains(&identity.creation.pid) {
             // The cgroup is still populated but its recorded leader is gone.
@@ -341,6 +368,12 @@ impl LinuxProcessAdapter {
         if !cgroup.pids()?.is_empty() {
             return Ok(false);
         }
+        if !matches!(
+            self.child_state(identity.containment.as_str())?,
+            ManagedChildState::Exited(_)
+        ) {
+            return Ok(false);
+        }
         cgroup.remove()?;
         self.children.remove(identity.containment.as_str());
         Ok(true)
@@ -356,20 +389,72 @@ impl LinuxProcessAdapter {
             .checked_add(timeout)
             .unwrap_or_else(Instant::now);
         loop {
-            if let Some(managed) = self.children.get_mut(identity.containment.as_str()) {
-                if let Some(child) = managed.child.as_mut() {
-                    let _ = child.try_wait();
-                }
-            }
+            let child_state = self.child_state(identity.containment.as_str())?;
             if cgroup.pids()?.is_empty() {
-                cgroup.remove()?;
-                self.children.remove(identity.containment.as_str());
-                return Ok(true);
+                if matches!(child_state, ManagedChildState::Exited(_)) {
+                    cgroup.remove()?;
+                    self.children.remove(identity.containment.as_str());
+                    return Ok(true);
+                }
             }
             if Instant::now() >= deadline {
                 return Ok(false);
             }
             std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    fn child_state(&mut self, containment: &str) -> Result<ManagedChildState, AdapterError> {
+        let Some(managed) = self.children.get_mut(containment) else {
+            return Ok(ManagedChildState::Unknown);
+        };
+        managed.state()
+    }
+
+    fn missing_containment_status(
+        &self,
+        identity: &ProcessIdentity,
+    ) -> Result<MissingContainmentStatus, AdapterError> {
+        read_process_creation_status(
+            &self.boot_id,
+            identity.creation.pid,
+            &identity.creation.token,
+        )
+    }
+
+    fn stop_missing_containment(
+        &mut self,
+        identity: &ProcessIdentity,
+    ) -> Result<StopOutcome, AdapterError> {
+        if !self.children.contains_key(identity.containment.as_str()) {
+            return match self.missing_containment_status(identity)? {
+                MissingContainmentStatus::Absent | MissingContainmentStatus::Reused => {
+                    Ok(StopOutcome::AlreadyExited)
+                }
+                MissingContainmentStatus::Present => Err(AdapterError::Unavailable(
+                    "Linux containment is missing while the recorded process remains present"
+                        .to_owned(),
+                )),
+            };
+        }
+        match self.child_state(identity.containment.as_str())? {
+            ManagedChildState::Exited(_) => {
+                self.children.remove(identity.containment.as_str());
+                Ok(StopOutcome::AlreadyExited)
+            }
+            ManagedChildState::Alive => Err(AdapterError::Unavailable(
+                "Linux containment is missing before exact child exit was proven".to_owned(),
+            )),
+            ManagedChildState::Unknown => match self.missing_containment_status(identity)? {
+                MissingContainmentStatus::Absent | MissingContainmentStatus::Reused => {
+                    self.children.remove(identity.containment.as_str());
+                    Ok(StopOutcome::AlreadyExited)
+                }
+                MissingContainmentStatus::Present => Err(AdapterError::Unavailable(
+                    "Linux containment is missing while the recorded process remains present"
+                        .to_owned(),
+                )),
+            },
         }
     }
 
@@ -468,6 +553,30 @@ impl LinuxProcessAdapter {
         planned_containment: Option<&ContainmentId>,
         worker: Option<&WorkerBootstrapLaunch>,
     ) -> Result<OwnedProcess, AdapterError> {
+        self.launch_with_bootstraps(specification, planned_containment, worker, None)
+    }
+
+    fn launch_with_containment_and_gateway_health(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: Option<&ContainmentId>,
+        gateway_health: &GatewayHealthBootstrap,
+    ) -> Result<OwnedProcess, AdapterError> {
+        self.launch_with_bootstraps(
+            specification,
+            planned_containment,
+            None,
+            Some(gateway_health),
+        )
+    }
+
+    fn launch_with_bootstraps(
+        &mut self,
+        specification: &LaunchSpec,
+        planned_containment: Option<&ContainmentId>,
+        worker: Option<&WorkerBootstrapLaunch>,
+        gateway_health: Option<&GatewayHealthBootstrap>,
+    ) -> Result<OwnedProcess, AdapterError> {
         specification.validate()?;
         if self.children.len() >= self.max_children {
             return Err(AdapterError::Unavailable(
@@ -506,12 +615,20 @@ impl LinuxProcessAdapter {
             )));
         }
         let cgroup = self.cgroup_root.create(&name)?;
-        let mut pending = match match worker {
-            Some(worker) => {
+        let mut pending = match match (worker, gateway_health) {
+            (Some(worker), None) => {
                 self.launcher
                     .prepare_with_worker_bootstrap(specification, cgroup.path(), worker)
             }
-            None => self.launcher.prepare(specification, cgroup.path()),
+            (None, Some(gateway_health)) => self.launcher.prepare_with_gateway_health_bootstrap(
+                specification,
+                cgroup.path(),
+                gateway_health,
+            ),
+            (None, None) => self.launcher.prepare(specification, cgroup.path()),
+            (Some(_), Some(_)) => Err(AdapterError::Invalid(
+                "Linux worker and Gateway health bootstraps cannot be combined".to_owned(),
+            )),
         } {
             Ok(pending) => pending,
             Err(error) => {
@@ -519,23 +636,20 @@ impl LinuxProcessAdapter {
             }
         };
         let Some(helper_pid) = pending.pid() else {
-            drop(pending);
-            return Err(self.launch_error_after_cleanup(
+            return Err(self.launch_error_after_pending_cleanup(
                 &cgroup,
-                None,
+                pending,
                 AdapterError::Unavailable("Linux helper did not expose a PID".to_owned()),
             ));
         };
         let launch_timeout = pending.timeout();
         if let Err(error) = cgroup.add_process(helper_pid) {
-            drop(pending);
-            return Err(self.launch_error_after_cleanup(&cgroup, None, error));
+            return Err(self.launch_error_after_pending_cleanup(&cgroup, pending, error));
         }
         let helper_identity = match read_live_process(&self.boot_id, helper_pid) {
             Ok(identity) => identity,
             Err(error) => {
-                drop(pending);
-                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
+                return Err(self.launch_error_after_pending_cleanup(&cgroup, pending, error));
             }
         };
         if !live_process_matches_executable(
@@ -543,10 +657,9 @@ impl LinuxProcessAdapter {
             self.launcher.helper_executable(),
             self.launcher.helper_executable_sha256(),
         ) {
-            drop(pending);
-            return Err(self.launch_error_after_cleanup(
+            return Err(self.launch_error_after_pending_cleanup(
                 &cgroup,
-                None,
+                pending,
                 AdapterError::IdentityMismatch(
                     "spawned Linux helper executable identity is unexpected".to_owned(),
                 ),
@@ -555,28 +668,25 @@ impl LinuxProcessAdapter {
         let helper_is_member = match cgroup.pids() {
             Ok(pids) => pids.contains(&helper_pid),
             Err(error) => {
-                drop(pending);
-                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
+                return Err(self.launch_error_after_pending_cleanup(&cgroup, pending, error));
             }
         };
         if !helper_is_member {
-            drop(pending);
-            return Err(self.launch_error_after_cleanup(
+            return Err(self.launch_error_after_pending_cleanup(
                 &cgroup,
-                None,
+                pending,
                 AdapterError::Unavailable(
                     "Linux helper could not be observed in its delegated cgroup".to_owned(),
                 ),
             ));
         }
         if let Err(error) = pending.release_gate() {
-            drop(pending);
-            return Err(self.launch_error_after_cleanup(&cgroup, None, error));
+            return Err(self.launch_error_after_pending_cleanup(&cgroup, pending, error));
         }
-        let mut child = match pending.into_child() {
+        let mut child = match pending.take_child() {
             Ok(child) => child,
             Err(error) => {
-                return Err(self.launch_error_after_cleanup(&cgroup, None, error));
+                return Err(self.launch_error_after_pending_cleanup(&cgroup, pending, error));
             }
         };
         let (pid, actual) = match wait_for_target_in_cgroup(
@@ -630,6 +740,7 @@ impl LinuxProcessAdapter {
             identity.containment.as_str().to_owned(),
             ManagedProcess {
                 child: Some(child),
+                exit_status: None,
                 graceful_timeout: specification.graceful_timeout,
                 force_timeout: specification.force_timeout,
             },
@@ -643,7 +754,33 @@ impl LinuxProcessAdapter {
         child: Option<&mut Child>,
         launch_error: AdapterError,
     ) -> AdapterError {
-        match cleanup_failed_cgroup_launch(cgroup, child) {
+        let cleanup = cleanup_failed_cgroup_launch(cgroup, child);
+        self.finish_launch_error_after_cleanup(cgroup, launch_error, cleanup)
+    }
+
+    fn launch_error_after_pending_cleanup(
+        &mut self,
+        cgroup: &Cgroup,
+        mut pending: PendingLaunch,
+        launch_error: AdapterError,
+    ) -> AdapterError {
+        // Keep the exact Child handle alive while the cgroup cleanup proof is
+        // performed.  Dropping PendingLaunch first would discard that proof
+        // and could incorrectly turn a failed helper termination into a clean
+        // launch failure.
+        pending.close_handoff_descriptors();
+        let cleanup = cleanup_failed_cgroup_launch(cgroup, pending.child_mut());
+        drop(pending);
+        self.finish_launch_error_after_cleanup(cgroup, launch_error, cleanup)
+    }
+
+    fn finish_launch_error_after_cleanup(
+        &mut self,
+        cgroup: &Cgroup,
+        launch_error: AdapterError,
+        cleanup: Result<(), CleanupFailure>,
+    ) -> AdapterError {
+        match cleanup {
             Ok(()) => launch_error,
             Err(failure) => {
                 if failure.containment_retained {
@@ -664,14 +801,42 @@ impl LinuxProcessAdapter {
 
     fn inspect(&mut self, process: &OwnedProcess) -> Result<Observation, AdapterError> {
         let Some(cgroup) = self.maybe_cgroup_for_identity(&process.identity)? else {
-            return Ok(Observation::Missing);
+            // A missing containment is only a clean observation once either
+            // the exact retained child has exited or the persisted process
+            // start token proves that the original process is absent/replaced.
+            // If the token still belongs to a live process, a vanished cgroup
+            // must remain ambiguous rather than becoming an implicit
+            // exit/relaunch authorization.
+            if !self
+                .children
+                .contains_key(process.identity.containment.as_str())
+            {
+                return match self.missing_containment_status(&process.identity)? {
+                    MissingContainmentStatus::Absent | MissingContainmentStatus::Reused => {
+                        Ok(Observation::Missing)
+                    }
+                    MissingContainmentStatus::Present => Ok(Observation::Ambiguous),
+                };
+            }
+            return match self.child_state(process.identity.containment.as_str())? {
+                ManagedChildState::Exited(_) => Ok(Observation::Missing),
+                ManagedChildState::Alive => Ok(Observation::Ambiguous),
+                ManagedChildState::Unknown => {
+                    match self.missing_containment_status(&process.identity)? {
+                        MissingContainmentStatus::Absent | MissingContainmentStatus::Reused => {
+                            Ok(Observation::Missing)
+                        }
+                        MissingContainmentStatus::Present => Ok(Observation::Ambiguous),
+                    }
+                }
+            };
         };
         self.observe_identity(&process.identity, &cgroup)
     }
 
     fn graceful_stop(&mut self, process: &OwnedProcess) -> Result<StopOutcome, AdapterError> {
         let Some(cgroup) = self.maybe_cgroup_for_identity(&process.identity)? else {
-            return Ok(StopOutcome::AlreadyExited);
+            return self.stop_missing_containment(&process.identity);
         };
         match self.observe_identity(&process.identity, &cgroup)? {
             Observation::Exited { .. } | Observation::Missing => {
@@ -699,7 +864,7 @@ impl LinuxProcessAdapter {
 
     fn force_stop(&mut self, process: &OwnedProcess) -> Result<StopOutcome, AdapterError> {
         let Some(cgroup) = self.maybe_cgroup_for_identity(&process.identity)? else {
-            return Ok(StopOutcome::AlreadyExited);
+            return self.stop_missing_containment(&process.identity);
         };
         match self.observe_identity(&process.identity, &cgroup)? {
             Observation::Missing => return Ok(StopOutcome::AlreadyExited),
@@ -756,17 +921,44 @@ impl LinuxProcessAdapter {
 #[derive(Debug)]
 struct ManagedProcess {
     child: Option<Child>,
+    exit_status: Option<ExitStatus>,
     graceful_timeout: Duration,
     force_timeout: Duration,
 }
 
 impl ManagedProcess {
-    fn exit_code(&mut self) -> Option<i32> {
-        self.child
-            .as_mut()
-            .and_then(|child| child.try_wait().ok().flatten())
-            .and_then(|status| status.code())
+    fn state(&mut self) -> Result<ManagedChildState, AdapterError> {
+        if let Some(status) = self.exit_status.as_ref() {
+            return Ok(ManagedChildState::Exited(status.code()));
+        }
+        let Some(child) = self.child.as_mut() else {
+            return Ok(ManagedChildState::Unknown);
+        };
+        match child.try_wait().map_err(|error| {
+            AdapterError::Io(format!("Linux managed child status check failed: {error}"))
+        })? {
+            Some(status) => {
+                let code = status.code();
+                self.exit_status = Some(status);
+                Ok(ManagedChildState::Exited(code))
+            }
+            None => Ok(ManagedChildState::Alive),
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedChildState {
+    Alive,
+    Exited(Option<i32>),
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MissingContainmentStatus {
+    Present,
+    Absent,
+    Reused,
 }
 
 #[derive(Clone, Debug)]
@@ -1331,6 +1523,47 @@ fn read_live_process(boot_id: &str, pid: u32) -> Result<LiveProcess, AdapterErro
     })
 }
 
+fn read_process_creation_status(
+    boot_id: &str,
+    pid: u32,
+    expected_token: &str,
+) -> Result<MissingContainmentStatus, AdapterError> {
+    if pid == 0 {
+        return Err(AdapterError::Invalid("cannot inspect pid zero".to_owned()));
+    }
+    let expected_boot_prefix = format!("{boot_id}:");
+    if expected_token
+        .strip_prefix(&expected_boot_prefix)
+        .and_then(|ticks| ticks.parse::<u64>().ok())
+        .is_none()
+    {
+        return Err(AdapterError::Invalid(
+            "recorded Linux process creation token is malformed".to_owned(),
+        ));
+    }
+    let stat_path = format!("/proc/{pid}/stat");
+    let stat = fs::read_to_string(&stat_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AdapterError::Unavailable(format!("process {pid} does not exist"))
+        } else {
+            AdapterError::Io(format!("cannot read process {pid} birth data: {error}"))
+        }
+    });
+    let stat = match stat {
+        Ok(stat) => stat,
+        Err(AdapterError::Unavailable(_)) => return Ok(MissingContainmentStatus::Absent),
+        Err(error) => return Err(error),
+    };
+    let start_ticks = parse_start_ticks(&stat)
+        .ok_or_else(|| AdapterError::Io(format!("process {pid} has malformed /proc stat data")))?;
+    let actual_token = format!("{boot_id}:{start_ticks}");
+    if actual_token == expected_token {
+        Ok(MissingContainmentStatus::Present)
+    } else {
+        Ok(MissingContainmentStatus::Reused)
+    }
+}
+
 fn is_sealed_memfd(path: &Path) -> bool {
     path.to_str()
         .is_some_and(|value| value.starts_with("/memfd:"))
@@ -1715,6 +1948,133 @@ mod tests {
         assert!(matches!(failure.error, AdapterError::Timeout(_)));
         assert!(cgroup.path().exists());
         child.reap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_containment_requires_creation_token_proof() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempdir()?;
+        let mut child = ChildGuard::sleep()?;
+        let pid = child.as_mut().id();
+        let live = read_live_process("test-boot", pid)?;
+        let containment = ContainmentId::new("cgroup-v2:missing")?;
+        let identity = ProcessIdentity {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "instance".to_owned(),
+            component: ComponentKind::Synthetic,
+            incarnation: "incarnation".to_owned(),
+            launch_nonce: "nonce".to_owned(),
+            creation: ProcessCreation {
+                token: live.token,
+                pid,
+            },
+            executable: live.executable,
+            executable_sha256: live.executable_sha256,
+            containment,
+            session: None,
+        };
+        let launcher = TrustedLinuxLauncher::new("/bin/true")?;
+        let mut adapter = LinuxProcessAdapter {
+            cgroup_root: CgroupRoot {
+                path: directory.path().to_owned(),
+            },
+            boot_id: "test-boot".to_owned(),
+            allowlist: BTreeMap::new(),
+            children: BTreeMap::new(),
+            uncertain_containments: BTreeMap::new(),
+            max_children: MAX_ACTIVE_CHILDREN,
+            launcher,
+        };
+        let owned = OwnedProcess {
+            identity: identity.clone(),
+        };
+        assert_eq!(adapter.inspect(&owned)?, Observation::Ambiguous);
+        assert!(matches!(
+            adapter.graceful_stop(&owned),
+            Err(AdapterError::Unavailable(message))
+                if message.contains("recorded process remains present")
+        ));
+
+        child.reap()?;
+        assert_eq!(adapter.inspect(&owned)?, Observation::Missing);
+        assert_eq!(adapter.graceful_stop(&owned)?, StopOutcome::AlreadyExited);
+
+        let mut replacement = ChildGuard::sleep()?;
+        let reused_pid = replacement.as_mut().id();
+        let mut reused = identity;
+        reused.creation.pid = reused_pid;
+        reused.creation.token = "test-boot:0".to_owned();
+        let reused = OwnedProcess { identity: reused };
+        assert_eq!(adapter.inspect(&reused)?, Observation::Missing);
+        replacement.reap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn empty_cgroup_requires_exact_child_exit_proof() -> Result<(), Box<dyn std::error::Error>> {
+        let (_directory, cgroup) = fake_cgroup("")?;
+        let child = Command::new("/bin/sleep").arg("30").spawn()?;
+        let pid = child.id();
+        let containment = ContainmentId::new("cgroup-v2:failed-launch")?;
+        let identity = ProcessIdentity {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "instance".to_owned(),
+            component: ComponentKind::Synthetic,
+            incarnation: "incarnation".to_owned(),
+            launch_nonce: "nonce".to_owned(),
+            creation: ProcessCreation {
+                token: "test:0".to_owned(),
+                pid,
+            },
+            executable: PathBuf::from("/bin/sleep"),
+            executable_sha256: "a".repeat(64),
+            containment,
+            session: None,
+        };
+        let launcher = TrustedLinuxLauncher::new("/bin/true")?;
+        let mut adapter = LinuxProcessAdapter {
+            cgroup_root: CgroupRoot {
+                path: cgroup
+                    .path()
+                    .parent()
+                    .ok_or_else(|| std::io::Error::other("fake cgroup has no root"))?
+                    .to_owned(),
+            },
+            boot_id: "test".to_owned(),
+            allowlist: BTreeMap::new(),
+            children: BTreeMap::new(),
+            uncertain_containments: BTreeMap::new(),
+            max_children: MAX_ACTIVE_CHILDREN,
+            launcher,
+        };
+        adapter.children.insert(
+            identity.containment.as_str().to_owned(),
+            ManagedProcess {
+                child: Some(child),
+                exit_status: None,
+                graceful_timeout: DEFAULT_GRACEFUL_TIMEOUT,
+                force_timeout: DEFAULT_FORCE_TIMEOUT,
+            },
+        );
+
+        let observation = adapter.observe_identity(&identity, &cgroup)?;
+        assert_eq!(observation, Observation::Ambiguous);
+
+        let managed = adapter
+            .children
+            .get_mut(identity.containment.as_str())
+            .ok_or_else(|| std::io::Error::other("test managed child missing"))?;
+        let child = managed
+            .child
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("test child missing"))?;
+        child.kill()?;
+        child.wait()?;
+        assert!(matches!(
+            adapter.observe_identity(&identity, &cgroup)?,
+            Observation::Exited { .. }
+        ));
         Ok(())
     }
 

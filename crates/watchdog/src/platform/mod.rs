@@ -5,6 +5,7 @@
 //! the reconciler remains responsible for durable intent and policy.
 
 pub mod contract;
+pub mod gateway_health;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "linux")]

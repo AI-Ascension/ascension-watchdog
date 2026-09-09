@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 #[path = "storage_admin.rs"]
 mod storage_admin;
+#[path = "storage_gateway_health.rs"]
+mod storage_gateway_health;
 #[path = "storage_quarantine_admin.rs"]
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
@@ -37,6 +39,7 @@ pub use storage_admin::{
     OperatorCommandOutcome, OperatorCommandReceipt, RESERVED_LIFECYCLE_COMMANDS,
     RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
 };
+pub use storage_gateway_health::GatewayHealthBootstrapBinding;
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
 pub use storage_worker_bootstrap::WorkerBootstrapBinding;
 pub use storage_worker_handoff::{
@@ -745,28 +748,40 @@ impl Store {
         Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY, false)
     }
 
-    /// Hold SQLite's writer reservation while a native worker is authorized
-    /// and resumed. No rows are changed. Dropping this dedicated connection
+    /// Hold SQLite's writer reservation while a native child is authorized
+    /// and resumed/executed. No rows are changed. Dropping this connection
     /// rolls back the transaction and releases the reservation, so an operator
     /// Stop either commits before admission is checked or after resumption.
-    #[allow(dead_code)]
-    #[cfg(any(windows, test))]
-    pub(crate) fn reserve_worker_admission(self) -> Result<Self> {
+    pub(crate) fn reserve_launch_admission(self) -> Result<Self> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         Ok(self)
     }
 
-    /// Admission needs at most two rows: one exact intent, or evidence of a
-    /// conflicting unsettled launch. Never collect an unbounded history here.
+    /// Compatibility alias retained for the worker-specific admission tests.
+    /// Both worker and gateway-health launchers use the same owner-local
+    /// reservation and therefore share the exact transaction boundary.
     #[allow(dead_code)]
     #[cfg(any(windows, test))]
-    pub(crate) fn worker_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
+    pub(crate) fn reserve_worker_admission(self) -> Result<Self> {
+        self.reserve_launch_admission()
+    }
+
+    /// Admission needs at most two rows: one exact intent, or evidence of a
+    /// conflicting unsettled launch. Never collect an unbounded history here.
+    pub(crate) fn launch_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
         let mut statement = self.conn.prepare(
             "SELECT id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE component_id=? AND state <> 'cleaned' LIMIT 2",
         )?;
         let rows = statement.query_map([component], launch_intent_from_row)?;
         rows.collect::<rusqlite::Result<Vec<LaunchIntent>>>()
             .map_err(Into::into)
+    }
+
+    /// Compatibility alias retained for the worker-specific admission tests.
+    #[allow(dead_code)]
+    #[cfg(any(windows, test))]
+    pub(crate) fn worker_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
+        self.launch_admission_intents(component)
     }
 
     /// Open existing state for a controller that already holds the matching
@@ -2443,6 +2458,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
     )?;
     storage_worker_handoff::create_worker_handoff_schema(conn)?;
     storage_worker_bootstrap::create_schema(conn)?;
+    storage_gateway_health::create_schema(conn)?;
     Ok(())
 }
 
@@ -2570,11 +2586,25 @@ pub(crate) fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<
 }
 
 fn config_compatibility_digest(config: &WatchdogConfig) -> Result<String> {
+    config.validate()?;
     let mut normalized = config.clone();
     normalized.deployment_id = "watchdog-compatibility-identity".to_string();
     normalized.database = PathBuf::from("/owner-local/watchdog.sqlite3");
     normalized.desired_mode = DesiredMode::Stopped;
-    normalized.digest()
+    if let Some(health) = &normalized.gateway_health {
+        for component in &mut normalized.components {
+            if component.id == health.component_id {
+                component.environment.insert(
+                    "STS2_DEPLOYMENT_ID".to_owned(),
+                    normalized.deployment_id.clone(),
+                );
+            }
+        }
+    }
+    // This is a fingerprint projection, not an executable configuration. Its
+    // fixed namespace/path placeholders intentionally are not platform-valid
+    // launch identities. Validate the real input above, never the projection.
+    Ok(crate::config::hex_digest(&serde_json::to_vec(&normalized)?))
 }
 
 fn update_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {

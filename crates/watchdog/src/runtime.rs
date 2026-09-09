@@ -2,6 +2,10 @@
 
 #[path = "runtime_admin.rs"]
 pub(crate) mod runtime_admin;
+#[path = "runtime_gateway_health.rs"]
+mod runtime_gateway_health;
+#[path = "runtime_gateway_health_admission.rs"]
+mod runtime_gateway_health_admission;
 #[path = "runtime_process.rs"]
 pub(crate) mod runtime_process;
 #[path = "runtime_worker.rs"]
@@ -11,6 +15,7 @@ pub(crate) mod runtime_worker;
 mod runtime_worker_admission;
 #[path = "runtime_worker_bootstrap.rs"]
 mod runtime_worker_bootstrap;
+pub use runtime_gateway_health::GatewayHealthDiagnostics;
 #[cfg(all(test, windows))]
 #[path = "runtime_worker_windows_tests.rs"]
 mod runtime_worker_windows_tests;
@@ -59,6 +64,8 @@ pub struct ReconcileReport {
     pub stopped: Vec<String>,
     pub quarantined: Vec<String>,
     pub errors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_health: Option<GatewayHealthDiagnostics>,
 }
 
 /// The proof returned by the platform runtime is intentionally decoded at
@@ -131,6 +138,7 @@ pub struct Supervisor {
     /// control/recovery, but it cannot turn a later healthy probe into a
     /// claim after the required pre-phase observation was unavailable.
     pub(crate) worker_phase_pre_failed: bool,
+    gateway_health_witness: Option<runtime_gateway_health::GatewayHealthWitness>,
     initialized_runtime: bool,
 }
 
@@ -220,6 +228,7 @@ impl Supervisor {
             worker_deferred_phases: BTreeSet::new(),
             worker_heartbeat: None,
             worker_phase_pre_failed: false,
+            gateway_health_witness: None,
             initialized_runtime: false,
         }
     }
@@ -300,6 +309,7 @@ impl Supervisor {
         // response from an earlier loop survive a child replacement or a
         // failed probe/control exchange.
         self.worker_heartbeat = None;
+        self.gateway_health_witness = None;
         let first_reconcile = !self.initialized_runtime;
         if first_reconcile {
             self.store.quarantine_interrupted_jobs(now_ms)?;
@@ -594,6 +604,25 @@ impl Supervisor {
                 .is_some_and(|worker| worker.component_id == component.id)
             {
                 self.retire_recovered_worker(&component, &intent, child, now_ms)?;
+                continue;
+            }
+            if self
+                .config
+                .gateway_health
+                .as_ref()
+                .is_some_and(|health| health.component_id == component.id)
+            {
+                // Health keys and sequence state cannot be restored. A recovered
+                // native handle is exact cleanup authority only, never a new
+                // authenticated health session for a surviving gateway.
+                self.retain_quarantined_child(
+                    &component,
+                    &intent.id,
+                    child,
+                    "recovered gateway has no current in-memory health key".to_owned(),
+                    now_ms,
+                )?;
+                self.stop_component(&component, now_ms, &mut ReconcileReport::default())?;
                 continue;
             }
             let observation = match self.process_manager.inspect(&mut child) {
@@ -1173,6 +1202,7 @@ impl Supervisor {
             }
         }
 
+        self.probe_gateway_health(component, desired_mode, report);
         let prior = self.store.component(&component.id)?;
         let is_running = self.children.contains_key(&component.id);
         let observation = ComponentObservation {
@@ -1188,7 +1218,9 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|record| record.started_at_ms)
                 .unwrap_or(now_ms),
-            heartbeat_age_ms: self.worker_heartbeat_age_ms(&component.id),
+            heartbeat_age_ms: self
+                .worker_heartbeat_age_ms(&component.id)
+                .or_else(|| self.gateway_heartbeat_age_ms(&component.id)),
             progress_age_ms: None,
             consecutive_misses: 0,
             restart_attempts: prior.as_ref().map_or(0, |record| record.restart_attempts),
@@ -1334,6 +1366,7 @@ impl Supervisor {
         let worker_bootstrap = self.prepare_worker_bootstrap(component, &launch_nonce)?;
         let specification =
             launch_spec_for(&self.config, component, launch_nonce.clone(), incarnation)?;
+        let gateway_health = self.prepare_gateway_health(component, &specification)?;
         // Native capability is established before the durable intent.  This
         // prevents a permanently prepared row from being created for a host
         // where containment is unavailable.
@@ -1352,6 +1385,9 @@ impl Supervisor {
         )?;
         if let Some(worker) = worker_bootstrap.as_ref() {
             self.bind_prepared_worker_bootstrap(component, &intent, worker, now_ms)?;
+        }
+        if let Some(health) = gateway_health.as_ref() {
+            self.bind_prepared_gateway_health(component, &intent, health, now_ms)?;
         }
         // Stop/pause may have committed while capability probing and intent
         // preparation were in flight.  The fresh durable read is the final
@@ -1384,7 +1420,7 @@ impl Supervisor {
             },
             now_ms,
         )?;
-        let child = match self.process_manager.launch(
+        let mut child = match self.process_manager.launch(
             &self.config,
             component,
             &specification,
@@ -1392,6 +1428,8 @@ impl Supervisor {
             &intent.id,
             now_ms,
             worker_bootstrap.as_ref(),
+            gateway_health.as_ref().map(|health| &health.bootstrap),
+            &self.worker_boot_id,
         ) {
             Ok(child) => child,
             Err(RuntimeLaunchError::CleanupUncertain(error)) => {
@@ -1449,6 +1487,7 @@ impl Supervisor {
                 return Ok(());
             }
         };
+        child.set_gateway_health_client(gateway_health.map(|health| health.client));
         let identity = child.identity().clone();
         let proof = match RuntimeProcessManager::ownership_proof(&child) {
             Ok(proof) => proof,
@@ -2068,6 +2107,17 @@ fn launch_spec_for(
     launch_nonce: String,
     incarnation: String,
 ) -> Result<crate::platform::LaunchSpec> {
+    let mut environment = component.environment.clone();
+    if config
+        .gateway_health
+        .as_ref()
+        .is_some_and(|health| health.component_id == component.id)
+    {
+        environment.insert(
+            "STS2_GATEWAY_WATCHDOG_LAUNCH_NONCE".to_owned(),
+            launch_nonce.clone(),
+        );
+    }
     Ok(crate::platform::LaunchSpec {
         deployment_id: config.deployment_id.clone(),
         instance_id: component.id.clone(),
@@ -2087,8 +2137,7 @@ fn launch_spec_for(
             .unwrap_or_else(|| "0".repeat(64)),
         arguments: component.args.clone(),
         working_directory: component.cwd.clone(),
-        environment: component
-            .environment
+        environment: environment
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),

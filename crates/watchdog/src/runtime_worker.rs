@@ -271,6 +271,7 @@ impl Supervisor {
 
         if !allow_claim
             || self.worker_phase_pre_failed
+            || !self.gateway_allows_fresh_claim()
             || desired_mode != DesiredMode::Running
             || !probe.ready
         {

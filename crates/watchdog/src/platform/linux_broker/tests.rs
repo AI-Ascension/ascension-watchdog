@@ -1,11 +1,33 @@
 use super::*;
 use tempfile::tempdir_in;
 
+#[path = "retirement_tests.rs"]
+mod retirement;
+
+#[path = "failed_launch_cleanup_tests.rs"]
+mod failed_launch_cleanup;
+
+#[path = "orphan_cleanup_tests.rs"]
+mod orphan_cleanup;
+
 struct FakeBackend {
     starts: usize,
     inspects: usize,
     stops: usize,
     units: BTreeMap<String, UnitObservation>,
+    stop_error: Option<BrokerError>,
+    retain_on_stop: bool,
+    start_override: Option<UnitObservation>,
+    retained: BTreeMap<String, UnitObservation>,
+    emptied: BTreeMap<String, UnitObservation>,
+    containment_error: Option<BrokerError>,
+    store_error_after_capture: Option<BrokerError>,
+    withhold_empty_proof: bool,
+    releases: usize,
+    release_error: Option<BrokerError>,
+    orphan_stops: usize,
+    retirement_error: Option<BrokerError>,
+    inspect_error: Option<BrokerError>,
 }
 
 impl FakeBackend {
@@ -15,11 +37,35 @@ impl FakeBackend {
             inspects: 0,
             stops: 0,
             units: BTreeMap::new(),
+            stop_error: None,
+            retain_on_stop: false,
+            start_override: None,
+            retained: BTreeMap::new(),
+            emptied: BTreeMap::new(),
+            containment_error: None,
+            store_error_after_capture: None,
+            withhold_empty_proof: false,
+            releases: 0,
+            release_error: None,
+            orphan_stops: 0,
+            retirement_error: None,
+            inspect_error: None,
         }
     }
 }
 
 impl SystemdBackend for FakeBackend {
+    fn release_retired(
+        &mut self,
+        _receipt: &LaunchReceipt,
+        _deadline: Instant,
+    ) -> BrokerResult<()> {
+        self.releases += 1;
+        if let Some(error) = &self.release_error {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
     fn start(
         &mut self,
         unit: &str,
@@ -28,19 +74,22 @@ impl SystemdBackend for FakeBackend {
         _deadline: Instant,
     ) -> BrokerResult<UnitObservation> {
         self.starts += 1;
-        let observation = UnitObservation {
-            unit: unit.to_owned(),
-            pid: 42,
-            creation_token: "start-token".to_owned(),
-            executable: policy.executable.clone(),
-            executable_sha256: policy.executable_sha256.clone(),
-            uid: policy.target_uid,
-            gid: policy.target_gid,
-            capability_bounding_set: policy.capabilities.bounding_set,
-            ambient_capabilities: policy.capabilities.ambient_set,
-            no_new_privileges: true,
-            control_group: format!("/system.slice/{unit}"),
-        };
+        let observation = self
+            .start_override
+            .clone()
+            .unwrap_or_else(|| UnitObservation {
+                unit: unit.to_owned(),
+                pid: 42,
+                creation_token: "start-token".to_owned(),
+                executable: policy.executable.clone(),
+                executable_sha256: policy.executable_sha256.clone(),
+                uid: policy.target_uid,
+                gid: policy.target_gid,
+                capability_bounding_set: policy.capabilities.bounding_set,
+                ambient_capabilities: policy.capabilities.ambient_set,
+                no_new_privileges: true,
+                control_group: format!("/system.slice/{unit}"),
+            });
         self.units.insert(unit.to_owned(), observation.clone());
         Ok(observation)
     }
@@ -52,12 +101,162 @@ impl SystemdBackend for FakeBackend {
         _deadline: Instant,
     ) -> BrokerResult<Option<UnitObservation>> {
         self.inspects += 1;
+        if let Some(error) = &self.inspect_error {
+            return Err(error.clone());
+        }
         Ok(self.units.get(unit).cloned())
     }
 
-    fn stop(&mut self, unit: &str, _deadline: Instant) -> BrokerResult<()> {
+    fn stop(
+        &mut self,
+        unit: &str,
+        expected: &UnitObservation,
+        _deadline: Instant,
+    ) -> BrokerResult<()> {
         self.stops += 1;
-        self.units.remove(unit);
+        if let Some(error) = self.stop_error.clone() {
+            return Err(error);
+        }
+        if expected.unit != unit || self.units.get(unit) != Some(expected) {
+            return Err(BrokerError::Conflict(
+                "fake exact stop binding changed".to_owned(),
+            ));
+        }
+        if !self.retain_on_stop {
+            self.units.remove(unit);
+            if !self.withhold_empty_proof {
+                self.emptied.insert(unit.to_owned(), expected.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn retain_containment(
+        &mut self,
+        _request: &BrokerRequest,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        _deadline: Instant,
+    ) -> BrokerResult<()> {
+        if let Some(error) = self.containment_error.clone() {
+            return Err(error);
+        }
+        expected.verify(&expected.unit, policy)?;
+        if let Some(previous) = self.retained.get(&expected.unit) {
+            if previous != expected {
+                return Err(BrokerError::Conflict(
+                    "retained identity changed".to_owned(),
+                ));
+            }
+        } else {
+            self.retained
+                .insert(expected.unit.clone(), expected.clone());
+        }
+        if let Some(error) = &self.store_error_after_capture {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
+    fn verify_retirement(
+        &mut self,
+        expected: &LaunchReceipt,
+        _deadline: Instant,
+    ) -> BrokerResult<bool> {
+        if let Some(error) = &self.retirement_error {
+            return Err(error.clone());
+        }
+        let Some(original) = self.emptied.get(&expected.unit) else {
+            return Ok(false);
+        };
+        if self.retained.get(&expected.unit) != Some(original)
+            || !ledger::same_process_binding(
+                &receipt_from(&expected.request, original, false),
+                expected,
+            )
+        {
+            return Err(BrokerError::Conflict(
+                "foreign population witness".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn require_retained_containment(
+        &mut self,
+        receipt: &LaunchReceipt,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()> {
+        remaining(deadline)?;
+        verify_receipt_identity(
+            receipt,
+            &receipt.request,
+            &unit_name(&receipt.request),
+            policy,
+        )?;
+        let original = self.retained.get(&receipt.unit).ok_or_else(|| {
+            BrokerError::Conflict("original containment is unavailable".to_owned())
+        })?;
+        original.verify(&receipt.unit, policy)?;
+        if !ledger::same_process_binding(&receipt_from(&receipt.request, original, false), receipt)
+        {
+            return Err(BrokerError::Conflict(
+                "original receipt binding differs".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stop_retained_containment(
+        &mut self,
+        receipt: &LaunchReceipt,
+        _deadline: Instant,
+    ) -> BrokerResult<()> {
+        let original = self.retained.get(&receipt.unit).ok_or_else(|| {
+            BrokerError::Conflict("original containment is unavailable".to_owned())
+        })?;
+        if !ledger::same_process_binding(&receipt_from(&receipt.request, original, false), receipt)
+        {
+            return Err(BrokerError::Conflict(
+                "original receipt binding differs".to_owned(),
+            ));
+        }
+        self.orphan_stops += 1;
+        if let Some(error) = &self.stop_error {
+            return Err(error.clone());
+        }
+        if !self.withhold_empty_proof {
+            self.emptied.insert(receipt.unit.clone(), original.clone());
+        }
+        Ok(())
+    }
+
+    fn require_containment(
+        &mut self,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()> {
+        self.require_local_containment(expected, policy, deadline)?;
+        if let Some(error) = &self.store_error_after_capture {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
+    fn require_local_containment(
+        &mut self,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        _deadline: Instant,
+    ) -> BrokerResult<()> {
+        expected.verify(&expected.unit, policy)?;
+        if self.retained.get(&expected.unit) != Some(expected) {
+            return Err(BrokerError::Conflict(
+                "original containment is unavailable".to_owned(),
+            ));
+        }
         Ok(())
     }
 }
@@ -134,6 +333,25 @@ fn policy() -> BrokerPolicy {
     };
     BrokerPolicy::new(peer, BTreeMap::from([(BrokerComponent::Synthetic, launch)]))
         .expect("valid fixture policy")
+}
+
+fn transport_policy() -> BrokerPolicy {
+    let base = policy();
+    let executable = fs::canonicalize("/proc/self/exe").expect("test executable path");
+    let peer = PeerPolicy {
+        uid: base.peer.uid,
+        gid: base.peer.gid,
+        executable_sha256: digest(&executable),
+        executable,
+    };
+    // The real peer here is the large, unoptimized test image rather than the
+    // tiny sleep fixture. Its authenticated digest must fit the same bounded
+    // request window used by the real transport.
+    let mut components = base.components.clone();
+    for launch in components.values_mut() {
+        launch.timeout = MAX_IO_TIMEOUT;
+    }
+    BrokerPolicy::new(peer, components).expect("transport fixture policy")
 }
 
 fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) {
@@ -310,6 +528,51 @@ fn partial_ledger_append_poisons_state_and_blocks_effects() {
 }
 
 #[test]
+fn failed_launch_postcondition_cannot_authorize_cleanup_of_observed_cgroup() {
+    for wrong_cgroup in [false, true] {
+        let policy = policy();
+        let request = request("unverified-start");
+        let unit = unit_name(&request);
+        let launch_policy = policy.component(request.component).expect("launch policy");
+        let mut backend = FakeBackend::new();
+        let mut observation = backend
+            .start(
+                &unit,
+                &request,
+                launch_policy,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .expect("construct fixture observation");
+        backend.units.clear();
+        backend.starts = 0;
+        if wrong_cgroup {
+            observation.control_group = "/system.slice/unrelated.service".to_owned();
+        } else {
+            observation.executable = PathBuf::from("/unapproved/image");
+        }
+        backend.start_override = Some(observation);
+        let directory = protected_tempdir();
+        let path = directory.path().join("ledger");
+        let ledger = BrokerLedger::init(&path).expect("initialize ledger");
+        let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, ledger);
+        let (peer, mut child) = credentials(&policy);
+        let result = broker.handle(peer, request.clone());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(matches!(result, Err(BrokerError::Conflict(_))));
+        assert_eq!(broker.backend.starts, 1);
+        assert_eq!(
+            broker.backend.stops, 0,
+            "unverified observation is not cleanup authority"
+        );
+        assert!(broker.receipts.is_empty());
+        drop(broker);
+        let reopened = BrokerLedger::open(&path).expect("reopen preserved reservation");
+        assert_eq!(reopened.state(&request), Some(ledger::LedgerState::Pending));
+    }
+}
+
+#[test]
 fn sync_failure_poisons_ledger_without_inserting_uncommitted_state() {
     let policy = policy();
     let directory = protected_tempdir();
@@ -344,7 +607,7 @@ fn sync_failure_poisons_ledger_without_inserting_uncommitted_state() {
 }
 
 #[test]
-fn committed_duplicate_survives_owner_reopen_with_exact_observation() {
+fn committed_duplicate_cannot_replace_original_containment_after_owner_reopen() {
     let policy = policy();
     let directory = protected_tempdir();
     let path = directory.path().join("broker-ledger");
@@ -368,12 +631,15 @@ fn committed_duplicate_survives_owner_reopen_with_exact_observation() {
     let mut backend = FakeBackend::new();
     backend.units.insert(first.unit.clone(), exact_observation);
     let mut replacement = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, reopened);
-    let duplicate = replacement
-        .handle(peer, request)
-        .expect("exact duplicate after reopen");
+    assert!(replacement.handle(peer, request.clone()).is_err());
     let _ = child.kill();
     let _ = child.wait();
-    assert!(duplicate.duplicate);
+    assert!(replacement.backend.retained.is_empty());
+    assert!(replacement.receipts.is_empty());
+    assert_eq!(
+        replacement.ledger.state(&request),
+        Some(ledger::LedgerState::Committed)
+    );
     assert_eq!(replacement.backend.starts, 0);
     assert_eq!(replacement.backend.inspects, 1);
 }
@@ -400,6 +666,46 @@ fn duplicate_json_members_are_rejected_before_schema_admission() {
         "request",
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn lifecycle_wire_schema_is_versioned_and_closed() {
+    let valid = format!(
+        "{{\"version\":1,\"operation\":\"inspect\",\"request\":{}}}",
+        serde_json::to_string(&request("wire")).expect("request JSON")
+    );
+    let parsed = parse_json::<BrokerLifecycleRequest>(valid.as_bytes(), "lifecycle request")
+        .expect("versioned lifecycle request");
+    assert_eq!(parsed.version, BROKER_PROTOCOL_VERSION);
+    assert_eq!(parsed.operation, BrokerLifecycleOperation::Inspect);
+
+    let extra = format!(
+        "{{\"version\":1,\"operation\":\"inspect\",\"request\":{},\"unit\":\"bad\"}}",
+        serde_json::to_string(&request("wire-extra")).expect("request JSON")
+    );
+    assert!(parse_json::<BrokerLifecycleRequest>(extra.as_bytes(), "lifecycle request").is_err());
+    assert!(parse_json::<BrokerLifecycleRequest>(
+        br#"{"version":2,"operation":"inspect","request":{"component":"synthetic","instance":"i","incarnation":"c","nonce":"n"}}"#,
+        "lifecycle request"
+    )
+    .expect("schema parses before version validation")
+    .validate()
+    .is_err());
+}
+
+#[test]
+fn legacy_launch_request_remains_a_four_field_schema() {
+    let request = parse_json::<BrokerRequest>(
+        br#"{"component":"synthetic","instance":"i","incarnation":"c","nonce":"n"}"#,
+        "legacy request",
+    )
+    .expect("legacy request parses");
+    assert_eq!(request.component, BrokerComponent::Synthetic);
+    assert!(parse_json::<BrokerRequest>(
+        br#"{"component":"synthetic","instance":"i","incarnation":"c","nonce":"n","version":1}"#,
+        "legacy request",
+    )
+    .is_err());
 }
 
 #[test]
@@ -450,6 +756,201 @@ fn active_unit_without_durable_history_is_not_adopted() {
     assert!(matches!(error, BrokerError::Conflict(_)));
     assert!(!broker.ledger.contains(&request));
     assert_eq!(broker.backend.starts, 0);
+}
+
+#[test]
+fn inspect_requires_the_same_live_process_binding_and_does_not_change_ledger() {
+    let policy = policy();
+    let request = request("inspect-binding");
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
+    let (peer, mut child) = credentials(&policy);
+    let receipt = broker
+        .handle(peer, request.clone())
+        .expect("launch for inspect");
+    let before = broker.ledger.state(&request).expect("committed record");
+    broker
+        .backend
+        .units
+        .get_mut(&receipt.unit)
+        .expect("live fake unit")
+        .creation_token = "reused-start-token".to_owned();
+
+    let error = broker
+        .inspect(peer, request.clone())
+        .expect_err("changed live identity must fail closed");
+    let after = broker
+        .ledger
+        .state(&request)
+        .expect("committed record remains");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert_eq!(before, after);
+    assert_eq!(broker.backend.stops, 0);
+}
+
+#[test]
+fn stop_is_durable_and_terminal_duplicates_do_not_touch_backend() {
+    let policy = policy();
+    let request = request("terminal-stop");
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
+    let (peer, mut child) = credentials(&policy);
+    broker
+        .handle(peer, request.clone())
+        .expect("launch for stop");
+
+    let stopped = broker.stop(peer, request.clone()).expect("stop exact unit");
+    let duplicate = broker
+        .stop(peer, request.clone())
+        .expect("terminal stop duplicate");
+    let inspected = broker
+        .inspect(peer, request.clone())
+        .expect("terminal inspect");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(stopped.state, BrokerLifecycleState::Stopped);
+    assert!(!stopped.duplicate);
+    assert_eq!(duplicate.state, BrokerLifecycleState::Stopped);
+    assert!(duplicate.duplicate);
+    assert_eq!(inspected.state, BrokerLifecycleState::Stopped);
+    assert!(!inspected.duplicate);
+    assert_eq!(broker.backend.stops, 1);
+    assert!(broker.active_units.is_empty());
+    assert_eq!(
+        broker.ledger.state(&request).expect("terminal record"),
+        ledger::LedgerState::Stopped
+    );
+}
+
+#[test]
+fn stop_backend_error_retains_active_ownership_for_retry() {
+    let policy = policy();
+    let request = request("stop-error");
+    let mut backend = FakeBackend::new();
+    backend.stop_error = Some(BrokerError::Unavailable("injected stop failure".to_owned()));
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), backend);
+    let (peer, mut child) = credentials(&policy);
+    let receipt = broker
+        .handle(peer, request.clone())
+        .expect("launch for stop error");
+
+    let error = broker
+        .stop(peer, request.clone())
+        .expect_err("stop error must be returned");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Unavailable(_)));
+    assert!(broker.active_units.contains(&receipt.unit));
+    assert_eq!(
+        broker
+            .ledger
+            .state(&request)
+            .expect("stop-pending record retained"),
+        ledger::LedgerState::StopPending
+    );
+    assert_eq!(broker.backend.stops, 1);
+}
+
+#[test]
+fn stop_confirmation_timeout_retains_active_ownership() {
+    let mut policy = policy();
+    let mut launch = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy")
+        .clone();
+    launch.timeout = Duration::from_millis(30);
+    policy = BrokerPolicy::new(
+        policy.peer.clone(),
+        BTreeMap::from([(BrokerComponent::Synthetic, launch)]),
+    )
+    .expect("short test policy");
+    let request = request("stop-timeout");
+    let mut backend = FakeBackend::new();
+    backend.retain_on_stop = true;
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), backend);
+    let (peer, mut child) = credentials(&policy);
+    let receipt = broker
+        .handle(peer, request.clone())
+        .expect("launch for stop timeout");
+    let error = broker
+        .stop(peer, request)
+        .expect_err("persistent unit must not be reported stopped");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(error, BrokerError::Unavailable(_)));
+    assert!(broker.active_units.contains(&receipt.unit));
+    assert_eq!(broker.backend.stops, 1);
+}
+
+#[test]
+fn versioned_lifecycle_round_trip_uses_real_unix_stream_transport() {
+    let policy = transport_policy();
+    let request = request("transport-inspect");
+    let peer = PeerCredentials {
+        pid: std::process::id(),
+        uid: policy.peer.uid,
+        gid: policy.peer.gid,
+    };
+    let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
+    broker
+        .handle(peer, request.clone())
+        .expect("seed exact committed unit");
+    let (mut client, mut server) = UnixStream::pair().expect("unix stream pair");
+    let join = thread::spawn(move || {
+        handle_connection(&mut server, &mut broker, Instant::now() + MAX_IO_TIMEOUT)
+    });
+    let envelope = BrokerLifecycleRequest {
+        version: BROKER_PROTOCOL_VERSION,
+        operation: BrokerLifecycleOperation::Inspect,
+        request,
+    };
+    let bytes = serde_json::to_vec(&envelope).expect("lifecycle request JSON");
+    client.write_all(&bytes).expect("write lifecycle request");
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("finish lifecycle request");
+    let response =
+        read_frame(&mut client, Instant::now() + MAX_IO_TIMEOUT).expect("read lifecycle response");
+    join.join()
+        .expect("transport server thread")
+        .expect("transport request");
+    let response: LifecycleWireResponseOwned =
+        parse_json(&response, "lifecycle response").expect("closed lifecycle response");
+    assert!(response.accepted);
+    assert_eq!(response.version, BROKER_PROTOCOL_VERSION);
+    assert_eq!(response.operation, BrokerLifecycleOperation::Inspect);
+    assert_eq!(response.state, Some(BrokerLifecycleState::Active));
+    assert!(response.receipt.is_some());
+}
+
+#[test]
+fn stopped_record_survives_ledger_reopen() {
+    let policy = policy();
+    let directory = protected_tempdir();
+    let path = directory.path().join("broker-ledger");
+    let ledger = BrokerLedger::init(&path).expect("initialize ledger");
+    let request = request("stop-reopen");
+    let (peer, mut child) = credentials(&policy);
+    let mut broker =
+        LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), ledger);
+    broker
+        .handle(peer, request.clone())
+        .expect("launch before reopen");
+    broker.stop(peer, request.clone()).expect("durable stop");
+    drop(broker);
+
+    let reopened = BrokerLedger::open(&path).expect("open terminal ledger");
+    let mut replacement =
+        LinuxSystemdBroker::new_with_ledger(policy.clone(), FakeBackend::new(), reopened);
+    let duplicate = replacement
+        .stop(peer, request)
+        .expect("duplicate after ledger reopen");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(duplicate.duplicate);
+    assert_eq!(replacement.backend.stops, 0);
+    assert_eq!(replacement.backend.inspects, 1);
 }
 
 #[test]
@@ -540,6 +1041,7 @@ fn peer_credentials_are_kernel_bound() {
             gid: policy.peer.gid,
         },
         &policy.peer,
+        Instant::now() + Duration::from_secs(2),
     )
     .expect_err("forged uid must fail");
     let _ = child.kill();

@@ -339,6 +339,8 @@ fn native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job(
         &intent.id,
         1_004,
         Some(&worker),
+        None,
+        &supervisor.worker_boot_id,
     );
     let launch_error = match launch {
         Err(super::runtime_process::RuntimeLaunchError::Ordinary(error)) => error,

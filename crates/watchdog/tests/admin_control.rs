@@ -178,15 +178,25 @@ fn real_service_quarantine_is_admin_only_atomic_and_replayable_after_restart() {
     let job = supervisor
         .submit_job("episode", &serde_json::json!({"private": "stay-local"}))
         .unwrap();
-    supervisor.reconcile_once(10).unwrap();
+    // This fixture exercises quarantine authorization, not wall-clock
+    // scheduling. Use the persisted admission time so a host clock correction
+    // cannot turn its queued job into a not-yet-due job between calls.
+    let admitted_at = job.created_at_ms;
+    supervisor.reconcile_once(admitted_at).unwrap();
     assert_eq!(
         supervisor.status().unwrap().desired_mode,
         DesiredMode::Running
     );
+    assert!(
+        supervisor
+            .claim_job("worker-a", admitted_at.saturating_sub(1))
+            .unwrap()
+            .is_none()
+    );
     let claim = supervisor
-        .claim_job("worker-a", ascension_watchdog::storage::now_unix_ms())
+        .claim_job("worker-a", admitted_at)
         .unwrap()
-        .unwrap();
+        .expect("the queued job is due at its persisted admission time");
     let attempt_id = claim.attempt_id.clone();
     let mut service = ServiceLoop::new(supervisor, Duration::from_millis(10)).unwrap();
     let queue = AdminQueue::new(8).unwrap();

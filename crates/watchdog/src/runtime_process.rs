@@ -8,15 +8,15 @@
 use crate::config::DesiredMode;
 use crate::config::{ComponentConfig, WatchdogConfig, validate_digest};
 use crate::error::{Result, WatchdogError};
+#[cfg(any(windows, test))]
+use crate::platform::SessionSelector as PlatformSessionSelector;
 #[cfg(target_os = "linux")]
 use crate::platform::{
     AdapterError, ContainmentId, Observation as PlatformObservation, OwnedProcess, ProcessAdapter,
     ProcessCreation, ProcessIdentity as PlatformProcessIdentity,
     StopOutcome as PlatformStopOutcome,
 };
-use crate::platform::{
-    ComponentKind as PlatformComponentKind, LaunchSpec, SessionSelector as PlatformSessionSelector,
-};
+use crate::platform::{ComponentKind as PlatformComponentKind, LaunchSpec};
 use crate::process::{OutputSnapshot, OwnedChild, ProcessIdentity, ProcessSpawnError};
 #[cfg(target_os = "linux")]
 use crate::storage::Store;
@@ -36,6 +36,7 @@ use std::time::Duration;
 const MAX_NATIVE_PROOF_BYTES: usize = 8 * 1024;
 const NATIVE_MAX_PROCESSES: u32 = 64;
 const NATIVE_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
 const NATIVE_FORCE_TIMEOUT: Duration = Duration::from_secs(10);
 const INCARNATION_PREFIX: &str = "watchdog-generation-";
 
@@ -45,6 +46,7 @@ pub(crate) struct RuntimeChild {
     intent_id: String,
     ownership: OwnershipProof,
     worker_bootstrap_binding: Option<crate::storage::WorkerBootstrapBinding>,
+    gateway_health_client: Option<crate::gateway_health::GatewayHealthClient>,
     handle: RuntimeChildHandle,
 }
 
@@ -191,9 +193,16 @@ impl RuntimeProcessManager {
         intent_id: &str,
         now_ms: u64,
         worker: Option<&crate::worker_bootstrap::WorkerBootstrapLaunch>,
+        gateway_health: Option<&crate::platform::gateway_health::GatewayHealthBootstrap>,
+        watchdog_boot_id: &str,
     ) -> std::result::Result<RuntimeChild, RuntimeLaunchError> {
+        if worker.is_some() && gateway_health.is_some() {
+            return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
+                "worker and gateway health bootstraps are mutually exclusive".to_owned(),
+            )));
+        }
         if self.synthetic {
-            if worker.is_some() {
+            if worker.is_some() || gateway_health.is_some() {
                 return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
                     "synthetic launcher cannot consume native worker bootstrap".to_owned(),
                 )));
@@ -222,13 +231,21 @@ impl RuntimeProcessManager {
                 intent_id: intent_id.to_owned(),
                 ownership,
                 worker_bootstrap_binding: None,
+                gateway_health_client: None,
                 handle: RuntimeChildHandle::Synthetic(child),
             });
         }
         let native = self
             .ensure_native(config)
             .map_err(RuntimeLaunchError::Ordinary)?
-            .launch(config, specification, planned_containment, worker)?;
+            .launch(
+                config,
+                specification,
+                planned_containment,
+                worker,
+                gateway_health,
+                watchdog_boot_id,
+            )?;
         let mut child = self.finish_native_launch(native, |native| {
             native.identity(intent_id, specification, planned_containment, now_ms)
         })?;
@@ -268,6 +285,7 @@ impl RuntimeProcessManager {
             intent_id: ownership.intent_id.clone(),
             ownership,
             worker_bootstrap_binding: None,
+            gateway_health_client: None,
             handle: RuntimeChildHandle::Native(native),
         })
     }
@@ -351,6 +369,7 @@ impl RuntimeProcessManager {
             intent_id: intent.id.clone(),
             ownership: proof,
             worker_bootstrap_binding: None,
+            gateway_health_client: None,
             handle: RuntimeChildHandle::Native(native),
         }))
     }
@@ -402,9 +421,45 @@ impl RuntimeProcessManager {
         }
         Ok(value)
     }
+
+    pub(crate) fn probe_gateway_health(
+        &mut self,
+        child: &mut RuntimeChild,
+    ) -> std::result::Result<
+        crate::gateway_health::GatewayHealthStatus,
+        crate::gateway_health::HealthError,
+    > {
+        use crate::gateway_health::HealthError;
+        if !child.is_native() {
+            return Err(HealthError::Identity);
+        }
+        let expected = child.identity().clone();
+        let mut client = child
+            .gateway_health_client
+            .take()
+            .ok_or(HealthError::Configuration)?;
+        let result = client.probe(|| {
+            if child.identity() != &expected
+                || !matches!(self.inspect(child), Ok(RuntimeObservation::Running))
+            {
+                return Err(HealthError::Identity);
+            }
+            Ok(())
+        });
+        // Failed exchanges retain their consumed sequence. Never reconstruct a
+        // client with sequence zero for a surviving launch key.
+        child.gateway_health_client = Some(client);
+        result
+    }
 }
 
 impl RuntimeChild {
+    pub(crate) fn set_gateway_health_client(
+        &mut self,
+        client: Option<crate::gateway_health::GatewayHealthClient>,
+    ) {
+        self.gateway_health_client = client;
+    }
     pub(crate) fn worker_bootstrap_binding(
         &self,
     ) -> Option<&crate::storage::WorkerBootstrapBinding> {
@@ -592,21 +647,37 @@ impl NativeBackend {
         specification: &LaunchSpec,
         planned_containment: &str,
         worker: Option<&crate::worker_bootstrap::WorkerBootstrapLaunch>,
+        gateway_health: Option<&crate::platform::gateway_health::GatewayHealthBootstrap>,
+        watchdog_boot_id: &str,
     ) -> std::result::Result<NativeChild, RuntimeLaunchError> {
         #[cfg(not(windows))]
-        let _ = config;
+        let _ = (config, watchdog_boot_id);
         match self {
             #[cfg(target_os = "linux")]
             Self::Linux(adapter) => {
                 let containment = ContainmentId::new(planned_containment.to_owned())
                     .map_err(|error| RuntimeLaunchError::Ordinary(map_adapter_error(error)))?;
-                let launched = match worker {
-                    Some(worker) => adapter.launch_with_planned_containment_and_worker_bootstrap(
-                        specification,
-                        &containment,
-                        worker,
-                    ),
-                    None => adapter.launch_with_planned_containment(specification, &containment),
+                let launched = match (worker, gateway_health) {
+                    (Some(worker), None) => adapter
+                        .launch_with_planned_containment_and_worker_bootstrap(
+                            specification,
+                            &containment,
+                            worker,
+                        ),
+                    (None, Some(health)) => adapter
+                        .launch_with_planned_containment_and_gateway_health_bootstrap(
+                            specification,
+                            &containment,
+                            health,
+                        ),
+                    (None, None) => {
+                        adapter.launch_with_planned_containment(specification, &containment)
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
+                            "ambiguous native bootstrap".to_owned(),
+                        )));
+                    }
                 };
                 launched.map(NativeChild::Linux).map_err(|error| {
                     if crate::platform::linux_process::is_cleanup_uncertain(&error) {
@@ -652,6 +723,34 @@ impl NativeBackend {
                             })
                         },
                     )
+                } else if let Some(health) = gateway_health {
+                    let frame = health.encoded_frame();
+                    let native_frame =
+                        ascension_platform_windows::GatewayHealthBootstrapLaunch::from_frame(
+                            *frame,
+                        )
+                        .map_err(|error| RuntimeLaunchError::Ordinary(map_windows_error(error)))?;
+                    backend
+                        .launcher
+                        .launch_with_gateway_health_bootstrap_and_barrier(
+                            &windows_spec,
+                            &native_frame,
+                            || {
+                                super::runtime_gateway_health_admission::authorize_windows(
+                                    config,
+                                    specification,
+                                    planned_containment,
+                                    health,
+                                    watchdog_boot_id,
+                                    std::time::Instant::now() + Duration::from_secs(5),
+                                )
+                                .map_err(|error| {
+                                    ascension_platform_windows::PlatformError::IdentityMismatch(
+                                        format!("gateway pre-resume admission rejected: {error}"),
+                                    )
+                                })
+                            },
+                        )
                 } else {
                     backend.launcher.launch(&windows_spec)
                 };
@@ -1098,27 +1197,12 @@ fn validate_proof(
     // enough: rebuild the complete launch request and require the persisted
     // containment identity to be the one derived from that request.  This
     // prevents a proof from being rebound to another generation or nonce.
-    let specification = LaunchSpec {
-        deployment_id: config.deployment_id.clone(),
-        instance_id: component.id.clone(),
-        component: platform_component_kind(&component.id)?,
-        incarnation: proof.incarnation.clone(),
-        launch_nonce: intent.launch_nonce.clone(),
-        executable: component.executable.clone(),
-        executable_sha256: expected_digest.to_owned(),
-        arguments: component.args.clone(),
-        working_directory: component.cwd.clone(),
-        environment: component
-            .environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
-        // Background watchdog components are intentionally restricted to the
-        // service session.  HostBroker is not admitted by this runtime.
-        session: PlatformSessionSelector::Explicit(0),
-        graceful_timeout: NATIVE_GRACEFUL_TIMEOUT,
-        force_timeout: NATIVE_FORCE_TIMEOUT,
-    };
+    let specification = super::launch_spec_for(
+        config,
+        component,
+        intent.launch_nonce.clone(),
+        proof.incarnation.clone(),
+    )?;
     let expected_containment = expected_containment_for(&specification)?;
     if expected_containment != proof.containment_id {
         return Err(WatchdogError::IdentityMismatch(
@@ -1295,8 +1379,8 @@ fn windows_process_identity(
 
 #[cfg(target_os = "linux")]
 pub fn run_linux_helper_if_requested() -> Result<Option<i32>> {
-    crate::platform::run_hidden_helper_if_requested_with_bootstrap_authorizer(
-        authorize_linux_helper,
+    crate::platform::linux_launcher::run_hidden_helper_if_requested_with_health_authorizer(
+        authorize_linux_helper_with_health,
     )
     .map_err(map_adapter_error)
 }
@@ -1308,13 +1392,18 @@ pub fn run_linux_helper_if_requested() -> Result<Option<i32>> {
 }
 
 #[cfg(target_os = "linux")]
-fn authorize_linux_helper(
+fn authorize_linux_helper_with_health(
     request: &crate::platform::LinuxHelperRequest,
     bootstrap: &crate::platform::LinuxHelperBootstrap,
-) -> std::result::Result<crate::platform::LinuxHelperAuthorization, AdapterError> {
+    observed_health: Option<&crate::platform::gateway_health::GatewayHealthFrameBinding>,
+) -> std::result::Result<(crate::platform::LinuxHelperAuthorization, Store), AdapterError> {
     let config = protected_config_from_bootstrap(bootstrap)?;
-    let store =
-        Store::open_read_only(&config.database, &config).map_err(watchdog_to_adapter_error)?;
+    // Serialize durable Stop with target exec just as Windows admission holds
+    // its reservation through ResumeThread. This is a read-only transaction
+    // in terms of row effects, but it intentionally reserves the writer slot.
+    let store = Store::open(&config.database, &config)
+        .and_then(Store::reserve_launch_admission)
+        .map_err(watchdog_to_adapter_error)?;
     let status = store.status().map_err(watchdog_to_adapter_error)?;
     if status.desired_mode != DesiredMode::Running {
         return Err(AdapterError::Unavailable(
@@ -1337,36 +1426,47 @@ fn authorize_linux_helper(
                 "Linux helper component is not in the protected configuration".to_owned(),
             )
         })?;
-    let digest = component.executable_sha256.as_deref().ok_or_else(|| {
+    component.executable_sha256.as_deref().ok_or_else(|| {
         AdapterError::Unsupported(
             "Linux helper component has no approved executable digest".to_owned(),
         )
     })?;
-    let expected = LaunchSpec {
-        deployment_id: status.deployment_id.clone(),
-        instance_id: component.id.clone(),
-        component: request.specification.component,
-        incarnation: expected_incarnation,
-        launch_nonce: request.specification.launch_nonce.clone(),
-        executable: component.executable.clone(),
-        executable_sha256: digest.to_owned(),
-        arguments: component.args.clone(),
-        working_directory: component.cwd.clone(),
-        environment: component
-            .environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
-        session: PlatformSessionSelector::Explicit(0),
-        graceful_timeout: NATIVE_GRACEFUL_TIMEOUT,
-        force_timeout: NATIVE_FORCE_TIMEOUT,
-    };
+    let expected = super::launch_spec_for(
+        &config,
+        component,
+        request.specification.launch_nonce.clone(),
+        expected_incarnation,
+    )
+    .map_err(watchdog_to_adapter_error)?;
     if request.specification != expected {
         return Err(AdapterError::IdentityMismatch(
             "Linux helper request differs from protected component configuration".to_owned(),
         ));
     }
     let planned = crate::platform::LinuxProcessAdapter::planned_containment_for(&expected)?;
+    let health_required = config
+        .gateway_health
+        .as_ref()
+        .is_some_and(|health| health.component_id == component.id);
+    match (health_required, observed_health) {
+        (true, Some(observed)) => {
+            super::runtime_gateway_health_admission::authorize_stored(
+                &config,
+                &store,
+                &expected,
+                planned.as_str(),
+                observed,
+                None,
+            )
+            .map_err(watchdog_to_adapter_error)?;
+        }
+        (false, None) => {}
+        _ => {
+            return Err(AdapterError::IdentityMismatch(
+                "gateway health pipe presence differs from approved configuration".to_owned(),
+            ));
+        }
+    }
     let intents = store
         .unsettled_launch_intents()
         .map_err(watchdog_to_adapter_error)?;
@@ -1422,11 +1522,14 @@ fn authorize_linux_helper(
             allowlisted_executables.insert(kind, configured.executable.clone());
         }
     }
-    Ok(crate::platform::LinuxHelperAuthorization {
-        specification: expected,
-        cgroup_path: request.cgroup_path.clone(),
-        allowlisted_executables,
-    })
+    Ok((
+        crate::platform::LinuxHelperAuthorization {
+            specification: expected,
+            cgroup_path: request.cgroup_path.clone(),
+            allowlisted_executables,
+        },
+        store,
+    ))
 }
 
 /// Bind the requested leaf to the exact containment persisted before launch.

@@ -40,6 +40,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
             arg.as_str(),
             "config"
                 | "init"
+                | "migrate"
                 | "doctor"
                 | "preflight"
                 | "release"
@@ -69,6 +70,9 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
     if args[0] == "--version" || args[0] == "version" {
         return Ok(Some(env!("CARGO_PKG_VERSION").to_string()));
     }
+    if args[0] == "migrate" {
+        require_migration_config(&args)?;
+    }
     #[cfg(windows)]
     if args.first().is_some_and(|arg| arg == "service")
         && args
@@ -87,6 +91,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
     match command.as_str() {
         "config" => config_command(&mut args, &config_path),
         "init" => init_command(&mut args, &config_path),
+        "migrate" => migration_command(&args, &config_path),
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args),
@@ -223,6 +228,40 @@ fn config_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<S
             "unknown config command {other}"
         ))),
     }
+}
+
+fn require_migration_config(args: &[String]) -> Result<()> {
+    let config_options = args.iter().filter(|arg| arg.as_str() == "--config").count();
+    let has_config_value = args
+        .iter()
+        .position(|arg| arg == "--config")
+        .is_some_and(|index| {
+            args.get(index + 1)
+                .is_some_and(|value| !value.is_empty() && !value.starts_with("--"))
+        });
+    if config_options != 1 || !has_config_value {
+        return Err(WatchdogError::InvalidInput(
+            "migrate requires exactly one --config PATH".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn migration_command(args: &[String], config_path: &Path) -> Result<Option<String>> {
+    if args != ["gateway-health"] {
+        return Err(WatchdogError::InvalidInput(
+            "migrate requires exactly gateway-health".to_owned(),
+        ));
+    }
+    // Offline maintenance uses the state directory's OS ownership boundary.
+    // Never contend with a daemon or alter desired mode to permit migration.
+    let config = WatchdogConfig::from_file(config_path)?;
+    let owner = crate::storage::SingletonLock::acquire(&config.database)?;
+    let mut store = Store::open(&config.database, &config)?;
+    store.migrate_gateway_health(&owner)?;
+    Ok(Some(
+        json!({"gateway_health_schema": 1, "desired_mode": "stopped"}).to_string(),
+    ))
 }
 
 fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
@@ -741,5 +780,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

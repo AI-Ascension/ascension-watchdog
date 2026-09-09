@@ -24,6 +24,7 @@ pub mod admin;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod gateway_health;
 pub mod platform;
 pub mod policy;
 pub mod preflight;

@@ -13,6 +13,9 @@
 //! there is no second target process or post-spawn PID move to authorize.
 
 use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
+use super::gateway_health::{
+    GatewayHealthBootstrap, GatewayHealthBootstrapError, GatewayHealthFrameBinding,
+};
 use crate::worker_bootstrap::{ExpectedPeer, WorkerBootstrapLaunch};
 use rustix::fs::{
     MemfdFlags, OFlags, SealFlags, fcntl_add_seals, fcntl_getfl, fcntl_setfl, fstatfs, memfd_create,
@@ -23,13 +26,12 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::{Uuid, Version};
@@ -45,6 +47,7 @@ const DELEGATED_CGROUP_ROOT_ARGUMENT: &str = "--ascension-linux-delegated-cgroup
 const WORKER_PIPE_ARGUMENT: &str = "--ascension-linux-worker-pipe";
 const WORKER_BOOT_ID_ARGUMENT: &str = "--ascension-linux-worker-boot-id";
 const WORKER_FRAME_SHA256_ARGUMENT: &str = "--ascension-linux-worker-frame-sha256";
+const GATEWAY_HEALTH_PIPE_ARGUMENT: &str = "--ascension-linux-gateway-health-pipe";
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_FIELD_BYTES: usize = 16 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -82,6 +85,7 @@ pub struct LinuxHelperBootstrap {
     worker_boot_id: Option<String>,
     worker_frame_sha256: Option<String>,
     worker_reader: Option<Arc<File>>,
+    gateway_health_reader: Option<Arc<File>>,
 }
 
 impl PartialEq for LinuxHelperBootstrap {
@@ -127,6 +131,7 @@ impl LinuxHelperBootstrap {
             worker_boot_id: None,
             worker_frame_sha256: None,
             worker_reader: None,
+            gateway_health_reader: None,
         })
     }
 
@@ -138,6 +143,7 @@ impl LinuxHelperBootstrap {
         worker_fd: Option<RawFd>,
         worker_boot_id: Option<String>,
         worker_frame_sha256: Option<String>,
+        gateway_health_fd: Option<RawFd>,
     ) -> Result<(Self, HelperReadyChannel), AdapterError> {
         let actual_parent_pid =
             rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_pid()).ok());
@@ -154,6 +160,13 @@ impl LinuxHelperBootstrap {
             || root_fd == ready_fd
             || worker_fd.is_some_and(|fd| {
                 fd < MIN_INHERITED_FD || fd == config_fd || fd == root_fd || fd == ready_fd
+            })
+            || gateway_health_fd.is_some_and(|fd| {
+                fd < MIN_INHERITED_FD
+                    || fd == config_fd
+                    || fd == root_fd
+                    || fd == ready_fd
+                    || worker_fd.is_some_and(|worker_fd| fd == worker_fd)
             })
         {
             return Err(AdapterError::Invalid(
@@ -228,6 +241,14 @@ impl LinuxHelperBootstrap {
                 ));
             }
         };
+        let gateway_health_reader = gateway_health_fd
+            .map(|fd| open_parent_gateway_health_descriptor(parent_pid, fd))
+            .transpose()?;
+        if gateway_health_reader.is_some() && worker_reader.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health pipes cannot be combined".to_owned(),
+            ));
+        }
         Ok((
             Self {
                 protected_config_path: config_path,
@@ -239,6 +260,7 @@ impl LinuxHelperBootstrap {
                 worker_boot_id,
                 worker_frame_sha256,
                 worker_reader,
+                gateway_health_reader: gateway_health_reader.map(Arc::new),
             },
             HelperReadyChannel { file: ready },
         ))
@@ -315,10 +337,29 @@ impl LinuxHelperBootstrap {
             .transpose()
     }
 
+    fn gateway_health_pipe_file(&self) -> Result<Option<File>, AdapterError> {
+        self.gateway_health_reader
+            .as_ref()
+            .map(|file| {
+                file.try_clone().map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux Gateway health pipe descriptor cannot be cloned: {error}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
     fn parent_descriptors(
         &self,
         worker: Option<&WorkerBootstrapLaunch>,
+        gateway_health: Option<&GatewayHealthBootstrap>,
     ) -> Result<ParentBootstrap, AdapterError> {
+        if worker.is_some() && gateway_health.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health pipes cannot be combined".to_owned(),
+            ));
+        }
         let Some(root) = self.delegated_cgroup_root.as_ref() else {
             return Err(AdapterError::Invalid(
                 "Linux helper requires an exact delegated cgroup root bootstrap".to_owned(),
@@ -370,16 +411,14 @@ impl LinuxHelperBootstrap {
             let reader = File::from(reader);
             let writer = File::from(writer);
             let reader_fd = reader.as_raw_fd();
-            if reader_fd < MIN_INHERITED_FD
-                || reader_fd == config_fd
-                || reader_fd == root_fd
-                || reader_fd == ready_fd
-                || writer.as_raw_fd() < MIN_INHERITED_FD
-                || writer.as_raw_fd() == config_fd
-                || writer.as_raw_fd() == root_fd
-                || writer.as_raw_fd() == ready_fd
-                || writer.as_raw_fd() == reader_fd
-            {
+            if invalid_parent_pipe_fd(
+                reader_fd,
+                writer.as_raw_fd(),
+                config_fd,
+                root_fd,
+                ready_fd,
+                None,
+            ) {
                 return Err(AdapterError::Unavailable(
                     "Linux worker bootstrap descriptor is reserved for stdio".to_owned(),
                 ));
@@ -388,6 +427,33 @@ impl LinuxHelperBootstrap {
         } else {
             (None, None, None)
         };
+        let (gateway_health_reader, gateway_health_writer, gateway_health_reader_fd) =
+            if gateway_health.is_some() {
+                let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)
+                    .map_err(|error| {
+                        AdapterError::Unavailable(format!(
+                            "Linux Gateway health bootstrap pipe cannot be created: {error}"
+                        ))
+                    })?;
+                let reader = File::from(reader);
+                let writer = File::from(writer);
+                let reader_fd = reader.as_raw_fd();
+                if invalid_parent_pipe_fd(
+                    reader_fd,
+                    writer.as_raw_fd(),
+                    config_fd,
+                    root_fd,
+                    ready_fd,
+                    worker_reader_fd,
+                ) {
+                    return Err(AdapterError::Unavailable(
+                        "Linux Gateway health descriptor is reserved for stdio".to_owned(),
+                    ));
+                }
+                (Some(reader), Some(writer), Some(reader_fd))
+            } else {
+                (None, None, None)
+            };
         Ok(ParentBootstrap {
             config,
             config_fd,
@@ -398,8 +464,28 @@ impl LinuxHelperBootstrap {
             worker_reader,
             worker_reader_fd,
             worker_writer,
+            gateway_health_reader,
+            gateway_health_reader_fd,
+            gateway_health_writer,
         })
     }
+}
+
+fn invalid_parent_pipe_fd(
+    reader_fd: RawFd,
+    writer_fd: RawFd,
+    config_fd: RawFd,
+    root_fd: RawFd,
+    ready_fd: RawFd,
+    other_reader_fd: Option<RawFd>,
+) -> bool {
+    reader_fd < MIN_INHERITED_FD
+        || writer_fd < MIN_INHERITED_FD
+        || reader_fd == writer_fd
+        || [config_fd, root_fd, ready_fd]
+            .into_iter()
+            .any(|fd| fd == reader_fd || fd == writer_fd)
+        || other_reader_fd.is_some_and(|fd| fd == reader_fd || fd == writer_fd)
 }
 
 /// CLOEXEC parent-owned descriptors kept alive until the helper has opened
@@ -414,6 +500,9 @@ struct ParentBootstrap {
     worker_reader: Option<File>,
     worker_reader_fd: Option<RawFd>,
     worker_writer: Option<File>,
+    gateway_health_reader: Option<File>,
+    gateway_health_reader_fd: Option<RawFd>,
+    gateway_health_writer: Option<File>,
 }
 
 impl std::fmt::Debug for ParentBootstrap {
@@ -429,6 +518,9 @@ impl std::fmt::Debug for ParentBootstrap {
             .field("worker_reader", &self.worker_reader)
             .field("worker_reader_fd", &self.worker_reader_fd)
             .field("worker_writer", &self.worker_writer)
+            .field("gateway_health_reader", &self.gateway_health_reader)
+            .field("gateway_health_reader_fd", &self.gateway_health_reader_fd)
+            .field("gateway_health_writer", &self.gateway_health_writer)
             .finish_non_exhaustive()
     }
 }
@@ -883,10 +975,13 @@ impl LinuxHelperAuthorization {
 /// occurs.
 pub(crate) struct PendingLaunch {
     child: Option<Child>,
+    request_frame: Option<Vec<u8>>,
     stdin: Option<ChildStdin>,
     parent_bootstrap: Option<ParentBootstrap>,
     worker_writer: Option<File>,
     worker_launch: Option<WorkerBootstrapLaunch>,
+    gateway_health_writer: Option<File>,
+    gateway_health_frame: Option<zeroize::Zeroizing<[u8; super::gateway_health::FRAME_BYTES]>>,
     launch_nonce: String,
     timeout: Duration,
     released: bool,
@@ -927,23 +1022,60 @@ impl PendingLaunch {
                 "Linux helper release was already sent".to_owned(),
             ));
         }
+        // Do not perform any helper-control I/O while the child is only owned
+        // by this launcher.  The caller must first put the exact child into
+        // its durable cgroup and verify membership; otherwise a bounded write
+        // failure could leave an uncontained helper behind.  Retain the frame
+        // until this point so every post-spawn I/O failure still returns with
+        // the exact Child handle in PendingLaunch for cgroup cleanup.
+        {
+            let Some(stdin) = self.stdin.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux helper stdin is unavailable".to_owned(),
+                ));
+            };
+            let Some(request_frame) = self.request_frame.as_ref() else {
+                return Err(AdapterError::Invalid(
+                    "Linux helper request frame is unavailable".to_owned(),
+                ));
+            };
+            set_nonblocking(&*stdin, "Linux helper stdin")?;
+            write_bounded(
+                stdin,
+                request_frame,
+                self.timeout.min(Duration::from_secs(5)),
+                "Linux helper request handoff",
+            )?;
+        }
+        self.request_frame.take();
         if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
-            bootstrap.wait_for_ready(&self.launch_nonce, self.timeout)?;
+            let ready_result = bootstrap.wait_for_ready(&self.launch_nonce, self.timeout);
             // READY proves the helper owns its duplicate. Keeping our reader
             // would conceal a rejected/exited helper from the bounded writer.
             bootstrap.worker_reader.take();
+            // The health pipe has the same ownership rule as the worker pipe:
+            // after READY, only the helper may retain a read end. Otherwise a
+            // dead helper could leave the parent's read end open and make a
+            // bounded health-frame write appear successful.
+            bootstrap.gateway_health_reader.take();
+            ready_result?;
         }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(AdapterError::Invalid(
                 "Linux helper stdin is unavailable".to_owned(),
             ));
         };
-        stdin
-            .write_all(GO_MAGIC)
-            .and_then(|()| put_string_io(stdin, &self.launch_nonce))
-            .map_err(|error| {
-                AdapterError::Io(format!("Linux helper GO handoff failed: {error}"))
-            })?;
+        let mut go = Vec::with_capacity(GO_MAGIC.len() + 2 + self.launch_nonce.len());
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, &self.launch_nonce).map_err(|error| {
+            AdapterError::Io(format!("Linux helper GO handoff failed: {error}"))
+        })?;
+        write_bounded(
+            stdin,
+            &go,
+            self.timeout.min(Duration::from_secs(5)),
+            "Linux helper GO handoff",
+        )?;
         if let Some(worker_launch) = self.worker_launch.as_ref() {
             let Some(worker_writer) = self.worker_writer.as_mut() else {
                 return Err(AdapterError::Invalid(
@@ -956,6 +1088,19 @@ impl PendingLaunch {
                 self.timeout.min(Duration::from_secs(5)),
             )?;
             self.worker_writer.take();
+        }
+        if let Some(gateway_health_frame) = self.gateway_health_frame.as_ref() {
+            let Some(gateway_health_writer) = self.gateway_health_writer.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux Gateway health bootstrap writer is unavailable".to_owned(),
+                ));
+            };
+            write_gateway_health_frame(
+                gateway_health_writer,
+                gateway_health_frame.as_ref(),
+                self.timeout.min(Duration::from_secs(5)),
+            )?;
+            self.gateway_health_writer.take();
         }
         self.released = true;
         Ok(())
@@ -970,7 +1115,7 @@ impl PendingLaunch {
     ///
     /// Returns an error if the gate was not released or the child handle was
     /// unexpectedly unavailable.
-    pub(crate) fn into_child(mut self) -> Result<Child, AdapterError> {
+    pub(crate) fn take_child(&mut self) -> Result<Child, AdapterError> {
         if !self.released {
             return Err(AdapterError::Invalid(
                 "Linux helper cannot be consumed before GO".to_owned(),
@@ -978,6 +1123,7 @@ impl PendingLaunch {
         }
         self.stdin.take();
         self.worker_writer.take();
+        self.gateway_health_writer.take();
         // The helper parsed and opened both parent descriptors before it could
         // read the frame or accept GO, so the parent-side keepalive can close
         // before returning the target handle.  The target never inherited
@@ -987,20 +1133,37 @@ impl PendingLaunch {
             AdapterError::Unavailable("Linux helper child handle was lost".to_owned())
         })
     }
+
+    /// Close every parent-side handoff descriptor before a caller performs
+    /// explicit launch-failure cleanup.  Keeping a reader or writer alive can
+    /// make a dead helper/cgroup look reachable and can hide a failed pipe
+    /// handoff from the cleanup proof.
+    pub(crate) fn close_handoff_descriptors(&mut self) {
+        self.stdin.take();
+        self.worker_writer.take();
+        self.gateway_health_writer.take();
+        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
+            bootstrap.worker_reader.take();
+            bootstrap.worker_writer.take();
+            bootstrap.gateway_health_reader.take();
+            bootstrap.gateway_health_writer.take();
+        }
+    }
+
+    /// Borrow the exact helper child for explicit cgroup cleanup while this
+    /// pending launch still owns all of its transport descriptors.
+    pub(crate) fn child_mut(&mut self) -> Option<&mut Child> {
+        self.child.as_mut()
+    }
 }
 
 impl Drop for PendingLaunch {
     fn drop(&mut self) {
-        self.stdin.take();
-        // Close both ends of the dedicated worker handoff before attempting
-        // bounded helper termination.  Otherwise a pending writer/reader can
-        // keep the pipe alive while the helper is being reaped and obscure a
-        // failed or cancelled launch from any peer that is still probing it.
-        self.worker_writer.take();
-        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
-            bootstrap.worker_reader.take();
-            bootstrap.worker_writer.take();
-        }
+        // The adapter normally calls `close_handoff_descriptors` and performs
+        // a fallible cgroup cleanup while it still owns this object.  Drop is
+        // only the final best-effort guard for callers that abandon a pending
+        // launch without entering that explicit error path.
+        self.close_handoff_descriptors();
         if let Some(child) = self.child.as_mut() {
             terminate_child_bounded(child, CHILD_CLEANUP_TIMEOUT);
         }
@@ -1157,10 +1320,11 @@ impl TrustedLinuxLauncher {
         &self.helper_executable_sha256
     }
 
-    /// Spawn only the trusted helper and send its bounded request frame.
+    /// Spawn only the trusted helper and retain its bounded request frame.
     ///
     /// The caller must assign [`PendingLaunch::pid`] to the exact durable
-    /// cgroup, verify membership, and call [`PendingLaunch::release_gate`].
+    /// cgroup, verify membership, and call [`PendingLaunch::release_gate`],
+    /// which performs the initial control handoff only after that proof.
     ///
     /// # Errors
     ///
@@ -1171,7 +1335,7 @@ impl TrustedLinuxLauncher {
         specification: &LaunchSpec,
         cgroup_path: &Path,
     ) -> Result<PendingLaunch, AdapterError> {
-        self.prepare_inner(specification, cgroup_path, None)
+        self.prepare_inner(specification, cgroup_path, None, None)
     }
 
     /// Spawn a helper with a dedicated Linux worker bootstrap pipe.
@@ -1203,7 +1367,33 @@ impl TrustedLinuxLauncher {
                 "Linux worker bootstrap requires a protected helper bootstrap".to_owned(),
             ));
         }
-        self.prepare_inner(specification, cgroup_path, Some(worker))
+        self.prepare_inner(specification, cgroup_path, Some(worker), None)
+    }
+
+    /// Spawn a Gateway helper with a dedicated one-shot health bootstrap pipe.
+    ///
+    /// The fixed health frame is never written to the helper control stdin,
+    /// command line, environment, or protected configuration.  The helper
+    /// validates the frame after the existing nonce-bound GO barrier and
+    /// installs only the validated bytes as the target Gateway's stdin.
+    pub(crate) fn prepare_with_gateway_health_bootstrap(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        gateway_health: &GatewayHealthBootstrap,
+    ) -> Result<PendingLaunch, AdapterError> {
+        if specification.component != ComponentKind::Gateway {
+            return Err(AdapterError::Unsupported(
+                "Gateway health bootstrap is only valid for the Gateway role".to_owned(),
+            ));
+        }
+        if self.bootstrap.is_none() {
+            return Err(AdapterError::Invalid(
+                "Gateway health bootstrap requires a protected helper bootstrap".to_owned(),
+            ));
+        }
+        gateway_health.validate_for_launch(specification)?;
+        self.prepare_inner(specification, cgroup_path, None, Some(gateway_health))
     }
 
     fn prepare_inner(
@@ -1211,7 +1401,13 @@ impl TrustedLinuxLauncher {
         specification: &LaunchSpec,
         cgroup_path: &Path,
         worker: Option<&WorkerBootstrapLaunch>,
+        gateway_health: Option<&GatewayHealthBootstrap>,
     ) -> Result<PendingLaunch, AdapterError> {
+        if worker.is_some() && gateway_health.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health bootstraps cannot be combined".to_owned(),
+            ));
+        }
         specification.validate()?;
         let frame = encode_frame(specification, cgroup_path)?;
         // Open and hash the helper through one file descriptor immediately
@@ -1224,7 +1420,7 @@ impl TrustedLinuxLauncher {
         command.arg0(&self.helper_executable);
         command.arg(&self.helper_argument);
         let mut parent_bootstrap = if let Some(bootstrap) = &self.bootstrap {
-            let parent = bootstrap.parent_descriptors(worker)?;
+            let parent = bootstrap.parent_descriptors(worker, gateway_health)?;
             command
                 .arg(PARENT_BOOTSTRAP_PID_ARGUMENT)
                 .arg(std::process::id().to_string())
@@ -1247,6 +1443,16 @@ impl TrustedLinuxLauncher {
                     .arg(WORKER_FRAME_SHA256_ARGUMENT)
                     .arg(worker.frame_sha256());
             }
+            if let Some(_gateway_health) = gateway_health {
+                let health_fd = parent.gateway_health_reader_fd.ok_or_else(|| {
+                    AdapterError::Unavailable(
+                        "Linux Gateway health reader was not created".to_owned(),
+                    )
+                })?;
+                command
+                    .arg(GATEWAY_HEALTH_PIPE_ARGUMENT)
+                    .arg(health_fd.to_string());
+            }
             Some(parent)
         } else {
             None
@@ -1260,27 +1466,22 @@ impl TrustedLinuxLauncher {
             .spawn()
             .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
         drop(helper_file);
-        let Some(mut stdin) = child.stdin.take() else {
-            terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
-            return Err(AdapterError::Io(
-                "Linux helper did not provide anonymous stdin".to_owned(),
-            ));
-        };
-        if let Err(error) = stdin.write_all(&frame) {
-            terminate_child_bounded(&mut child, CHILD_CLEANUP_TIMEOUT);
-            return Err(AdapterError::Io(format!(
-                "Linux helper request handoff failed: {error}"
-            )));
-        }
+        let stdin = child.stdin.take();
         let worker_writer = parent_bootstrap
             .as_mut()
             .and_then(|parent| parent.worker_writer.take());
+        let gateway_health_writer = parent_bootstrap
+            .as_mut()
+            .and_then(|parent| parent.gateway_health_writer.take());
         Ok(PendingLaunch {
             child: Some(child),
-            stdin: Some(stdin),
+            request_frame: Some(frame),
+            stdin,
             parent_bootstrap,
             worker_writer,
             worker_launch: worker.cloned(),
+            gateway_health_writer,
+            gateway_health_frame: gateway_health.map(GatewayHealthBootstrap::encoded_frame),
             launch_nonce: specification.launch_nonce.clone(),
             timeout: self.timeout,
             released: false,
@@ -1385,56 +1586,82 @@ fn parse_helper_bootstrap_arguments(
         .map_err(|_| {
             AdapterError::Invalid("Linux helper readiness descriptor is invalid".to_owned())
         })?;
-    let (worker_fd, worker_boot_id, worker_frame_sha256) =
+    let (worker_fd, worker_boot_id, worker_frame_sha256, gateway_health_fd) =
         if let Some(worker_argument) = arguments.next() {
-            if worker_argument != WORKER_PIPE_ARGUMENT {
+            if worker_argument == GATEWAY_HEALTH_PIPE_ARGUMENT {
+                let gateway_health_fd = arguments
+                    .next()
+                    .ok_or_else(|| {
+                        AdapterError::Invalid(
+                            "Linux Gateway health pipe descriptor is missing".to_owned(),
+                        )
+                    })?
+                    .parse::<RawFd>()
+                    .map_err(|_| {
+                        AdapterError::Invalid(
+                            "Linux Gateway health pipe descriptor is invalid".to_owned(),
+                        )
+                    })?;
+                if arguments.next().is_some() {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has unexpected arguments".to_owned(),
+                    ));
+                }
+                (None, None, None, Some(gateway_health_fd))
+            } else if worker_argument != WORKER_PIPE_ARGUMENT {
                 return Err(AdapterError::Invalid(
                     "Linux helper invocation has an invalid worker pipe argument".to_owned(),
                 ));
-            }
-            let worker_fd = arguments
-                .next()
-                .ok_or_else(|| {
-                    AdapterError::Invalid("Linux worker pipe descriptor is missing".to_owned())
-                })?
-                .parse::<RawFd>()
-                .map_err(|_| {
-                    AdapterError::Invalid("Linux worker pipe descriptor is invalid".to_owned())
+            } else {
+                let worker_fd = arguments
+                    .next()
+                    .ok_or_else(|| {
+                        AdapterError::Invalid("Linux worker pipe descriptor is missing".to_owned())
+                    })?
+                    .parse::<RawFd>()
+                    .map_err(|_| {
+                        AdapterError::Invalid("Linux worker pipe descriptor is invalid".to_owned())
+                    })?;
+                let boot_argument = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid(
+                        "Linux worker boot metadata argument is missing".to_owned(),
+                    )
                 })?;
-            let boot_argument = arguments.next().ok_or_else(|| {
-                AdapterError::Invalid("Linux worker boot metadata argument is missing".to_owned())
-            })?;
-            if boot_argument != WORKER_BOOT_ID_ARGUMENT {
-                return Err(AdapterError::Invalid(
-                    "Linux helper invocation has an invalid worker boot argument".to_owned(),
-                ));
+                if boot_argument != WORKER_BOOT_ID_ARGUMENT {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has an invalid worker boot argument".to_owned(),
+                    ));
+                }
+                let worker_boot_id = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
+                })?;
+                let digest_argument = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid(
+                        "Linux worker frame digest argument is missing".to_owned(),
+                    )
+                })?;
+                if digest_argument != WORKER_FRAME_SHA256_ARGUMENT {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has an invalid worker frame argument".to_owned(),
+                    ));
+                }
+                let worker_frame_sha256 = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker frame digest is missing".to_owned())
+                })?;
+                if arguments.next().is_some() {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has unexpected arguments".to_owned(),
+                    ));
+                }
+                (
+                    Some(worker_fd),
+                    Some(worker_boot_id),
+                    Some(worker_frame_sha256),
+                    None,
+                )
             }
-            let worker_boot_id = arguments.next().ok_or_else(|| {
-                AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
-            })?;
-            let digest_argument = arguments.next().ok_or_else(|| {
-                AdapterError::Invalid("Linux worker frame digest argument is missing".to_owned())
-            })?;
-            if digest_argument != WORKER_FRAME_SHA256_ARGUMENT {
-                return Err(AdapterError::Invalid(
-                    "Linux helper invocation has an invalid worker frame argument".to_owned(),
-                ));
-            }
-            let worker_frame_sha256 = arguments.next().ok_or_else(|| {
-                AdapterError::Invalid("Linux worker frame digest is missing".to_owned())
-            })?;
-            if arguments.next().is_some() {
-                return Err(AdapterError::Invalid(
-                    "Linux helper invocation has unexpected arguments".to_owned(),
-                ));
-            }
-            (
-                Some(worker_fd),
-                Some(worker_boot_id),
-                Some(worker_frame_sha256),
-            )
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
     LinuxHelperBootstrap::from_parent_fds(
         parent_pid,
@@ -1444,6 +1671,7 @@ fn parse_helper_bootstrap_arguments(
         worker_fd,
         worker_boot_id,
         worker_frame_sha256,
+        gateway_health_fd,
     )
     .map(Some)
 }
@@ -1472,7 +1700,7 @@ where
             "Linux helper protected bootstrap requires the bootstrap authorizer API".to_owned(),
         ));
     }
-    run_hidden_helper_core(None, None, authorizer)
+    run_hidden_helper_core(None, None, None, |request, _| authorizer(request))
 }
 
 /// Run the hidden helper with the separately supplied protected-config
@@ -1497,58 +1725,211 @@ where
         )
     })?;
     let worker_reader = bootstrap.worker_pipe_file()?;
-    run_hidden_helper_core(Some(ready), worker_reader, |request| {
-        authorizer(request, &bootstrap)
-    })
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, gateway_health| {
+            if gateway_health.is_some() && request.specification.component == ComponentKind::Gateway
+            {
+                return Err(AdapterError::Invalid(
+                    "Gateway health bootstrap requires the Gateway health authorizer API"
+                        .to_owned(),
+                ));
+            }
+            authorizer(request, &bootstrap)
+        },
+    )
+}
+
+/// Run a protected helper with optional health binding and a held admission guard.
+///
+/// The real watchdog dispatcher uses the optional-binding variant below to
+/// admit both ordinary worker helpers and explicitly configured health helpers.
+pub fn run_hidden_helper_if_requested_with_health_authorizer<F, G>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<(LinuxHelperAuthorization, G), AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid("Linux helper requires protected config bootstrap".to_owned())
+    })?;
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    let mut admission_guard = None;
+    let result = run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, observed| {
+            let (authorization, guard) = authorizer(request, &bootstrap, observed)?;
+            admission_guard = Some(guard);
+            Ok(authorization)
+        },
+    );
+    // Successful exec replaces this process while the guard still exists.
+    // Its native descriptors must be CLOEXEC. Errors release it here, after
+    // the core can no longer execute the target. No launch follows Drop.
+    drop(admission_guard);
+    result.map(Some)
+}
+
+/// Run the hidden helper with a required dedicated Gateway health binding.
+///
+/// The callback receives only the non-secret binding derived from the fixed
+/// frame after GO.  It must independently load the expected launch nonce and
+/// frame digest from the owner-local durable launch-intent store and compare
+/// them before returning [`LinuxHelperAuthorization`].  The transport frame
+/// is never an authorization source by itself, and this entrypoint rejects a
+/// helper invocation that did not carry the dedicated health pipe.
+pub fn run_hidden_helper_with_bootstrap_and_gateway_health_authorizer<F>(
+    authorizer: F,
+) -> Result<i32, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        &GatewayHealthFrameBinding,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
+        )
+    })?;
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, gateway_health| {
+            let gateway_health = gateway_health.ok_or_else(|| {
+                AdapterError::Invalid(
+                    "Linux Gateway health authorizer requires the dedicated health pipe".to_owned(),
+                )
+            })?;
+            authorizer(request, &bootstrap, gateway_health)
+        },
+    )
 }
 
 fn run_hidden_helper_core<F>(
     mut ready: Option<HelperReadyChannel>,
     worker_reader: Option<File>,
+    mut gateway_health_reader: Option<File>,
     authorizer: F,
 ) -> Result<i32, AdapterError>
 where
-    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+    F: FnOnce(
+        &LinuxHelperRequest,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
 {
-    let (frame_rx, go_rx) = spawn_protocol_reader();
     let started = Instant::now();
-    let request = recv_bounded(&frame_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    let mut control_stdin = open_helper_control_stdin()?;
+    let request = read_frame_bounded(&mut control_stdin, remaining_timeout(started, MAX_TIMEOUT))?;
     if worker_reader.is_some() && request.specification.component != ComponentKind::Harness {
+        drop(worker_reader);
+        drop(gateway_health_reader);
         return Err(AdapterError::Unsupported(
             "Linux worker bootstrap pipe requires the Harness role".to_owned(),
+        ));
+    }
+    if gateway_health_reader.is_some() && request.specification.component != ComponentKind::Gateway
+    {
+        drop(worker_reader);
+        drop(gateway_health_reader);
+        return Err(AdapterError::Unsupported(
+            "Linux Gateway health bootstrap pipe requires the Gateway role".to_owned(),
+        ));
+    }
+    if worker_reader.is_some() && gateway_health_reader.is_some() {
+        drop(worker_reader);
+        drop(gateway_health_reader);
+        return Err(AdapterError::Invalid(
+            "Linux worker and Gateway health pipes cannot be combined".to_owned(),
         ));
     }
     if let Some(channel) = ready.as_mut() {
         channel.send(&request.specification.launch_nonce)?;
     }
-    let authorization = authorize_after_release(&request, &go_rx, started, authorizer)?;
+    let (authorization, gateway_health) = authorize_after_release_with_health(
+        &request,
+        &mut control_stdin,
+        started,
+        gateway_health_reader.as_mut(),
+        authorizer,
+    )?;
     verify_current_cgroup(&authorization.cgroup_path)?;
-    spawn_authorized_target(&authorization, worker_reader).map(|()| 0)
+    spawn_authorized_target(&authorization, worker_reader, gateway_health.as_ref()).map(|()| 0)
 }
 
+#[cfg(test)]
 fn authorize_after_release<F>(
     request: &LinuxHelperRequest,
-    go_rx: &Receiver<Result<String, AdapterError>>,
+    control_stdin: &mut impl Read,
     started: Instant,
     authorizer: F,
 ) -> Result<LinuxHelperAuthorization, AdapterError>
 where
     F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
 {
+    authorize_after_release_with_health(request, control_stdin, started, None, |request, _| {
+        authorizer(request)
+    })
+    .map(|(authorization, _)| authorization)
+}
+
+fn authorize_after_release_with_health<F>(
+    request: &LinuxHelperRequest,
+    control_stdin: &mut impl Read,
+    started: Instant,
+    gateway_health_reader: Option<&mut File>,
+    authorizer: F,
+) -> Result<(LinuxHelperAuthorization, Option<GatewayHealthBootstrap>), AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
     // The request frame can arrive before the parent has assigned this helper
     // to the cgroup. GO is sent only after that assignment and its verification.
     // Checking membership before GO races the parent's legitimate handoff.
     // Query durable authorization after the barrier too: stop may have been
     // committed while this helper was waiting, invalidating earlier approval.
-    let go = recv_bounded(go_rx, remaining_timeout(started, MAX_TIMEOUT))??;
+    let go = read_go_bounded(control_stdin, remaining_timeout(started, MAX_TIMEOUT))?;
     if go != request.specification.launch_nonce {
         return Err(AdapterError::IdentityMismatch(
             "Linux helper GO nonce does not match the authorized launch".to_owned(),
         ));
     }
-    let authorization = authorizer(request)?;
+    let gateway_health = gateway_health_reader
+        .map(|reader| {
+            read_gateway_health_frame(reader, request, remaining_timeout(started, MAX_TIMEOUT))
+        })
+        .transpose()?;
+    let gateway_health_binding = gateway_health
+        .as_ref()
+        .map(GatewayHealthFrameBinding::from_bootstrap);
+    let authorization = authorizer(request, gateway_health_binding.as_ref())?;
     authorize_request(request, &authorization)?;
-    Ok(authorization)
+    Ok((authorization, gateway_health))
 }
 
 /// Run the hidden helper if the current process was invoked in helper mode.
@@ -1587,49 +1968,85 @@ where
     run_hidden_helper_with_bootstrap_authorizer(authorizer).map(Some)
 }
 
-fn spawn_protocol_reader() -> (
-    Receiver<Result<LinuxHelperRequest, AdapterError>>,
-    Receiver<Result<String, AdapterError>>,
-) {
-    let (frame_tx, frame_rx) = mpsc::sync_channel(1);
-    let (go_tx, go_rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut stdin = io::stdin();
-        let result = read_frame(&mut stdin);
-        match result {
-            Ok(request) => {
-                if frame_tx.send(Ok(request)).is_err() {
-                    return;
-                }
-                let go = read_go(&mut stdin);
-                let _ = go_tx.send(go);
-            }
-            Err(error) => {
-                let _ = frame_tx.send(Err(error));
-            }
-        }
-    });
-    (frame_rx, go_rx)
+/// Run the required-health helper path when the current process was invoked
+/// in helper mode.
+pub fn run_hidden_helper_if_requested_with_bootstrap_and_gateway_health_authorizer<F>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        &GatewayHealthFrameBinding,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_bootstrap_and_gateway_health_authorizer(authorizer).map(Some)
 }
 
-fn recv_bounded<T>(
-    receiver: &Receiver<Result<T, AdapterError>>,
-    timeout: Duration,
-) -> Result<Result<T, AdapterError>, AdapterError> {
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|error| AdapterError::Timeout(format!("Linux helper barrier timed out: {error}")))
+fn open_helper_control_stdin() -> Result<File, AdapterError> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open("/proc/self/fd/0")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux helper control stdin cannot be opened for bounded I/O: {error}"
+            ))
+        })
 }
 
 fn remaining_timeout(started: Instant, limit: Duration) -> Duration {
     limit.checked_sub(started.elapsed()).unwrap_or_default()
 }
 
-fn read_frame(reader: &mut impl Read) -> Result<LinuxHelperRequest, AdapterError> {
+fn read_exact_bounded(
+    reader: &mut impl Read,
+    bytes: &mut [u8],
+    deadline: Instant,
+    label: &str,
+) -> Result<(), AdapterError> {
+    let mut received = 0_usize;
+    while received < bytes.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(format!("{label} timed out")));
+        }
+        match reader.read(&mut bytes[received..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(format!(
+                    "{label} closed before completion"
+                )));
+            }
+            Ok(count) => {
+                received = received
+                    .checked_add(count)
+                    .ok_or_else(|| AdapterError::Invalid(format!("{label} byte count overflow")))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(format!("{label} timed out")));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(protocol_io(&error)),
+        }
+    }
+    Ok(())
+}
+
+fn read_frame_bounded(
+    reader: &mut impl Read,
+    timeout: Duration,
+) -> Result<LinuxHelperRequest, AdapterError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
     let mut length = [0_u8; 4];
-    reader
-        .read_exact(&mut length)
-        .map_err(|error| protocol_io(&error))?;
+    read_exact_bounded(reader, &mut length, deadline, "Linux helper frame")?;
     let length = u32::from_le_bytes(length);
     let length = usize::try_from(length)
         .map_err(|_| AdapterError::Invalid("Linux helper frame length overflow".to_owned()))?;
@@ -1639,23 +2056,33 @@ fn read_frame(reader: &mut impl Read) -> Result<LinuxHelperRequest, AdapterError
         ));
     }
     let mut payload = vec![0_u8; length];
-    reader
-        .read_exact(&mut payload)
-        .map_err(|error| protocol_io(&error))?;
+    read_exact_bounded(reader, &mut payload, deadline, "Linux helper frame")?;
     decode_frame(&payload)
 }
 
-fn read_go(reader: &mut impl Read) -> Result<String, AdapterError> {
+fn read_go_bounded(reader: &mut impl Read, timeout: Duration) -> Result<String, AdapterError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
     let mut magic = [0_u8; GO_MAGIC.len()];
-    reader
-        .read_exact(&mut magic)
-        .map_err(|error| protocol_io(&error))?;
+    read_exact_bounded(reader, &mut magic, deadline, "Linux helper GO")?;
     if &magic != GO_MAGIC {
         return Err(AdapterError::IdentityMismatch(
             "Linux helper received an invalid GO marker".to_owned(),
         ));
     }
-    read_string(reader, MAX_FIELD_BYTES)
+    let mut length = [0_u8; 2];
+    read_exact_bounded(reader, &mut length, deadline, "Linux helper GO nonce")?;
+    let length = usize::from(u16::from_le_bytes(length));
+    if length == 0 || length > MAX_FIELD_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper GO nonce exceeds bounds".to_owned(),
+        ));
+    }
+    let mut value = vec![0_u8; length];
+    read_exact_bounded(reader, &mut value, deadline, "Linux helper GO nonce")?;
+    String::from_utf8(value)
+        .map_err(|_| AdapterError::Invalid("Linux helper GO nonce is not UTF-8".to_owned()))
 }
 
 fn validate_worker_boot_metadata(boot_id: &str, frame_sha256: &str) -> Result<(), AdapterError> {
@@ -1697,6 +2124,20 @@ fn open_parent_worker_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, Ada
     Ok(file)
 }
 
+fn open_parent_gateway_health_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent Gateway health pipe cannot be opened: {error}"
+            ))
+        })?;
+    validate_gateway_health_pipe_handle(&file)?;
+    Ok(file)
+}
+
 fn validate_worker_pipe_handle(file: &File) -> Result<(), AdapterError> {
     let metadata = file.metadata().map_err(|error| {
         AdapterError::Unavailable(format!("Linux worker pipe metadata failed: {error}"))
@@ -1720,6 +2161,30 @@ fn validate_worker_pipe_handle(file: &File) -> Result<(), AdapterError> {
     Ok(())
 }
 
+fn validate_gateway_health_pipe_handle(file: &File) -> Result<(), AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health pipe metadata failed: {error}"
+        ))
+    })?;
+    if !metadata.file_type().is_fifo() {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health descriptor is not a FIFO".to_owned(),
+        ));
+    }
+    let filesystem = fstatfs(file).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health pipe filesystem metadata failed: {error}"
+        ))
+    })?;
+    if filesystem.f_type != 0x5049_5045 {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health descriptor is not a kernel pipe".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn set_worker_reader_blocking(file: &File) -> Result<(), AdapterError> {
     let mut flags = fcntl_getfl(file).map_err(|error| {
         AdapterError::Unavailable(format!("Linux worker pipe flags cannot be read: {error}"))
@@ -1728,6 +2193,66 @@ fn set_worker_reader_blocking(file: &File) -> Result<(), AdapterError> {
     fcntl_setfl(file, flags).map_err(|error| {
         AdapterError::Unavailable(format!("Linux worker pipe cannot become blocking: {error}"))
     })
+}
+
+fn set_nonblocking<Fd: AsFd>(fd: Fd, label: &str) -> Result<(), AdapterError> {
+    let mut flags = fcntl_getfl(&fd).map_err(|error| {
+        AdapterError::Unavailable(format!("{label} flags cannot be read: {error}"))
+    })?;
+    flags.insert(OFlags::NONBLOCK);
+    fcntl_setfl(&fd, flags).map_err(|error| {
+        AdapterError::Unavailable(format!("{label} cannot become nonblocking: {error}"))
+    })
+}
+
+/// Write one bounded protocol message to a nonblocking descriptor.
+///
+/// The helper request and GO messages are written through this loop so a
+/// child that never reads stdin cannot pin the launcher indefinitely.  The
+/// descriptor is expected to have `O_NONBLOCK`; the function also preserves a
+/// single deadline across short writes and `WouldBlock` polls.
+fn write_bounded(
+    writer: &mut impl Write,
+    bytes: &[u8],
+    timeout: Duration,
+    label: &str,
+) -> Result<(), AdapterError> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut written = 0_usize;
+    while written < bytes.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(format!("{label} timed out")));
+        }
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(format!(
+                    "{label} closed before completion"
+                )));
+            }
+            Ok(count) => {
+                written = written
+                    .checked_add(count)
+                    .ok_or_else(|| AdapterError::Invalid(format!("{label} byte count overflow")))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(format!("{label} timed out")));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!("{label} failed: {error}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_worker_frame(
@@ -1740,45 +2265,127 @@ fn write_worker_frame(
             "Linux worker bootstrap frame exceeds bounds".to_owned(),
         ));
     }
+    write_bounded(
+        writer,
+        frame,
+        timeout,
+        "Linux worker bootstrap frame handoff",
+    )
+}
+
+fn write_gateway_health_frame(
+    writer: &mut File,
+    frame: &[u8],
+    timeout: Duration,
+) -> Result<(), AdapterError> {
+    if frame.len() != super::gateway_health::FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health bootstrap frame has an invalid length".to_owned(),
+        ));
+    }
+    write_bounded(
+        writer,
+        frame,
+        timeout,
+        "Linux Gateway health bootstrap frame handoff",
+    )
+}
+
+fn read_gateway_health_frame(
+    reader: &mut File,
+    request: &LinuxHelperRequest,
+    timeout: Duration,
+) -> Result<GatewayHealthBootstrap, AdapterError> {
+    if request.specification.component != ComponentKind::Gateway {
+        return Err(AdapterError::Unsupported(
+            "Linux Gateway health bootstrap pipe requires the Gateway role".to_owned(),
+        ));
+    }
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
-    let mut written = 0_usize;
-    while written < frame.len() {
+    let mut frame = zeroize::Zeroizing::new([0_u8; super::gateway_health::FRAME_BYTES]);
+    let mut received = 0_usize;
+    while received < frame.len() {
         if Instant::now() >= deadline {
             return Err(AdapterError::Timeout(
-                "Linux worker bootstrap pipe write timed out".to_owned(),
+                "Linux Gateway health bootstrap frame read timed out".to_owned(),
             ));
         }
-        match writer.write(&frame[written..]) {
+        match reader.read(&mut frame[received..]) {
             Ok(0) => {
                 return Err(AdapterError::Unavailable(
-                    "Linux worker bootstrap pipe closed before frame completion".to_owned(),
+                    "Linux Gateway health bootstrap frame was truncated".to_owned(),
                 ));
             }
             Ok(count) => {
-                written = written.checked_add(count).ok_or_else(|| {
-                    AdapterError::Invalid("Linux worker frame write overflow".to_owned())
+                received = received.checked_add(count).ok_or_else(|| {
+                    AdapterError::Invalid("Linux Gateway health frame read overflow".to_owned())
                 })?;
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
                     return Err(AdapterError::Timeout(
-                        "Linux worker bootstrap pipe write timed out".to_owned(),
+                        "Linux Gateway health bootstrap frame read timed out".to_owned(),
                     ));
                 }
-                let remaining = deadline.saturating_duration_since(Instant::now());
                 thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => {
                 return Err(AdapterError::Io(format!(
-                    "Linux worker bootstrap frame handoff failed: {error}"
+                    "Linux Gateway health bootstrap frame read failed: {error}"
                 )));
             }
         }
     }
-    Ok(())
+    let mut trailing = [0_u8; 1];
+    loop {
+        match reader.read(&mut trailing) {
+            Ok(0) => break,
+            Ok(_) => {
+                return Err(AdapterError::Invalid(
+                    "Linux Gateway health bootstrap frame has trailing bytes".to_owned(),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(
+                        "Linux Gateway health frame close was not observed".to_owned(),
+                    ));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!(
+                    "Linux Gateway health frame trailing-byte check failed: {error}"
+                )));
+            }
+        }
+    }
+    let bootstrap = GatewayHealthBootstrap::from_frame(frame.as_ref()).map_err(|error| {
+        map_gateway_health_bootstrap_error(error, "Linux Gateway health bootstrap frame")
+    })?;
+    bootstrap.validate_for_launch(&request.specification)?;
+    Ok(bootstrap)
+}
+
+fn map_gateway_health_bootstrap_error(
+    error: GatewayHealthBootstrapError,
+    prefix: &str,
+) -> AdapterError {
+    match error {
+        GatewayHealthBootstrapError::WrongRole => {
+            AdapterError::Unsupported(format!("{prefix} requires the Gateway role"))
+        }
+        GatewayHealthBootstrapError::NonceMismatch => {
+            AdapterError::IdentityMismatch(format!("{prefix} nonce differs from the launch"))
+        }
+        _ => AdapterError::Invalid(format!("{prefix} is invalid")),
+    }
 }
 
 fn encode_frame(specification: &LaunchSpec, cgroup_path: &Path) -> Result<Vec<u8>, AdapterError> {
@@ -2001,6 +2608,7 @@ fn authorize_request(
 fn spawn_authorized_target(
     authorization: &LinuxHelperAuthorization,
     worker_reader: Option<File>,
+    gateway_health: Option<&GatewayHealthBootstrap>,
 ) -> Result<(), AdapterError> {
     let specification = &authorization.specification;
     if specification.component == ComponentKind::HostBroker {
@@ -2041,6 +2649,12 @@ fn spawn_authorized_target(
     if let Some(reader) = worker_reader.as_ref() {
         set_worker_reader_blocking(reader)?;
     }
+    if worker_reader.is_some() && gateway_health.is_some() {
+        return Err(AdapterError::Invalid(
+            "Linux worker and Gateway health stdin cannot be combined".to_owned(),
+        ));
+    }
+    let gateway_health_reader = gateway_health.map(gateway_health_stdin).transpose()?;
     let mut command = Command::new(&executable_fd_path);
     command.arg0(&specification.executable);
     command.args(&specification.arguments).env_clear().envs(
@@ -2049,10 +2663,15 @@ fn spawn_authorized_target(
             .iter()
             .map(|(name, value)| (name, value)),
     );
-    // Preserve the pre-bootstrap stream inheritance for ordinary launches.
-    // A worker alone reserves stdin for its dedicated startup frame.
+    // A worker or Gateway health launch receives its exclusive one-shot
+    // bootstrap stream.  Ordinary targets must never inherit the helper's
+    // request/GO control stdin; explicitly disconnect it at the exec boundary.
     if let Some(reader) = worker_reader {
         command.stdin(Stdio::from(reader));
+    } else if let Some(reader) = gateway_health_reader {
+        command.stdin(Stdio::from(reader));
+    } else {
+        command.stdin(Stdio::null());
     }
     if let Some(path) = specification.working_directory.as_deref() {
         let canonical = fs::canonicalize(path).map_err(|error| {
@@ -2067,6 +2686,24 @@ fn spawn_authorized_target(
     Err(AdapterError::Io(format!(
         "Linux target exec failed: {error}"
     )))
+}
+
+fn gateway_health_stdin(bootstrap: &GatewayHealthBootstrap) -> Result<File, AdapterError> {
+    let (reader, writer) = pipe_with(PipeFlags::CLOEXEC).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health target stdin pipe cannot be created: {error}"
+        ))
+    })?;
+    let reader = File::from(reader);
+    let mut writer = File::from(writer);
+    let frame = bootstrap.encoded_frame();
+    writer.write_all(frame.as_ref()).map_err(|error| {
+        AdapterError::Io(format!(
+            "Linux Gateway health target stdin handoff failed: {error}"
+        ))
+    })?;
+    drop(writer);
+    Ok(reader)
 }
 
 fn verify_current_cgroup(expected: &Path) -> Result<(), AdapterError> {
@@ -2485,7 +3122,7 @@ mod tests {
         bytes.extend_from_slice(GO_MAGIC);
         assert!(put_string_io(&mut bytes, "wrong").is_ok());
         let mut cursor = Cursor::new(bytes);
-        let result = read_go(&mut cursor);
+        let result = read_go_bounded(&mut cursor, Duration::from_secs(1));
         assert_eq!(result.as_deref(), Ok("wrong"));
         assert_ne!(result.as_deref(), Ok("nonce-1"));
     }
@@ -2494,7 +3131,7 @@ mod tests {
     fn eof_before_go_is_a_hard_failure() {
         let mut cursor = Cursor::new(Vec::<u8>::new());
         assert!(matches!(
-            read_go(&mut cursor),
+            read_go_bounded(&mut cursor, Duration::from_secs(1)),
             Err(AdapterError::Unavailable(_))
         ));
     }
@@ -2599,7 +3236,7 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let parent = bootstrap.parent_descriptors(None)?;
+        let parent = bootstrap.parent_descriptors(None, None)?;
         assert!(rustix::io::fcntl_getfd(&parent.config)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(rustix::io::fcntl_getfd(&parent.root)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(rustix::io::fcntl_getfd(&parent.ready)?.contains(rustix::io::FdFlags::CLOEXEC));
@@ -2637,7 +3274,7 @@ mod tests {
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
         let identities = {
-            let parent = bootstrap.parent_descriptors(None)?;
+            let parent = bootstrap.parent_descriptors(None, None)?;
             let mut identities = Vec::new();
             for (file, fd) in [
                 (&parent.config, parent.config_fd),
@@ -2680,6 +3317,9 @@ mod tests {
             worker_reader: None,
             worker_reader_fd: None,
             worker_writer: None,
+            gateway_health_reader: None,
+            gateway_health_reader_fd: None,
+            gateway_health_writer: None,
         };
         let mut delayed_helper = Command::new("/bin/sh")
             .args([
@@ -2710,6 +3350,9 @@ mod tests {
             worker_reader: None,
             worker_reader_fd: None,
             worker_writer: None,
+            gateway_health_reader: None,
+            gateway_health_reader_fd: None,
+            gateway_health_writer: None,
         };
         assert!(matches!(
             parent.wait_for_ready("x", Duration::from_millis(10)),
@@ -2786,21 +3429,19 @@ mod tests {
             cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
         };
         let stopped = Arc::new(AtomicBool::new(false));
-        let producer_stop = Arc::clone(&stopped);
-        let (sender, receiver) = mpsc::channel();
         let nonce = request.specification.launch_nonce.clone();
-        let producer = thread::spawn(move || {
-            // Models durable stop becoming visible before the parent's GO.
-            producer_stop.store(true, Ordering::Release);
-            sender.send(Ok(nonce)).unwrap();
-        });
-        let result = authorize_after_release(&request, &receiver, Instant::now(), |_| {
+        // Models durable stop becoming visible before the parent's GO.
+        stopped.store(true, Ordering::Release);
+        let mut go = Vec::new();
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, &nonce).unwrap();
+        let mut cursor = Cursor::new(go);
+        let result = authorize_after_release(&request, &mut cursor, Instant::now(), |_| {
             assert!(stopped.load(Ordering::Acquire));
             Err(AdapterError::Unavailable(
                 "durable stop denies launch".to_owned(),
             ))
         });
-        producer.join().unwrap();
         assert!(
             matches!(result, Err(AdapterError::Unavailable(message)) if message == "durable stop denies launch")
         );
@@ -2812,10 +3453,12 @@ mod tests {
             specification: specification(),
             cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
         };
-        let (sender, receiver) = mpsc::channel();
-        sender.send(Ok("stale-nonce".to_owned())).unwrap();
+        let mut go = Vec::new();
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, "stale-nonce").unwrap();
+        let mut cursor = Cursor::new(go);
         let mut queried = false;
-        let result = authorize_after_release(&request, &receiver, Instant::now(), |_| {
+        let result = authorize_after_release(&request, &mut cursor, Instant::now(), |_| {
             queried = true;
             Err(AdapterError::Unavailable(
                 "must not reach authority".to_owned(),
@@ -2900,6 +3543,32 @@ mod tests {
     }
 
     #[test]
+    fn helper_request_write_is_bounded_when_child_does_not_read()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("sleep child did not expose stdin"))?;
+        set_nonblocking(&stdin, "test helper stdin")?;
+        let started = Instant::now();
+        let result = write_bounded(
+            &mut stdin,
+            &vec![0_u8; 4 * 1024 * 1024],
+            Duration::from_millis(30),
+            "test helper request",
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(matches!(result, Err(AdapterError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        Ok(())
+    }
+
+    #[test]
     fn worker_pipe_rejects_regular_descriptors_and_bad_metadata() {
         assert!(matches!(
             validate_worker_pipe_handle(&File::open("/dev/null").expect("/dev/null")),
@@ -2913,6 +3582,166 @@ mod tests {
             validate_worker_boot_metadata("12345678-1234-4234-7234-123456789abc", &"a".repeat(64))
                 .is_err()
         );
+    }
+
+    fn gateway_specification(nonce: Uuid) -> LaunchSpec {
+        let mut specification = specification();
+        specification.component = ComponentKind::Gateway;
+        specification.launch_nonce = nonce.to_string();
+        specification
+    }
+
+    #[test]
+    fn gateway_health_pipe_is_nonblocking_cloexec_and_exact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let bootstrap = GatewayHealthBootstrap::new(nonce, [0x5a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let expected = bootstrap.encoded_frame();
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&writer)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&reader)?.contains(OFlags::NONBLOCK));
+        assert!(fcntl_getfl(&writer)?.contains(OFlags::NONBLOCK));
+        write_gateway_health_frame(&mut writer, expected.as_ref(), Duration::from_secs(1))?;
+        drop(writer);
+        let request = LinuxHelperRequest {
+            specification: gateway_specification(nonce),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let decoded = read_gateway_health_frame(&mut reader, &request, Duration::from_secs(1))?;
+        assert!(decoded == bootstrap);
+        assert_eq!(decoded.encoded_frame().as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_health_pipe_rejects_trailing_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let bootstrap = GatewayHealthBootstrap::new(nonce, [0x5a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let frame = bootstrap.encoded_frame();
+        writer.write_all(frame.as_ref())?;
+        writer.write_all(b"extra")?;
+        drop(writer);
+        let request = LinuxHelperRequest {
+            specification: gateway_specification(nonce),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        assert!(matches!(
+            read_gateway_health_frame(&mut reader, &request, Duration::from_secs(1)),
+            Err(AdapterError::Invalid(message))
+                if message.contains("trailing bytes")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_health_frame_reaches_exclusive_target_stdin()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bootstrap = GatewayHealthBootstrap::new(Uuid::new_v4(), [0x2a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let expected = bootstrap.encoded_frame();
+        let reader = gateway_health_stdin(&bootstrap)?;
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        let output = Command::new("/bin/cat")
+            .stdin(Stdio::from(reader))
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn health_helper_argument_grammar_rejects_trailing_values() {
+        let result = parse_helper_bootstrap_arguments(
+            [
+                "watchdog".to_owned(),
+                HELPER_ARGUMENT.to_owned(),
+                PARENT_BOOTSTRAP_PID_ARGUMENT.to_owned(),
+                "1".to_owned(),
+                PROTECTED_CONFIG_ARGUMENT.to_owned(),
+                "3".to_owned(),
+                DELEGATED_CGROUP_ROOT_ARGUMENT.to_owned(),
+                "4".to_owned(),
+                "5".to_owned(),
+                GATEWAY_HEALTH_PIPE_ARGUMENT.to_owned(),
+                "6".to_owned(),
+                "unexpected".to_owned(),
+            ]
+            .into_iter(),
+        );
+        assert!(matches!(
+            result,
+            Err(AdapterError::Invalid(message))
+                if message == "Linux helper invocation has unexpected arguments"
+        ));
+    }
+
+    #[test]
+    fn pre_admission_control_failure_retains_child_for_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let marker = directory.path().join("stdin-closed");
+        let marker = marker.to_string_lossy().replace('\'', "'\\''");
+        let helper = directory.path().join("helper.sh");
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nexec 0<&-\nprintf ready > '{marker}'\nexec sleep 30\n"),
+        )?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+        // Snapshot the native interpreter, not a shebang script: the sealed
+        // executable descriptor deliberately closes at exec, so an interpreter
+        // cannot reopen a script through that descriptor afterward.
+        let mut launcher =
+            TrustedLinuxLauncher::new("/bin/sh")?.with_timeout(Duration::from_secs(1))?;
+        launcher.helper_argument = helper.to_string_lossy().into_owned();
+        let mut pending = launcher.prepare(&specification(), Path::new("/sys/fs/cgroup/test"))?;
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !directory.path().join("stdin-closed").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "helper did not close stdin in time"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(pending.child_mut().is_some());
+        let started = Instant::now();
+        let result = pending.release_gate();
+        assert!(matches!(result, Err(AdapterError::Io(_))));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(pending.child_mut().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn into_child_missing_handle_is_fallible_without_panicking() {
+        let mut pending = PendingLaunch {
+            child: None,
+            request_frame: None,
+            stdin: None,
+            parent_bootstrap: None,
+            worker_writer: None,
+            worker_launch: None,
+            gateway_health_writer: None,
+            gateway_health_frame: None,
+            launch_nonce: "nonce".to_owned(),
+            timeout: Duration::from_secs(1),
+            released: true,
+        };
+        assert!(matches!(
+            pending.take_child(),
+            Err(AdapterError::Unavailable(message))
+                if message == "Linux helper child handle was lost"
+        ));
     }
 
     #[test]
@@ -2966,6 +3795,35 @@ mod tests {
     #[test]
     fn helper_reader_duplicate_is_anonymous_cloexec_and_independently_owned()
     -> Result<(), Box<dyn std::error::Error>> {
+        const ISOLATED: &str = "ASCENSION_TEST_ISOLATED_READER_OWNERSHIP";
+        if std::env::var_os(ISOLATED).is_none() {
+            // CLOEXEC closes descriptors at exec, not at fork. Other tests spawn
+            // processes concurrently, which can briefly retain this test's read
+            // end and invalidate an immediate EPIPE assertion. Run the ownership
+            // assertions in a process with no concurrent tests or child launches.
+            let mut child = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "platform::linux_launcher::tests::helper_reader_duplicate_is_anonymous_cloexec_and_independently_owned",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(ISOLATED, "1")
+                .spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    assert!(status.success(), "isolated ownership test failed: {status}");
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err("isolated ownership test exceeded deadline".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
         let reader = File::from(reader);
         let mut writer = File::from(writer);
@@ -2977,7 +3835,13 @@ mod tests {
         duplicate.read_exact(&mut bytes)?;
         assert_eq!(&bytes, b"frame");
         drop(duplicate);
-        assert!(write_worker_frame(&mut writer, b"frame", Duration::from_secs(1)).is_err());
+        assert_eq!(
+            writer
+                .write(b"frame")
+                .expect_err("all readers closed")
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
         Ok(())
     }
 

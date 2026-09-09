@@ -31,7 +31,7 @@ pub(super) fn authorize(
             "worker launch configuration changed before resumption".to_owned(),
         ));
     }
-    let store = Store::open(&current.database, &current)?.reserve_worker_admission()?;
+    let store = Store::open(&current.database, &current)?.reserve_launch_admission()?;
     check_deadline(deadline)?;
     authorize_stored(&current, &store, specification, planned, worker)?;
     check_deadline(deadline)?;
@@ -82,7 +82,7 @@ fn authorize_stored(
         ));
     }
     let digest = super::launch_spec_binding_digest(specification, planned)?;
-    let intents = store.worker_admission_intents(&component.id)?;
+    let intents = store.launch_admission_intents(&component.id)?;
     if intents.len() != 1 {
         return Err(WatchdogError::IdentityMismatch(
             "worker component must have exactly one unsettled launch intent".to_owned(),

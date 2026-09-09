@@ -49,9 +49,14 @@ const MAX_IO_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RECEIPTS: usize = 128;
 const MAX_ACTIVE_PROCESSES: usize = 64;
-const MAX_LEDGER_BYTES: usize = 1024 * 1024;
-const MAX_LEDGER_RECORDS: usize = MAX_RECEIPTS;
+const MAX_LEDGER_REQUESTS: usize = MAX_RECEIPTS;
+const MAX_LEDGER_TRANSITIONS: usize = MAX_LEDGER_REQUESTS * 4;
+// Each admitted request has room for pending, committed, stop-pending and
+// stopped records, including a newline per maximum-sized record. Reopen must
+// accept every journal which the bounded transition machine can produce.
+const MAX_LEDGER_BYTES: usize = MAX_LEDGER_TRANSITIONS * (MAX_FRAME_BYTES + 1);
 const BROKER_UNIT_NAME: &str = "ascension-watchdog-broker.service";
+pub const BROKER_PROTOCOL_VERSION: u8 = 1;
 
 fn remaining(deadline: Instant) -> BrokerResult<Duration> {
     deadline
@@ -124,6 +129,43 @@ impl BrokerRequest {
         validate_identity("instance", &self.instance)?;
         validate_identity("incarnation", &self.incarnation)?;
         validate_identity("nonce", &self.nonce)
+    }
+}
+
+/// Versioned lifecycle operations are deliberately separate from the legacy
+/// four-field launch request.  The nested request is the only identity a
+/// lifecycle operation can name; paths, PIDs and unit names are never
+/// accepted from a caller.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrokerLifecycleOperation {
+    Inspect,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrokerLifecycleState {
+    Active,
+    Stopped,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerLifecycleRequest {
+    pub version: u8,
+    pub operation: BrokerLifecycleOperation,
+    pub request: BrokerRequest,
+}
+
+impl BrokerLifecycleRequest {
+    fn validate(&self) -> BrokerResult<()> {
+        if self.version != BROKER_PROTOCOL_VERSION {
+            return Err(BrokerError::Invalid(
+                "unsupported broker lifecycle protocol version".to_owned(),
+            ));
+        }
+        self.request.validate()
     }
 }
 
@@ -652,7 +694,15 @@ fn hash_file(path: &Path) -> BrokerResult<String> {
     hash_open_file(File::open(path).map_err(io_error)?)
 }
 
-fn hash_open_file(mut file: File) -> BrokerResult<String> {
+fn hash_open_file(file: File) -> BrokerResult<String> {
+    let deadline = Instant::now()
+        .checked_add(MAX_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    hash_open_file_until(file, deadline)
+}
+
+fn hash_open_file_until(file: File, deadline: Instant) -> BrokerResult<String> {
+    let mut file = file;
     let metadata = file.metadata().map_err(io_error)?;
     if metadata.len() > MAX_HASH_BYTES {
         return Err(BrokerError::Invalid(
@@ -663,6 +713,7 @@ fn hash_open_file(mut file: File) -> BrokerResult<String> {
     let mut buffer = vec![0_u8; 64 * 1024];
     let mut total = 0_u64;
     loop {
+        remaining(deadline)?;
         let count = file.read(&mut buffer).map_err(io_error)?;
         if count == 0 {
             break;
@@ -719,7 +770,12 @@ pub fn peer_credentials(stream: &UnixStream) -> BrokerResult<PeerCredentials> {
     })
 }
 
-fn authenticate_peer(credentials: PeerCredentials, policy: &PeerPolicy) -> BrokerResult<()> {
+fn authenticate_peer(
+    credentials: PeerCredentials,
+    policy: &PeerPolicy,
+    deadline: Instant,
+) -> BrokerResult<()> {
+    remaining(deadline)?;
     if credentials.pid == 0 || credentials.uid != policy.uid || credentials.gid != policy.gid {
         return Err(BrokerError::Unauthorized(
             "peer credentials are not approved".to_owned(),
@@ -736,6 +792,7 @@ fn authenticate_peer(credentials: PeerCredentials, policy: &PeerPolicy) -> Broke
     let _pidfd = pidfd_open(pid, PidfdFlags::empty()).map_err(|error| {
         BrokerError::Unauthorized(format!("peer process identity is unavailable: {error}"))
     })?;
+    remaining(deadline)?;
     let start_before = process_start_token(credentials.pid)?;
     let proc_executable = PathBuf::from(format!("/proc/{}/exe", credentials.pid));
     let executable = fs::read_link(&proc_executable).map_err(io_error)?;
@@ -744,7 +801,8 @@ fn authenticate_peer(credentials: PeerCredentials, policy: &PeerPolicy) -> Broke
             "peer executable path is not approved".to_owned(),
         ));
     }
-    let actual = hash_open_file(File::open(&proc_executable).map_err(io_error)?)?;
+    let actual = hash_open_file_until(File::open(&proc_executable).map_err(io_error)?, deadline)?;
+    remaining(deadline)?;
     let start_after = process_start_token(credentials.pid)?;
     if start_before != start_after {
         return Err(BrokerError::Unauthorized(
@@ -831,10 +889,22 @@ pub struct LaunchReceipt {
     pub duplicate: bool,
 }
 
+/// Result of a versioned inspect or stop operation.  The embedded launch
+/// receipt is the broker-owned identity proof; the state is the only mutable
+/// part of the lifecycle view.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerLifecycleReceipt {
+    pub receipt: LaunchReceipt,
+    pub state: BrokerLifecycleState,
+    pub duplicate: bool,
+}
+
 #[cfg(target_os = "linux")]
 mod ledger;
 #[cfg(target_os = "linux")]
 pub use ledger::BrokerLedger;
+pub mod descriptor_store;
 pub trait SystemdBackend {
     fn start(
         &mut self,
@@ -849,7 +919,69 @@ pub trait SystemdBackend {
         policy: &LaunchPolicy,
         deadline: Instant,
     ) -> BrokerResult<Option<UnitObservation>>;
-    fn stop(&mut self, unit: &str, deadline: Instant) -> BrokerResult<()>;
+    /// Capture containment only for the freshly started process after policy
+    /// verification. This is not an adoption path for a previous owner's unit.
+    fn retain_containment(
+        &mut self,
+        request: &BrokerRequest,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
+    /// Require an already retained original capability. Never recover a lost
+    /// handle by reopening the unit pathname, even for a matching live process.
+    fn require_containment(
+        &mut self,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
+    /// Local original-object proof for cleanup, including an unacknowledged
+    /// launch whose manager-store transfer was uncertain. This never permits
+    /// a launch acknowledgement or replacement-path acquisition.
+    fn require_local_containment(
+        &mut self,
+        expected: &UnitObservation,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
+    /// Prove the original containment is empty, not merely that its unit name
+    /// is absent. Missing retained evidence returns false or an error. This
+    /// method performs no termination and grants no new launch authority.
+    fn verify_retirement(
+        &mut self,
+        expected: &LaunchReceipt,
+        deadline: Instant,
+    ) -> BrokerResult<bool>;
+    /// Validate historical cleanup authority against the retained original
+    /// object and current policy, without acquiring any new capability.
+    fn require_retained_containment(
+        &mut self,
+        receipt: &LaunchReceipt,
+        policy: &LaunchPolicy,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
+    /// Clean up the already-owned containment when no live leader observation
+    /// exists. Caller must durably record stop intent first. Never resolve a
+    /// PID or unit pathname; success still requires a positive empty witness.
+    fn stop_retained_containment(
+        &mut self,
+        receipt: &LaunchReceipt,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
+    /// Drop only the descriptor-store capability for an already durable
+    /// terminal receipt. Failure retains terminal state and is retryable;
+    /// callers must never invoke this from read-only inspection.
+    fn release_retired(&mut self, receipt: &LaunchReceipt, deadline: Instant) -> BrokerResult<()>;
+    /// Stop only the unit object bound to this exact live observation. Native
+    /// backends must use an immutable containment capability rather than resolving
+    /// the caller-supplied unit name again at effect time.
+    fn stop(
+        &mut self,
+        unit: &str,
+        expected: &UnitObservation,
+        deadline: Instant,
+    ) -> BrokerResult<()>;
 }
 
 /// Broker state and exact nonce idempotence. The backend owns all privileged
@@ -883,20 +1015,35 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         credentials: PeerCredentials,
         request: BrokerRequest,
     ) -> BrokerResult<LaunchReceipt> {
+        let policy_timeout = self.policy.component(request.component)?.timeout;
+        let deadline = Instant::now()
+            .checked_add(policy_timeout)
+            .unwrap_or_else(Instant::now);
+        self.handle_at_deadline(credentials, &request, deadline)
+    }
+
+    fn handle_at_deadline(
+        &mut self,
+        credentials: PeerCredentials,
+        request: &BrokerRequest,
+        request_deadline: Instant,
+    ) -> BrokerResult<LaunchReceipt> {
         request.validate()?;
-        authenticate_peer(credentials, &self.policy.peer)?;
+        authenticate_peer(credentials, &self.policy.peer, request_deadline)?;
         let policy = self.policy.component(request.component)?;
         self.ledger.ensure_healthy()?;
-        let unit = unit_name(&request);
-        if self.active_units.len() >= MAX_ACTIVE_PROCESSES {
+        let unit = unit_name(request);
+        if !self.active_units.contains(&unit) && self.active_units.len() >= MAX_ACTIVE_PROCESSES {
             return Err(BrokerError::Unavailable(
                 "broker active-process capacity is exhausted".to_owned(),
             ));
         }
-        let deadline = Instant::now()
-            .checked_add(policy.timeout)
-            .unwrap_or_else(Instant::now);
-        let existing = self.ledger.contains(&request);
+        let deadline = request_deadline.min(
+            Instant::now()
+                .checked_add(policy.timeout)
+                .unwrap_or(request_deadline),
+        );
+        let existing = self.ledger.contains(request);
         if !existing {
             // An active deterministic unit without a durable pre-launch
             // reservation belongs to no recoverable operation.  Inspect it
@@ -908,14 +1055,16 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
                 ));
             }
         }
-        let newly_reserved = self.ledger.reserve(&request, &unit, policy)?;
+        let newly_reserved = self.ledger.reserve(request, &unit, policy)?;
         if !newly_reserved {
             if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
                 observation.verify(&unit, policy)?;
-                let receipt = receipt_from(&request, &observation, true);
-                self.ledger.commit(&request, &receipt)?;
+                let receipt = receipt_from(request, &observation, true);
+                self.backend
+                    .require_containment(&observation, policy, deadline)?;
+                self.ledger.commit(request, &receipt)?;
                 self.active_units.insert(unit.clone());
-                self.cache_receipt(&request, &receipt);
+                self.cache_receipt(request, &receipt);
                 return Ok(receipt);
             }
             return Err(BrokerError::Conflict(
@@ -927,13 +1076,21 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         // durable pending reservation and leave cleanup to a later exact-unit
         // reconciliation instead of stopping an orphan that may have raced
         // this request.
-        let observation = self.backend.start(&unit, &request, policy, deadline)?;
-        if let Err(error) = observation.verify(&unit, policy) {
-            let cleanup = self.cleanup_unit(&unit);
+        let observation = self.backend.start(&unit, request, policy, deadline)?;
+        // A failed postcondition cannot supply cleanup authority. In
+        // particular, do not follow its cgroup or executable identity:
+        // they may describe a different process. Preserve the pending
+        // reservation for later exact, policy-verified reconciliation.
+        observation.verify(&unit, policy)?;
+        if let Err(error) = self
+            .backend
+            .retain_containment(request, &observation, policy, deadline)
+        {
+            let cleanup = self.cleanup_failed_launch(request, &observation);
             return Err(cleanup_error(error, cleanup));
         }
-        let receipt = receipt_from(&request, &observation, false);
-        if let Err(error) = self.ledger.commit(&request, &receipt) {
+        let receipt = receipt_from(request, &observation, false);
+        if let Err(error) = self.ledger.commit(request, &receipt) {
             if self.ledger.is_poisoned() {
                 // The pending reservation and the exact unit remain for a
                 // fresh broker owner to reconcile.  Stopping after an
@@ -942,12 +1099,232 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
                 // poisoned.
                 return Err(error);
             }
-            let cleanup = self.cleanup_unit(&unit);
+            let cleanup = self.cleanup_failed_launch(request, &observation);
             return Err(cleanup_error(error, cleanup));
         }
         self.active_units.insert(unit);
-        self.cache_receipt(&request, &receipt);
+        self.cache_receipt(request, &receipt);
         Ok(receipt)
+    }
+
+    /// Inspect the exact unit reserved for a request.  This path is
+    /// intentionally read-only with respect to the durable ledger and never
+    /// adopts a unit or repairs a record.
+    pub fn inspect(
+        &mut self,
+        credentials: PeerCredentials,
+        request: BrokerRequest,
+    ) -> BrokerResult<BrokerLifecycleReceipt> {
+        self.lifecycle(credentials, BrokerLifecycleOperation::Inspect, request)
+    }
+
+    /// Stop only the exact, currently verified unit belonging to a committed
+    /// request.  Ownership remains active until both the backend and the
+    /// durable terminal transition are proven.
+    pub fn stop(
+        &mut self,
+        credentials: PeerCredentials,
+        request: BrokerRequest,
+    ) -> BrokerResult<BrokerLifecycleReceipt> {
+        self.lifecycle(credentials, BrokerLifecycleOperation::Stop, request)
+    }
+
+    // Keep ownership of the parsed envelope at this request boundary.
+    #[allow(clippy::needless_pass_by_value)]
+    fn lifecycle(
+        &mut self,
+        credentials: PeerCredentials,
+        operation: BrokerLifecycleOperation,
+        request: BrokerRequest,
+    ) -> BrokerResult<BrokerLifecycleReceipt> {
+        let policy_timeout = self.policy.component(request.component)?.timeout;
+        let deadline = Instant::now()
+            .checked_add(policy_timeout)
+            .unwrap_or_else(Instant::now);
+        self.lifecycle_at_deadline(credentials, operation, &request, deadline)
+    }
+
+    fn lifecycle_at_deadline(
+        &mut self,
+        credentials: PeerCredentials,
+        operation: BrokerLifecycleOperation,
+        request: &BrokerRequest,
+        request_deadline: Instant,
+    ) -> BrokerResult<BrokerLifecycleReceipt> {
+        request.validate()?;
+        authenticate_peer(credentials, &self.policy.peer, request_deadline)?;
+        let policy = self.policy.component(request.component)?;
+        self.ledger.ensure_healthy()?;
+        let unit = unit_name(request);
+        let deadline = request_deadline.min(
+            Instant::now()
+                .checked_add(policy.timeout)
+                .unwrap_or(request_deadline),
+        );
+        let Some(record) = self.ledger.lifecycle_record(request, &unit, policy)? else {
+            return Err(BrokerError::Conflict(
+                "lifecycle request has no durable launch reservation".to_owned(),
+            ));
+        };
+        let record_is_stop_pending = matches!(&record, ledger::LifecycleRecord::StopPending(_));
+        match record {
+            ledger::LifecycleRecord::Pending => Err(BrokerError::Conflict(
+                "lifecycle request has an unresolved launch reservation".to_owned(),
+            )),
+            ledger::LifecycleRecord::Stopped(persisted) => {
+                verify_receipt_identity(&persisted, request, &unit, policy)?;
+                match self.backend.inspect(&unit, policy, deadline)? {
+                    None => {
+                        if operation == BrokerLifecycleOperation::Stop {
+                            self.backend.release_retired(&persisted, deadline)?;
+                        }
+                        Ok(BrokerLifecycleReceipt {
+                            receipt: persisted,
+                            state: BrokerLifecycleState::Stopped,
+                            duplicate: matches!(operation, BrokerLifecycleOperation::Stop),
+                        })
+                    }
+                    Some(observation) => {
+                        observation.verify(&unit, policy)?;
+                        let current = receipt_from(request, &observation, false);
+                        if !ledger::same_process_binding(&persisted, &current) {
+                            return Err(BrokerError::Conflict(
+                                "terminal lifecycle unit identity was replaced".to_owned(),
+                            ));
+                        }
+                        Err(BrokerError::Conflict(
+                            "terminal lifecycle unit was reactivated".to_owned(),
+                        ))
+                    }
+                }
+            }
+            ledger::LifecycleRecord::Committed(persisted)
+            | ledger::LifecycleRecord::StopPending(persisted) => {
+                let stop_pending = record_is_stop_pending;
+                verify_receipt_identity(&persisted, request, &unit, policy)?;
+                let Some(observation) = self.backend.inspect(&unit, policy, deadline)? else {
+                    if operation == BrokerLifecycleOperation::Stop {
+                        // Errors are not a populated witness and must not
+                        // authorize fallback cleanup. Only a readable original
+                        // which is not empty may enter the retained-object path.
+                        if !self.backend.verify_retirement(&persisted, deadline)? {
+                            self.backend
+                                .require_retained_containment(&persisted, policy, deadline)?;
+                            if !stop_pending {
+                                self.ledger.begin_stop(request, &persisted)?;
+                            }
+                            self.backend
+                                .stop_retained_containment(&persisted, deadline)?;
+                            if !self.backend.verify_retirement(&persisted, deadline)? {
+                                return Err(BrokerError::Conflict(
+                                    "original orphan containment retirement is unproven".to_owned(),
+                                ));
+                            }
+                        }
+                        let mut stopped_receipt = persisted;
+                        stopped_receipt.duplicate = false;
+                        // Idempotent when the populated path already synced
+                        // intent, or when recovering a prior StopPending.
+                        self.ledger.begin_stop(request, &stopped_receipt)?;
+                        self.ledger.mark_stopped(request, &stopped_receipt)?;
+                        self.active_units.remove(&unit);
+                        self.backend.release_retired(&stopped_receipt, deadline)?;
+                        return Ok(BrokerLifecycleReceipt {
+                            receipt: stopped_receipt,
+                            state: BrokerLifecycleState::Stopped,
+                            duplicate: false,
+                        });
+                    }
+                    return Err(BrokerError::Conflict(
+                        if stop_pending {
+                            "stop-pending lifecycle unit is inactive; absence is uncommitted"
+                        } else {
+                            "committed lifecycle unit is inactive or missing; ownership is uncertain"
+                        }
+                        .to_owned(),
+                    ));
+                };
+                observation.verify(&unit, policy)?;
+                let observed = receipt_from(request, &observation, false);
+                if !ledger::same_process_binding(&persisted, &observed) {
+                    return Err(BrokerError::Conflict(
+                        "live lifecycle unit identity differs from its durable receipt".to_owned(),
+                    ));
+                }
+                if operation == BrokerLifecycleOperation::Inspect {
+                    if stop_pending {
+                        return Err(BrokerError::Conflict(
+                            "lifecycle stop is pending; active state is uncertain".to_owned(),
+                        ));
+                    }
+                    return Ok(BrokerLifecycleReceipt {
+                        receipt: observed,
+                        state: BrokerLifecycleState::Active,
+                        duplicate: false,
+                    });
+                }
+
+                self.backend
+                    .require_local_containment(&observation, policy, deadline)?;
+
+                // Persist the intent before the first potentially destructive
+                // backend call. This is the recovery authority if the broker
+                // dies or the backend times out after its effect.
+                if !stop_pending {
+                    self.ledger.begin_stop(request, &observed)?;
+                }
+                if !self.active_units.contains(&unit)
+                    && self.active_units.len() >= MAX_ACTIVE_PROCESSES
+                {
+                    return Err(BrokerError::Unavailable(
+                        "broker active-process capacity is exhausted".to_owned(),
+                    ));
+                }
+                self.active_units.insert(unit.clone());
+                self.backend.stop(&unit, &observation, deadline)?;
+                let confirmation_deadline = request_deadline.min(
+                    Instant::now()
+                        .checked_add(policy.timeout.min(MAX_CLEANUP_TIMEOUT))
+                        .unwrap_or(request_deadline),
+                );
+                loop {
+                    match self.backend.inspect(&unit, policy, confirmation_deadline)? {
+                        None => {
+                            if !self
+                                .backend
+                                .verify_retirement(&persisted, confirmation_deadline)?
+                            {
+                                return Err(BrokerError::Conflict(
+                                    "original containment retirement is unproven".to_owned(),
+                                ));
+                            }
+                            let mut stopped_receipt = persisted;
+                            stopped_receipt.duplicate = false;
+                            self.ledger.mark_stopped(request, &stopped_receipt)?;
+                            self.active_units.remove(&unit);
+                            self.backend
+                                .release_retired(&stopped_receipt, confirmation_deadline)?;
+                            return Ok(BrokerLifecycleReceipt {
+                                receipt: stopped_receipt,
+                                state: BrokerLifecycleState::Stopped,
+                                duplicate: false,
+                            });
+                        }
+                        Some(observation) => {
+                            observation.verify(&unit, policy)?;
+                            let current = receipt_from(request, &observation, false);
+                            if !ledger::same_process_binding(&persisted, &current) {
+                                return Err(BrokerError::Conflict(
+                                    "unit identity changed while exact stop was in flight"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                    thread::sleep(remaining(confirmation_deadline)?.min(POLL_INTERVAL));
+                }
+            }
+        }
     }
 
     fn cache_receipt(&mut self, request: &BrokerRequest, receipt: &LaunchReceipt) {
@@ -956,13 +1333,33 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         }
     }
 
-    fn cleanup_unit(&mut self, unit: &str) -> BrokerResult<()> {
+    fn cleanup_failed_launch(
+        &mut self,
+        request: &BrokerRequest,
+        expected: &UnitObservation,
+    ) -> BrokerResult<()> {
+        self.ledger.ensure_healthy()?;
         let deadline = Instant::now()
             .checked_add(MAX_CLEANUP_TIMEOUT)
             .unwrap_or_else(Instant::now);
-        let result = self.backend.stop(unit, deadline);
-        self.active_units.remove(unit);
-        result
+        let policy = self.policy.component(request.component)?;
+        self.backend
+            .require_local_containment(expected, policy, deadline)?;
+        let receipt = receipt_from(request, expected, false);
+        // A failed acknowledgement still needs a durable exact process binding
+        // before cleanup. Pending -> StopPending preserves retry authority
+        // without manufacturing a successful launch acknowledgement.
+        self.ledger
+            .begin_failed_launch_cleanup(request, &receipt, policy)?;
+        self.backend.stop(&expected.unit, expected, deadline)?;
+        if !self.backend.verify_retirement(&receipt, deadline)? {
+            return Err(BrokerError::Conflict(
+                "failed launch containment is not proven empty".to_owned(),
+            ));
+        }
+        self.ledger.mark_stopped(request, &receipt)?;
+        self.active_units.remove(&expected.unit);
+        self.backend.release_retired(&receipt, deadline)
     }
 }
 
@@ -996,10 +1393,46 @@ fn receipt_from(
     }
 }
 
+fn verify_receipt_identity(
+    receipt: &LaunchReceipt,
+    request: &BrokerRequest,
+    unit: &str,
+    policy: &LaunchPolicy,
+) -> BrokerResult<()> {
+    if receipt.request != *request
+        || receipt.unit != unit
+        || receipt.pid == 0
+        || receipt.creation_token.is_empty()
+        || receipt.executable != policy.executable
+        || receipt.executable_sha256 != policy.executable_sha256
+        || receipt.uid != policy.target_uid
+        || receipt.gid != policy.target_gid
+        || receipt.capability_bounding_set != policy.capabilities.bounding_set
+        || receipt.ambient_capabilities != policy.capabilities.ambient_set
+        || !receipt.control_group.ends_with(&format!("/{unit}"))
+    {
+        return Err(BrokerError::Conflict(
+            "durable lifecycle receipt does not match fixed policy".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct WireResponse<'a> {
     accepted: bool,
     duplicate: bool,
+    receipt: Option<&'a LaunchReceipt>,
+    error: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct LifecycleWireResponse<'a> {
+    version: u8,
+    operation: BrokerLifecycleOperation,
+    accepted: bool,
+    duplicate: bool,
+    state: Option<BrokerLifecycleState>,
     receipt: Option<&'a LaunchReceipt>,
     error: Option<&'a str>,
 }
@@ -1046,10 +1479,77 @@ fn handle_connection<B: SystemdBackend>(
     // Authenticate before accepting any request bytes. This prevents an
     // untrusted peer from holding a root broker connection open while it
     // trickles a body, and the handle path repeats the check after parsing.
-    authenticate_peer(credentials, &broker.policy.peer)?;
+    authenticate_peer(credentials, &broker.policy.peer, deadline)?;
     let bytes = read_frame(stream, deadline)?;
-    let request: BrokerRequest = parse_json(&bytes, "broker request JSON")?;
-    let receipt = broker.handle(credentials, request)?;
+    let value: StrictJsonValue = match parse_json(&bytes, "broker request JSON") {
+        Ok(value) => value,
+        Err(error) => {
+            if let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                && raw.as_object().is_some_and(|object| {
+                    object.contains_key("version") || object.contains_key("operation")
+                })
+            {
+                let operation = raw
+                    .get("operation")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or(BrokerLifecycleOperation::Inspect);
+                let error_text = error.to_string();
+                return write_lifecycle_error(stream, deadline, operation, &error_text);
+            }
+            return Err(error);
+        }
+    };
+    let value = value.into_value();
+    let is_lifecycle = value
+        .as_object()
+        .is_some_and(|object| object.contains_key("version") || object.contains_key("operation"));
+    if is_lifecycle {
+        let operation = value
+            .get("operation")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or(BrokerLifecycleOperation::Inspect);
+        let lifecycle: BrokerLifecycleRequest = match serde_json::from_value(value) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                let error_text = format!("broker lifecycle request schema is invalid: {error}");
+                return write_lifecycle_error(stream, deadline, operation, &error_text);
+            }
+        };
+        if let Err(error) = lifecycle.validate() {
+            let error_text = error.to_string();
+            return write_lifecycle_error(stream, deadline, operation, &error_text);
+        }
+        let result =
+            broker.lifecycle_at_deadline(credentials, operation, &lifecycle.request, deadline);
+        match result {
+            Ok(receipt) => {
+                let response = serde_json::to_vec(&LifecycleWireResponse {
+                    version: BROKER_PROTOCOL_VERSION,
+                    operation,
+                    accepted: true,
+                    duplicate: receipt.duplicate,
+                    state: Some(receipt.state),
+                    receipt: Some(&receipt.receipt),
+                    error: None,
+                })
+                .map_err(|error| BrokerError::Io(error.to_string()))?;
+                if response.len() > MAX_FRAME_BYTES {
+                    return Err(BrokerError::Unavailable(
+                        "broker response exceeds frame bound".to_owned(),
+                    ));
+                }
+                return write_deadline(stream, &response, deadline);
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                return write_lifecycle_error(stream, deadline, operation, &error_text);
+            }
+        }
+    }
+    let request: BrokerRequest = serde_json::from_value(value).map_err(|error| {
+        BrokerError::Invalid(format!("broker request JSON schema is invalid: {error}"))
+    })?;
+    let receipt = broker.handle_at_deadline(credentials, &request, deadline)?;
     let response = serde_json::to_vec(&WireResponse {
         accepted: true,
         duplicate: receipt.duplicate,
@@ -1057,6 +1557,30 @@ fn handle_connection<B: SystemdBackend>(
         error: None,
     })
     .map_err(|error| BrokerError::Io(error.to_string()))?;
+    if response.len() > MAX_FRAME_BYTES {
+        return Err(BrokerError::Unavailable(
+            "broker response exceeds frame bound".to_owned(),
+        ));
+    }
+    write_deadline(stream, &response, deadline)
+}
+
+fn write_lifecycle_error(
+    stream: &mut UnixStream,
+    deadline: Instant,
+    operation: BrokerLifecycleOperation,
+    error: &str,
+) -> BrokerResult<()> {
+    let response = serde_json::to_vec(&LifecycleWireResponse {
+        version: BROKER_PROTOCOL_VERSION,
+        operation,
+        accepted: false,
+        duplicate: false,
+        state: None,
+        receipt: None,
+        error: Some(error),
+    })
+    .map_err(|serialize_error| BrokerError::Io(serialize_error.to_string()))?;
     if response.len() > MAX_FRAME_BYTES {
         return Err(BrokerError::Unavailable(
             "broker response exceeds frame bound".to_owned(),
@@ -1224,6 +1748,98 @@ impl BrokerClient {
         }
         Ok(receipt)
     }
+
+    pub fn inspect(&self, request: &BrokerRequest) -> BrokerResult<BrokerLifecycleReceipt> {
+        self.lifecycle_request(BrokerLifecycleOperation::Inspect, request)
+    }
+
+    pub fn stop(&self, request: &BrokerRequest) -> BrokerResult<BrokerLifecycleReceipt> {
+        self.lifecycle_request(BrokerLifecycleOperation::Stop, request)
+    }
+
+    fn lifecycle_request(
+        &self,
+        operation: BrokerLifecycleOperation,
+        request: &BrokerRequest,
+    ) -> BrokerResult<BrokerLifecycleReceipt> {
+        request.validate()?;
+        let metadata = fs::symlink_metadata(&self.socket).map_err(io_error)?;
+        if !metadata.file_type().is_socket() || metadata.uid() != 0 || metadata.mode() & 0o007 != 0
+        {
+            return Err(BrokerError::Unauthorized(
+                "broker socket ownership or type is unsafe".to_owned(),
+            ));
+        }
+        let deadline = Instant::now()
+            .checked_add(self.timeout)
+            .unwrap_or_else(Instant::now);
+        let mut stream = connect_with_deadline(&self.socket, deadline)?;
+        let peer = peer_credentials(&stream)?;
+        if peer.uid != 0 {
+            return Err(BrokerError::Unauthorized(
+                "broker peer is not root".to_owned(),
+            ));
+        }
+        let envelope = BrokerLifecycleRequest {
+            version: BROKER_PROTOCOL_VERSION,
+            operation,
+            request: request.clone(),
+        };
+        let bytes =
+            serde_json::to_vec(&envelope).map_err(|error| BrokerError::Io(error.to_string()))?;
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Err(BrokerError::Invalid(
+                "broker request exceeds frame bound".to_owned(),
+            ));
+        }
+        write_deadline(&mut stream, &bytes, deadline)?;
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .map_err(io_error)?;
+        let response = read_frame(&mut stream, deadline)?;
+        let response: LifecycleWireResponseOwned =
+            parse_json(&response, "broker lifecycle response JSON")?;
+        if response.version != BROKER_PROTOCOL_VERSION || response.operation != operation {
+            return Err(BrokerError::Conflict(
+                "broker lifecycle response protocol does not correlate".to_owned(),
+            ));
+        }
+        if !response.accepted {
+            return Err(BrokerError::Conflict(
+                response
+                    .error
+                    .unwrap_or_else(|| "broker rejected lifecycle request".to_owned()),
+            ));
+        }
+        let state = response.state.ok_or_else(|| {
+            BrokerError::Unavailable("broker accepted without lifecycle state".to_owned())
+        })?;
+        if operation == BrokerLifecycleOperation::Stop && state != BrokerLifecycleState::Stopped {
+            return Err(BrokerError::Conflict(
+                "broker stop response did not reach terminal state".to_owned(),
+            ));
+        }
+        let duplicate = response.duplicate;
+        let receipt = response.receipt().ok_or_else(|| {
+            BrokerError::Unavailable("broker accepted without a lifecycle receipt".to_owned())
+        })?;
+        if receipt.request != *request
+            || receipt.unit != unit_name(request)
+            || receipt.pid == 0
+            || receipt.creation_token.is_empty()
+            || !receipt.executable.is_absolute()
+            || validate_sha256(&receipt.executable_sha256).is_err()
+        {
+            return Err(BrokerError::Conflict(
+                "broker lifecycle receipt does not correlate to the request".to_owned(),
+            ));
+        }
+        Ok(BrokerLifecycleReceipt {
+            receipt,
+            state,
+            duplicate,
+        })
+    }
 }
 
 fn connect_with_deadline(path: &Path, deadline: Instant) -> BrokerResult<UnixStream> {
@@ -1276,6 +1892,18 @@ struct WireResponseOwned {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct LifecycleWireResponseOwned {
+    version: u8,
+    operation: BrokerLifecycleOperation,
+    accepted: bool,
+    duplicate: bool,
+    state: Option<BrokerLifecycleState>,
+    receipt: Option<LaunchReceiptOwned>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LaunchReceiptOwned {
     request: BrokerRequest,
     unit: String,
@@ -1311,6 +1939,12 @@ impl LaunchReceiptOwned {
 }
 
 impl WireResponseOwned {
+    fn receipt(self) -> Option<LaunchReceipt> {
+        self.receipt.map(LaunchReceiptOwned::into_receipt)
+    }
+}
+
+impl LifecycleWireResponseOwned {
     fn receipt(self) -> Option<LaunchReceipt> {
         self.receipt.map(LaunchReceiptOwned::into_receipt)
     }

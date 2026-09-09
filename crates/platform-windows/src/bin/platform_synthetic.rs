@@ -50,6 +50,12 @@ fn main() {
             };
             read_worker_bootstrap(&marker);
         }
+        "--read-gateway-health-bootstrap" => {
+            let Some(marker) = arguments.next().map(PathBuf::from) else {
+                process::exit(2);
+            };
+            read_gateway_health_bootstrap(&marker);
+        }
         _ => process::exit(2),
     }
 }
@@ -73,6 +79,24 @@ fn read_worker_bootstrap(marker: &Path) -> ! {
     let mut frame = prefix.to_vec();
     frame.resize(PREFIX_BYTES + payload_length, 0);
     if stdin.read_exact(&mut frame[PREFIX_BYTES..]).is_err() || fs::write(marker, &frame).is_err() {
+        process::exit(2);
+    }
+    loop_forever();
+}
+
+fn read_gateway_health_bootstrap(marker: &Path) -> ! {
+    const MAGIC: &[u8; 8] = b"STS2GH01";
+    const FRAME_BYTES: usize = 56;
+    let mut stdin = io::stdin().lock();
+    let mut frame = [0_u8; FRAME_BYTES];
+    if stdin.read_exact(&mut frame).is_err()
+        || &frame[..MAGIC.len()] != MAGIC
+        || frame[MAGIC.len()..MAGIC.len() + 16]
+            .iter()
+            .all(|byte| *byte == 0)
+        || frame[MAGIC.len() + 16..].iter().all(|byte| *byte == 0)
+        || fs::write(marker, frame).is_err()
+    {
         process::exit(2);
     }
     loop_forever();

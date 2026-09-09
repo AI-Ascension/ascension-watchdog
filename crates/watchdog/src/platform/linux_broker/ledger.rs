@@ -3,9 +3,11 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum LedgerState {
+pub(super) enum LedgerState {
     Pending,
     Committed,
+    StopPending,
+    Stopped,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -16,6 +18,14 @@ struct LedgerRecord {
     identity: LaunchIdentity,
     state: LedgerState,
     receipt: Option<LaunchReceipt>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum LifecycleRecord {
+    Pending,
+    Committed(LaunchReceipt),
+    StopPending(LaunchReceipt),
+    Stopped(LaunchReceipt),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -55,7 +65,7 @@ impl LaunchIdentity {
         }
     }
 
-    fn matches_policy(&self, policy: &LaunchPolicy) -> bool {
+    pub(super) fn matches_policy(&self, policy: &LaunchPolicy) -> bool {
         self == &Self::from_policy(policy)
     }
 }
@@ -71,6 +81,8 @@ pub struct BrokerLedger {
     poisoned: bool,
     #[cfg(test)]
     append_failure: Option<AppendFailure>,
+    #[cfg(test)]
+    reject_next_commit: bool,
 }
 
 #[cfg(test)]
@@ -81,6 +93,40 @@ enum AppendFailure {
 }
 
 impl BrokerLedger {
+    /// Only committed identities can bind inherited containment. Pending
+    /// reservations and terminal records never authorize process adoption.
+    pub(super) fn recoverable_receipts(
+        &self,
+        policy: &BrokerPolicy,
+    ) -> BrokerResult<Vec<LaunchReceipt>> {
+        self.ensure_healthy()?;
+        let mut receipts = Vec::new();
+        for (request, record) in &self.records {
+            if !matches!(
+                record.state,
+                LedgerState::Committed | LedgerState::StopPending
+            ) {
+                continue;
+            }
+            let launch_policy = policy.component(request.component)?;
+            let unit = unit_name(request);
+            match self.lifecycle_record(request, &unit, launch_policy)? {
+                Some(
+                    LifecycleRecord::Committed(receipt) | LifecycleRecord::StopPending(receipt),
+                ) => {
+                    verify_receipt_identity(&receipt, request, &unit, launch_policy)?;
+                    receipts.push(receipt);
+                }
+                _ => {
+                    return Err(BrokerError::Conflict(
+                        "recovery ledger state changed".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(receipts)
+    }
+
     pub fn memory() -> Self {
         Self {
             path: None,
@@ -88,6 +134,8 @@ impl BrokerLedger {
             poisoned: false,
             #[cfg(test)]
             append_failure: None,
+            #[cfg(test)]
+            reject_next_commit: false,
         }
     }
 
@@ -100,6 +148,8 @@ impl BrokerLedger {
             poisoned: false,
             #[cfg(test)]
             append_failure: None,
+            #[cfg(test)]
+            reject_next_commit: false,
         };
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => Some(metadata),
@@ -163,6 +213,171 @@ impl BrokerLedger {
         self.records.contains_key(request)
     }
 
+    pub(super) fn lifecycle_record(
+        &self,
+        request: &BrokerRequest,
+        unit: &str,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<Option<LifecycleRecord>> {
+        let Some(record) = self.records.get(request) else {
+            return Ok(None);
+        };
+        if record.unit != unit || !record.identity.matches_policy(policy) {
+            return Err(BrokerError::Conflict(
+                "lifecycle request conflicts with its immutable launch identity".to_owned(),
+            ));
+        }
+        Ok(Some(match record.state {
+            LedgerState::Pending => LifecycleRecord::Pending,
+            LedgerState::Committed => {
+                LifecycleRecord::Committed(record.receipt.clone().ok_or_else(|| {
+                    BrokerError::Conflict(
+                        "broker committed record has no persisted receipt".to_owned(),
+                    )
+                })?)
+            }
+            LedgerState::StopPending => {
+                LifecycleRecord::StopPending(record.receipt.clone().ok_or_else(|| {
+                    BrokerError::Conflict(
+                        "broker stop-pending record has no persisted receipt".to_owned(),
+                    )
+                })?)
+            }
+            LedgerState::Stopped => {
+                LifecycleRecord::Stopped(record.receipt.clone().ok_or_else(|| {
+                    BrokerError::Conflict(
+                        "broker stopped record has no persisted receipt".to_owned(),
+                    )
+                })?)
+            }
+        }))
+    }
+
+    #[cfg(test)]
+    pub(super) fn state(&self, request: &BrokerRequest) -> Option<LedgerState> {
+        self.records.get(request).map(|record| record.state)
+    }
+
+    pub(super) fn begin_stop(
+        &mut self,
+        request: &BrokerRequest,
+        receipt: &LaunchReceipt,
+    ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
+        let Some(previous) = self.records.get(request) else {
+            return Err(BrokerError::Conflict(
+                "broker stop has no durable launch reservation".to_owned(),
+            ));
+        };
+        if previous.state == LedgerState::StopPending {
+            let Some(previous_receipt) = previous.receipt.as_ref() else {
+                return Err(BrokerError::Conflict(
+                    "broker stop-pending record has no persisted receipt".to_owned(),
+                ));
+            };
+            if !same_process_binding(previous_receipt, receipt) {
+                return Err(BrokerError::Conflict(
+                    "broker stop-pending record has a different process identity".to_owned(),
+                ));
+            }
+            return Ok(());
+        }
+        if previous.state != LedgerState::Committed {
+            return Err(BrokerError::Conflict(
+                "broker launch is not committed for stop".to_owned(),
+            ));
+        }
+        let Some(previous_receipt) = previous.receipt.as_ref() else {
+            return Err(BrokerError::Conflict(
+                "broker committed record has no persisted receipt".to_owned(),
+            ));
+        };
+        if !same_process_binding(previous_receipt, receipt)
+            || previous.unit != receipt.unit
+            || receipt.request != *request
+        {
+            return Err(BrokerError::Conflict(
+                "broker stop receipt does not match durable reservation".to_owned(),
+            ));
+        }
+        let record = LedgerRecord {
+            request: request.clone(),
+            unit: receipt.unit.clone(),
+            identity: previous.identity.clone(),
+            state: LedgerState::StopPending,
+            receipt: Some(receipt.clone()),
+        };
+        self.append(&record)?;
+        self.records.insert(request.clone(), record);
+        Ok(())
+    }
+
+    pub(super) fn begin_failed_launch_cleanup(
+        &mut self,
+        request: &BrokerRequest,
+        receipt: &LaunchReceipt,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
+        let previous = self.records.get(request).ok_or_else(|| {
+            BrokerError::Conflict("failed launch has no durable reservation".to_owned())
+        })?;
+        if previous.state != LedgerState::Pending {
+            return self.begin_stop(request, receipt);
+        }
+        if !previous.identity.matches_policy(policy) || previous.unit != unit_name(request) {
+            return Err(BrokerError::Conflict(
+                "failed launch policy differs from reservation".to_owned(),
+            ));
+        }
+        verify_receipt_identity(receipt, request, &previous.unit, policy)?;
+        let record = LedgerRecord {
+            request: request.clone(),
+            unit: previous.unit.clone(),
+            identity: previous.identity.clone(),
+            state: LedgerState::StopPending,
+            receipt: Some(receipt.clone()),
+        };
+        self.append(&record)?;
+        self.records.insert(request.clone(), record);
+        Ok(())
+    }
+
+    pub(super) fn mark_stopped(
+        &mut self,
+        request: &BrokerRequest,
+        receipt: &LaunchReceipt,
+    ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
+        let Some(previous) = self.records.get(request) else {
+            return Err(BrokerError::Conflict(
+                "broker stop has no durable launch reservation".to_owned(),
+            ));
+        };
+        let Some(previous_receipt) = previous.receipt.as_ref() else {
+            return Err(BrokerError::Conflict(
+                "broker stop-pending record has no persisted receipt".to_owned(),
+            ));
+        };
+        if previous.state != LedgerState::StopPending
+            || !same_process_binding(previous_receipt, receipt)
+        {
+            return Err(BrokerError::Conflict(
+                "broker stopped receipt does not match the pending stop binding".to_owned(),
+            ));
+        }
+        let record = LedgerRecord {
+            request: request.clone(),
+            unit: receipt.unit.clone(),
+            identity: previous.identity.clone(),
+            state: LedgerState::Stopped,
+            receipt: Some(receipt.clone()),
+        };
+        self.append(&record)?;
+        self.records.insert(request.clone(), record);
+        Ok(())
+    }
+
     pub(super) fn is_poisoned(&self) -> bool {
         self.poisoned
     }
@@ -186,6 +401,11 @@ impl BrokerLedger {
         self.append_failure = Some(AppendFailure::Sync);
     }
 
+    #[cfg(test)]
+    pub(super) fn inject_commit_rejection(&mut self) {
+        self.reject_next_commit = true;
+    }
+
     pub(super) fn reserve(
         &mut self,
         request: &BrokerRequest,
@@ -200,11 +420,33 @@ impl BrokerLedger {
                     "broker ledger identity conflicts with current launch policy".to_owned(),
                 ));
             }
+            if matches!(
+                record.state,
+                LedgerState::StopPending | LedgerState::Stopped
+            ) {
+                return Err(BrokerError::Conflict(
+                    "broker lifecycle stop owns this launch nonce".to_owned(),
+                ));
+            }
             return Ok(false);
         }
-        if self.records.len() >= MAX_LEDGER_RECORDS {
+        if self.records.len() >= MAX_LEDGER_REQUESTS {
             return Err(BrokerError::Unavailable(
                 "broker idempotence ledger capacity is exhausted".to_owned(),
+            ));
+        }
+        // Pending launches and interrupted stops may still own processes even
+        // when this broker incarnation has not observed them. Admission uses
+        // durable reservations, not merely the in-memory active-unit cache.
+        if self
+            .records
+            .values()
+            .filter(|record| record.state != LedgerState::Stopped)
+            .count()
+            >= MAX_ACTIVE_PROCESSES
+        {
+            return Err(BrokerError::Unavailable(
+                "broker unresolved-process capacity is exhausted".to_owned(),
             ));
         }
         let record = LedgerRecord {
@@ -225,11 +467,25 @@ impl BrokerLedger {
         receipt: &LaunchReceipt,
     ) -> BrokerResult<()> {
         self.ensure_healthy()?;
+        #[cfg(test)]
+        if std::mem::take(&mut self.reject_next_commit) {
+            return Err(BrokerError::Unavailable(
+                "injected pre-write commit rejection".to_owned(),
+            ));
+        }
         let Some(previous) = self.records.get(request) else {
             return Err(BrokerError::Conflict(
                 "broker launch has no durable reservation".to_owned(),
             ));
         };
+        if matches!(
+            previous.state,
+            LedgerState::StopPending | LedgerState::Stopped
+        ) {
+            return Err(BrokerError::Conflict(
+                "broker lifecycle stop owns this launch nonce".to_owned(),
+            ));
+        }
         if previous.unit != receipt.unit || receipt.request != *request {
             return Err(BrokerError::Conflict(
                 "broker receipt does not match durable reservation".to_owned(),
@@ -261,6 +517,13 @@ impl BrokerLedger {
     }
 
     fn append(&mut self, record: &LedgerRecord) -> BrokerResult<()> {
+        let bytes =
+            serde_json::to_vec(record).map_err(|error| BrokerError::Io(error.to_string()))?;
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Err(BrokerError::Invalid(
+                "broker ledger record exceeds size bound".to_owned(),
+            ));
+        }
         let Some(path) = self.path.clone() else {
             return Ok(());
         };
@@ -280,11 +543,9 @@ impl BrokerLedger {
                 "broker ledger ownership or mode is unsafe".to_owned(),
             ));
         }
-        let bytes =
-            serde_json::to_vec(record).map_err(|error| BrokerError::Io(error.to_string()))?;
-        if bytes.len() > MAX_FRAME_BYTES {
-            return Err(BrokerError::Invalid(
-                "broker ledger record exceeds size bound".to_owned(),
+        if metadata.len().saturating_add(bytes.len() as u64 + 1) > MAX_LEDGER_BYTES as u64 {
+            return Err(BrokerError::Unavailable(
+                "broker ledger aggregate size exceeds its reopen bound".to_owned(),
             ));
         }
 
@@ -329,7 +590,11 @@ impl BrokerLedger {
     }
 }
 
-fn same_process_binding(previous: &LaunchReceipt, current: &LaunchReceipt) -> bool {
+// The serialized launch policy additionally persists no_new_privileges=true;
+// all admitted policies require it, and live observations check it before
+// any effect. It is therefore invariant, not a variable receipt field. Native
+// retained-capability equality also compares the full UnitObservation.
+pub(super) fn same_process_binding(previous: &LaunchReceipt, current: &LaunchReceipt) -> bool {
     previous.request == current.request
         && previous.unit == current.unit
         && previous.pid == current.pid
@@ -345,16 +610,16 @@ fn same_process_binding(previous: &LaunchReceipt, current: &LaunchReceipt) -> bo
 
 fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRecord>> {
     let mut records = BTreeMap::<BrokerRequest, LedgerRecord>::new();
-    let mut record_count = 0;
+    let mut transition_count = 0;
     let mut units = BTreeMap::<String, BrokerRequest>::new();
     for line in bytes.split(|byte| *byte == b'\n') {
         if line.is_empty() {
             continue;
         }
-        record_count += 1;
-        if record_count > MAX_LEDGER_RECORDS {
+        transition_count += 1;
+        if transition_count > MAX_LEDGER_TRANSITIONS {
             return Err(BrokerError::Invalid(
-                "broker ledger record count exceeds bound".to_owned(),
+                "broker ledger transition count exceeds bound".to_owned(),
             ));
         }
         let record: LedgerRecord = parse_json(line, "broker ledger record")?;
@@ -372,11 +637,21 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
             ));
         }
         units.insert(record.unit.clone(), record.request.clone());
+        if !records.contains_key(&record.request) && records.len() >= MAX_LEDGER_REQUESTS {
+            return Err(BrokerError::Invalid(
+                "broker ledger distinct request count exceeds bound".to_owned(),
+            ));
+        }
         match (records.get(&record.request), record.state, &record.receipt) {
             (None, LedgerState::Pending, None) => {}
             (None, LedgerState::Committed, _) => {
                 return Err(BrokerError::Invalid(
                     "broker ledger committed record lacks a pending predecessor".to_owned(),
+                ));
+            }
+            (None, LedgerState::StopPending | LedgerState::Stopped, _) => {
+                return Err(BrokerError::Invalid(
+                    "broker ledger lifecycle record lacks a committed predecessor".to_owned(),
                 ));
             }
             (None, LedgerState::Pending, Some(_)) => {
@@ -389,10 +664,31 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                     "broker ledger has a duplicate or regressed pending record".to_owned(),
                 ));
             }
-            (Some(previous), LedgerState::Committed, Some(receipt)) => {
-                if previous.state != LedgerState::Pending
+            (
+                Some(previous),
+                state @ (LedgerState::Committed | LedgerState::StopPending | LedgerState::Stopped),
+                Some(receipt),
+            ) => {
+                let expected_previous = match state {
+                    LedgerState::Committed => LedgerState::Pending,
+                    LedgerState::StopPending => LedgerState::Committed,
+                    LedgerState::Stopped => LedgerState::StopPending,
+                    LedgerState::Pending => {
+                        return Err(BrokerError::Invalid(
+                            "broker ledger pending transition is invalid".to_owned(),
+                        ));
+                    }
+                };
+                let failed_launch_cleanup = state == LedgerState::StopPending
+                    && previous.state == LedgerState::Pending
+                    && previous.receipt.is_none();
+                if (!failed_launch_cleanup && previous.state != expected_previous)
                     || previous.unit != record.unit
                     || previous.identity != record.identity
+                    || previous
+                        .receipt
+                        .as_ref()
+                        .is_some_and(|prior| !same_process_binding(prior, receipt))
                     || receipt.request != record.request
                     || receipt.unit != record.unit
                     || receipt.executable != record.identity.executable
@@ -412,9 +708,13 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                     ));
                 }
             }
-            (Some(_), LedgerState::Committed, None) => {
+            (
+                Some(_),
+                LedgerState::Committed | LedgerState::StopPending | LedgerState::Stopped,
+                None,
+            ) => {
                 return Err(BrokerError::Invalid(
-                    "committed broker ledger record lacks a receipt".to_owned(),
+                    "terminal broker ledger record lacks a receipt".to_owned(),
                 ));
             }
         }
@@ -502,6 +802,90 @@ mod tests {
                 bytes
             })
             .collect()
+    }
+
+    fn lifecycle(nonce: &str, argument_bytes: usize) -> Vec<LedgerRecord> {
+        let mut record = pending(nonce);
+        record.identity.arguments = vec!["x".repeat(argument_bytes)];
+        let mut records = vec![record.clone()];
+        record.receipt = Some(LaunchReceipt {
+            request: record.request.clone(),
+            unit: record.unit.clone(),
+            pid: 42,
+            creation_token: "1234".to_owned(),
+            executable: record.identity.executable.clone(),
+            executable_sha256: record.identity.executable_sha256.clone(),
+            uid: record.identity.target_uid,
+            gid: record.identity.target_gid,
+            capability_bounding_set: 0,
+            ambient_capabilities: 0,
+            control_group: format!("/system.slice/{}", record.unit),
+            duplicate: false,
+        });
+        for state in [
+            LedgerState::Committed,
+            LedgerState::StopPending,
+            LedgerState::Stopped,
+        ] {
+            record.state = state;
+            records.push(record.clone());
+        }
+        records
+    }
+
+    #[test]
+    fn full_capacity_large_lifecycles_remain_reopenable() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
+        let path = directory.path().join("ledger.jsonl");
+        let mut ledger = BrokerLedger::init(&path)?;
+        for index in 0..MAX_LEDGER_REQUESTS {
+            for record in lifecycle(&format!("nonce-{index}"), 7_000) {
+                ledger.append(&record)?;
+            }
+        }
+        assert!(fs::metadata(&path)?.len() > 1024 * 1024);
+        drop(ledger);
+        let reopened = BrokerLedger::open(path)?;
+        assert_eq!(reopened.records.len(), MAX_LEDGER_REQUESTS);
+        assert!(
+            reopened
+                .records
+                .values()
+                .all(|record| record.state == LedgerState::Stopped)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_parser_rejects_changed_process_binding() {
+        for changed_state in [2, 3] {
+            for change_birth in [false, true] {
+                let mut records = lifecycle("changed-process", 0);
+                let receipt = records[changed_state]
+                    .receipt
+                    .as_mut()
+                    .expect("lifecycle receipt");
+                if change_birth {
+                    receipt.creation_token = "5678".to_owned();
+                } else {
+                    receipt.pid += 1;
+                }
+                assert!(parse_records(&encode(&records)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn append_cannot_exceed_the_reopen_byte_bound() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
+        let path = directory.path().join("ledger.jsonl");
+        let mut ledger = BrokerLedger::init(&path)?;
+        let file = fs::OpenOptions::new().write(true).open(&path)?;
+        file.set_len(MAX_LEDGER_BYTES as u64)?;
+        assert!(ledger.append(&pending("over-limit")).is_err());
+        assert_eq!(fs::metadata(&path)?.len(), MAX_LEDGER_BYTES as u64);
+        Ok(())
     }
 
     #[test]

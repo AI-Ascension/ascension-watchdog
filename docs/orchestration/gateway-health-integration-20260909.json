@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "classification": "partial",
+  "source_base": "2c066cb216db5107cdd9e8bb3d5902af5d73a806",
+  "source_state": "uncommitted integration work; selected_source_sha256 preserves the earlier checkpoint and latest_followup_source_sha256 binds later tested changes; not a reproducible companion release set",
+  "latest_followup_source_sha256": {
+    "crates/platform-windows/tests/native_gateway_health_bootstrap.rs": "4d2c0c5ad7ced0e06ed281fb5f1ea635731595c26d0b30db512cd4747652b1df",
+    "crates/watchdog/src/platform/linux_launcher.rs": "8c06d72193dce349697946b35a916353b5b7f6ccb75e8acbefdbb606b2d7ca27",
+    "crates/watchdog/src/cli.rs": "873d369b2f36631e21e2a8f9d4d53047deb7cb0e3994a0ff760cb9a961f835a6",
+    "crates/watchdog/tests/gateway_health_storage.rs": "1a1bf59162b8dfccf9180a9d92ea5d5c8f044b5ef7eb3d18b8dfcc41e3b8a3a4",
+    "Cargo.lock": "71a5ce04ecb32764372d37d4c9869203d65f752e9db65b85c66cf7cf4182be74"
+  },
+  "implemented_locally": [
+    "Closed health configuration bound to gateway launch environment and approved digests",
+    "Independent bounded authenticated health consumer with per-launch challenge and sequence state",
+    "Fresh ephemeral bootstrap key with immutable non-secret launch binding in owner-local SQLite",
+    "Native launch admission reservation held through Windows resume or Linux exec",
+    "Retained native child identity checked before and after health exchange",
+    "Durable gateway quarantine and missing state veto fresh worker claims",
+    "Explicit stopped-owner offline health-schema migration without configuration approval"
+  ],
+  "verification": {
+    "command": "CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 -p ascension-watchdog --lib --test gateway_health_config --test gateway_health_storage --test gateway_health",
+    "exit_code": 0,
+    "library": {"passed": 144, "failed": 0, "ignored": 5},
+    "gateway_health": {"passed": 4, "failed": 0},
+    "gateway_health_config": {"passed": 8, "failed": 0},
+    "gateway_health_storage": {"passed": 5, "failed": 0},
+    "format_check": "passed",
+    "strict_workspace_clippy": "passed: CARGO_INCREMENTAL=0 cargo clippy --locked --offline -j1 --workspace --all-targets --all-features -- -D warnings",
+    "windows_cross_target_clippy": "passed: same strict workspace command with --target x86_64-pc-windows-gnu; not native Windows execution",
+    "linux_full_workspace_tests": "passed: CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 --workspace --all-targets --all-features; explicitly gated native tests remain ignored",
+    "qualification": "Counts above describe the focused gate; the separate full Linux workspace command also passed. Neither establishes native-service or live-host validation."
+  },
+  "selected_source_sha256": {
+    "crates/watchdog/src/runtime_gateway_health.rs": "41ca67feb96e2bc1907ab438477a0a98f5ae7481c58a8da9d9dbdf0264ed7b90",
+    "crates/watchdog/src/runtime_gateway_health_admission.rs": "53d63dd03e7fb8963e3fc54879f726ad32eae4302eba32ec3fbea5752c99e73f",
+    "crates/watchdog/src/storage_gateway_health.rs": "62b5244b8506ef93dc11e6f22e164997a68fdcc708a5e4f177bd8566e86bc6b2",
+    "crates/watchdog/src/cli.rs": "8d355ca11f20d7a34235d774eb54f930cc760022e553f3a34d56b6441bc84c83",
+    "crates/watchdog/src/platform/linux_launcher.rs": "f445cab60d0d6ae2e947a5b7b9ad558bd92bb596c8e96d7b9df28d8e0ecd8c20",
+    "crates/watchdog/tests/gateway_health_storage.rs": "7ad7ef8da0080e4395ecceb7a6c455cb7b6456fcf0d2df28335a553df9a5bc3a"
+  },
+  "remaining_gates": [
+    "Complete Linux cgroup non-escape boundary and independent containment review",
+    "Native gateway/watchdog authenticated health exchange through integrated launch adapters",
+    "Windows native bootstrap and service validation on the exact integrated source",
+    "Persisted operator-visible diagnostics and phase-specific progress policy",
+    "Explicit approved configuration and release activation for existing stores",
+    "Final workspace, platform, policy and companion release-set gates",
+    "Required live-host, reboot and soak evidence",
+    "Required three-descendant-level orchestration evidence"
+  ],
+  "open_correctness_findings": [
+    {
+      "id": "LINUX-CGROUP-NONESCAPE",
+      "classification": "source-derived",
+      "severity": "blocker",
+      "finding": "Direct-child launcher preserves the watchdog UID, whose unit delegates cgroup access. A child may migrate a descendant outside its leaf; empty-leaf plus leader exit can then be reported clean while that descendant survives.",
+      "source": [
+        "deploy/linux/ascension-watchdog.service",
+        "crates/watchdog/src/platform/linux_launcher.rs",
+        "crates/watchdog/src/platform/linux_process.rs",
+        "crates/watchdog/src/runtime_process.rs"
+      ],
+      "native_reproduction": "not executed",
+      "next_implementation": "Integrate the root-owned systemd broker with distinct child credentials and nondelegated units, preserving typed bootstrap, exact ownership, stop ordering and no fallback. Do not change live cgroup permissions or substitute PID/name killing."
+    }
+  ],
+  "pending_verification": {
+    "change": "Migration requires exactly one explicit nonempty --config PATH; malformed or omitted options cannot select the default configuration",
+    "source_sha256": {
+      "crates/watchdog/src/cli.rs": "873d369b2f36631e21e2a8f9d4d53047deb7cb0e3994a0ff760cb9a961f835a6",
+      "crates/watchdog/tests/gateway_health_storage.rs": "1a1bf59162b8dfccf9180a9d92ea5d5c8f044b5ef7eb3d18b8dfcc41e3b8a3a4"
+    },
+    "format_and_diff": "passed",
+    "tests": "passed: cargo test --locked --offline -j1 -p ascension-watchdog --test gateway_health_storage; 6 passed, 0 failed",
+    "clippy": "passed: cargo clippy --locked --offline -j1 -p ascension-watchdog --lib --test gateway_health_storage -- -D warnings"
+  },
+  "native_windows_bootstrap": {
+    "classification": "confirmed",
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "test_seconds": 0.39,
+    "process_exit_code": 0,
+    "outer_timeout_seconds": 45,
+    "kill_reap_seconds": 5,
+    "test_sha256": "0a0e02fdb401903056d9974e49c65eb76c9538a6a67f7f75ca6af2f7098e8c6a",
+    "fixture_sha256": "b1034701ec74cd7e1f6feb13515542b0be404b3ff91b6965c972bb6501396e9d",
+    "scope": "Native synthetic gateway frame delivery after admission barrier and exact Job-owned child force stop; UUID fixture conformance",
+    "qualification": "Interactive Windows user test, not Session 0, installed service, actual gateway health authentication, or game recovery",
+    "earlier_attempts": "First test log reported 2 passing tests but Start-Process wrapper could not capture exit code. One later attempt failed WSL interop before staging. Final held Process wrapper returned exit 0."
+  },
+  "native_windows_failure_tests": {
+    "status": "native four-test suite passed; independent source review found no blocker and approved follow-up exact received nonce assertion; subsequent native rerun passed",
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "test_seconds": 0.92,
+    "process_exit_code": 0,
+    "test_sha256": "f8a0c5b2a38ae36cefa63a25e982dbb9e112bed5d9ee041d54f80ca4f1664921",
+    "fixture_sha256": "7e1e985281515e7fdf80ddb9688ac2787af95e29a1031c7bd02b9f17b6139d75",
+    "strict_windows_workspace_clippy": "passed on expanded source with all targets/features and warnings denied",
+    "cases": [
+      "Rejected admission cleans suspended Job without target marker",
+      "Changed nonce rejects before callback or target execution"
+    ],
+    "qualification": "New native run covers both additions and the two existing cases; not service or live-gateway validation"
+  },
+  "native_windows_exact_nonce_rerun": {
+    "classification": "confirmed native synthetic execution",
+    "passed": 4,
+    "failed": 0,
+    "test_seconds": 0.83,
+    "process_exit_code": 0,
+    "test_sha256": "cf524061636a6644269d03968ae231bc417f97b902de40328ec5d22ac13bf11b",
+    "fixture_sha256": "07ea2da2420922791581828832352c8d5edd4da53cbad7dbcc0c5ce2e96889ee",
+    "source_review": "independent source-only reviewer approved the exact received nonce assertion; subsequent equivalent formatting uses write! to satisfy strict lint",
+    "strict_windows_workspace_clippy": "passed on final test source; all targets/features with warnings denied",
+    "qualification": "Synthetic user-session bootstrap, not native service, real gateway HMAC, or game recovery"
+  },
+  "independent_native_windows_execution": {
+    "classification": "confirmed native synthetic execution; root inspected independent result and output files",
+    "passed": 4,
+    "failed": 0,
+    "test_seconds": 0.90,
+    "process_exit_code": 0,
+    "stderr_bytes": 0,
+    "result_json_sha256": "c4645656bfbdd1c8ca13ac068ba1e5ab91d1242bd6b54d60306dc1c123e1c386",
+    "stdout_sha256": "0d12bdc2abc1a42c3050090372a9f930ffd0fb0556406bd9a3860c39a68e9ff5",
+    "test_sha256": "cf524061636a6644269d03968ae231bc417f97b902de40328ec5d22ac13bf11b",
+    "fixture_sha256": "07ea2da2420922791581828832352c8d5edd4da53cbad7dbcc0c5ce2e96889ee",
+    "outer_timeout_seconds": 45,
+    "kill_reap_seconds": 5,
+    "qualification": "Independent frozen-image execution, not service, HMAC, or live-game validation"
+  },
+  "latest_linux_verification": {
+    "strict_workspace_clippy_before_fixture_correction": "passed",
+    "full_workspace_tests_before_fixture_correction": "failed: pipe-reader closure assertion; library 143 passed, 1 failed, 5 ignored",
+    "isolated_original_ownership_test": "passed",
+    "correction": "Bounded isolated self-exec ownership fixture avoids concurrent fork descriptor retention and asserts exact BrokenPipe",
+    "corrected_parallel_library_tests": "passed: 144 passed, 0 failed, 5 ignored",
+    "corrected_full_workspace_gates": "passed: CARGO_INCREMENTAL=0 cargo clippy --locked --offline -j1 --workspace --all-targets --all-features -- -D warnings; CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 --workspace --all-targets --all-features; combined process exit 0",
+    "format_diff_json": "passed",
+    "dependency_gate": "passed: cargo-deny 0.20.2; cargo deny --locked check advisories licenses bans sources; exit 0; allowed duplicate-version warnings for hashbrown and syn",
+    "release_build": "passed: CARGO_INCREMENTAL=0 cargo build --locked --offline -j1 --workspace --release; exit 0; 3m34s",
+    "release_sha256": {
+      "watchdog": "046dadc402c0427168025f9a9436d4916b45c239379041e1930dee16642b8bbd",
+      "fault-fixture-server": "1407cc5d6aaebef0200b4695e0f5c5ab79eb0cb34f1a075c41323d8b96a32866",
+      "platform_synthetic": "943b6152b3f035327ec4930412495fac44fa58cbce2a5a54e59ef0a459b5ce14"
+    }
+  },
+  "delivery_this_checkpoint": {
+    "committed": false,
+    "pushed": false,
+    "merged": false,
+    "services_installed": false,
+    "games_or_providers_launched": false,
+    "hosts_rebooted": false,
+    "releases_activated": false
+  },
+  "implementation_complete": false
+}

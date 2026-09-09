@@ -11,6 +11,9 @@ use crate::contract::{
     LifecycleFrame, LifecycleRequest, PlatformError, ProcessIdentity, SessionSelector,
     WindowsLaunchSpec, WindowsPlatformConfig,
 };
+use crate::native_gateway_health_bootstrap::{
+    GATEWAY_HEALTH_BOOTSTRAP_FRAME_BYTES, GatewayHealthBootstrapLaunch,
+};
 use crate::native_worker_bootstrap::{MAX_WORKER_BOOTSTRAP_FRAME_BYTES, WorkerBootstrapLaunch};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -99,6 +102,7 @@ const JOB_EMPTY_SETTLE_DELAY: Duration = Duration::from_millis(25);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
 const HASH_READ_BYTES: usize = 64 * 1024;
 const WORKER_BOOTSTRAP_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const GATEWAY_HEALTH_BOOTSTRAP_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 // CreatePipe's size is a requested buffer size, not a promise of overlapped
 // I/O.  The worker frame is written once, while the child remains suspended,
 // so the complete bounded frame fits in the requested pipe buffer.  See the
@@ -577,6 +581,43 @@ pub struct WindowsProcessLauncher {
     config: WindowsPlatformConfig,
 }
 
+/// Typed startup material selected by the role-specific launch method.
+/// Worker and Gateway frames cannot cross each other's admission path.
+enum LaunchBootstrap<'a> {
+    Worker(&'a WorkerBootstrapLaunch),
+    Gateway(&'a GatewayHealthBootstrapLaunch),
+}
+
+impl LaunchBootstrap<'_> {
+    fn frame(&self) -> &[u8] {
+        match self {
+            Self::Worker(launch) => launch.frame(),
+            Self::Gateway(launch) => launch.frame(),
+        }
+    }
+
+    fn max_frame_bytes(&self) -> usize {
+        match self {
+            Self::Worker(_) => MAX_WORKER_BOOTSTRAP_FRAME_BYTES,
+            Self::Gateway(_) => GATEWAY_HEALTH_BOOTSTRAP_FRAME_BYTES,
+        }
+    }
+
+    fn write_timeout(&self) -> Duration {
+        match self {
+            Self::Worker(_) => WORKER_BOOTSTRAP_WRITE_TIMEOUT,
+            Self::Gateway(_) => GATEWAY_HEALTH_BOOTSTRAP_WRITE_TIMEOUT,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Worker(_) => "worker bootstrap",
+            Self::Gateway(_) => "Gateway health bootstrap",
+        }
+    }
+}
+
 impl WindowsProcessLauncher {
     /// Validate configuration before any SCM, token, or process call.
     pub fn new(config: WindowsPlatformConfig) -> Result<Self, PlatformError> {
@@ -641,7 +682,37 @@ impl WindowsProcessLauncher {
             )));
         }
         worker.validate().map_err(WindowsLaunchError::Ordinary)?;
-        self.launch_inner(specification, Some(worker), before_resume)
+        let bootstrap = LaunchBootstrap::Worker(worker);
+        self.launch_inner(specification, Some(&bootstrap), before_resume)
+    }
+
+    /// Launch the exact Gateway executable with one fixed health frame and
+    /// invoke the durable authorization barrier immediately before
+    /// `ResumeThread`.
+    ///
+    /// The frame is handed over through a dedicated anonymous pipe while the
+    /// child is suspended.  It is never copied into the launch specification,
+    /// command line, or environment block.  Any post-spawn failure is cleaned
+    /// up through the exact named Job Object before being returned.
+    pub fn launch_with_gateway_health_bootstrap_and_barrier<F, G>(
+        &self,
+        specification: &WindowsLaunchSpec,
+        gateway_health: &GatewayHealthBootstrapLaunch,
+        before_resume: F,
+    ) -> Result<JobOwnedProcess, WindowsLaunchError>
+    where
+        F: FnOnce() -> Result<G, PlatformError>,
+    {
+        gateway_health
+            .validate_for_launch(specification)
+            .map_err(WindowsLaunchError::Ordinary)?;
+        let bootstrap = LaunchBootstrap::Gateway(gateway_health);
+        self.launch_inner_with_pipe_buffer(
+            specification,
+            Some(&bootstrap),
+            GATEWAY_HEALTH_BOOTSTRAP_FRAME_BYTES,
+            before_resume,
+        )
     }
 
     /// Exercise a deliberately undersized anonymous worker pipe in a native
@@ -665,9 +736,10 @@ impl WindowsProcessLauncher {
             )));
         }
         worker.validate().map_err(WindowsLaunchError::Ordinary)?;
+        let bootstrap = LaunchBootstrap::Worker(worker);
         self.launch_inner_with_pipe_buffer(
             specification,
-            Some(worker),
+            Some(&bootstrap),
             pipe_buffer_bytes,
             before_resume,
         )
@@ -676,7 +748,7 @@ impl WindowsProcessLauncher {
     fn launch_inner<F, G>(
         &self,
         specification: &WindowsLaunchSpec,
-        worker: Option<&WorkerBootstrapLaunch>,
+        bootstrap: Option<&LaunchBootstrap<'_>>,
         before_resume: F,
     ) -> Result<JobOwnedProcess, WindowsLaunchError>
     where
@@ -684,7 +756,7 @@ impl WindowsProcessLauncher {
     {
         self.launch_inner_with_pipe_buffer(
             specification,
-            worker,
+            bootstrap,
             WORKER_PIPE_BUFFER_BYTES,
             before_resume,
         )
@@ -694,8 +766,8 @@ impl WindowsProcessLauncher {
     fn launch_inner_with_pipe_buffer<F, G>(
         &self,
         specification: &WindowsLaunchSpec,
-        worker: Option<&WorkerBootstrapLaunch>,
-        worker_pipe_buffer_bytes: usize,
+        bootstrap: Option<&LaunchBootstrap<'_>>,
+        pipe_buffer_bytes: usize,
         before_resume: F,
     ) -> Result<JobOwnedProcess, WindowsLaunchError>
     where
@@ -786,8 +858,8 @@ impl WindowsProcessLauncher {
             &job,
             &executable,
             specification,
-            worker,
-            worker_pipe_buffer_bytes,
+            bootstrap,
+            pipe_buffer_bytes,
         );
         let process = match process {
             Ok(process) => process,
@@ -937,19 +1009,23 @@ impl From<PlatformError> for SpawnFailure {
     }
 }
 
-/// Dedicated anonymous worker stdin endpoints.  The reader is inheritable and
-/// appears in the explicit child handle list; the writer is parent-only.
-struct WorkerPipe {
+/// Dedicated anonymous bootstrap stdin endpoints.  The reader is inheritable
+/// and appears in the explicit child handle list; the writer is parent-only.
+struct BootstrapPipe {
     reader: OwnedHandle,
     writer: OwnedHandle,
 }
 
-impl WorkerPipe {
-    fn create(buffer_bytes: usize) -> Result<Self, PlatformError> {
-        if buffer_bytes == 0 || buffer_bytes > MAX_WORKER_BOOTSTRAP_FRAME_BYTES {
-            return Err(PlatformError::Invalid(
-                "worker pipe buffer is outside the fixed frame bound".to_owned(),
-            ));
+impl BootstrapPipe {
+    fn create(
+        buffer_bytes: usize,
+        label: &str,
+        max_frame_bytes: usize,
+    ) -> Result<Self, PlatformError> {
+        if buffer_bytes == 0 || buffer_bytes > max_frame_bytes {
+            return Err(PlatformError::Invalid(format!(
+                "{label} pipe buffer is outside the fixed frame bound"
+            )));
         }
         let mut reader = null_mut();
         let mut writer = null_mut();
@@ -961,7 +1037,7 @@ impl WorkerPipe {
             bInheritHandle: 1,
         };
         let size = u32::try_from(buffer_bytes).map_err(|_| {
-            PlatformError::Invalid("worker pipe buffer size exceeds Win32 bounds".to_owned())
+            PlatformError::Invalid(format!("{label} pipe buffer size exceeds Win32 bounds"))
         })?;
         let created = unsafe {
             CreatePipe(
@@ -972,16 +1048,16 @@ impl WorkerPipe {
             )
         };
         if created == 0 {
-            return Err(last_error("CreatePipe(worker bootstrap)"));
+            return Err(last_error("CreatePipe(bootstrap)"));
         }
-        let reader = match OwnedHandle::new(reader, "CreatePipe(worker reader)") {
+        let reader = match OwnedHandle::new(reader, "CreatePipe(bootstrap reader)") {
             Ok(handle) => handle,
             Err(error) => {
                 close_raw_handle(writer);
                 return Err(error);
             }
         };
-        let writer = match OwnedHandle::new(writer, "CreatePipe(worker writer)") {
+        let writer = match OwnedHandle::new(writer, "CreatePipe(bootstrap writer)") {
             Ok(handle) => handle,
             Err(error) => {
                 drop(reader);
@@ -994,7 +1070,7 @@ impl WorkerPipe {
         // enables ordinary handle inheritance.
         let inherit_mask = HANDLE_FLAG_INHERIT;
         if unsafe { SetHandleInformation(writer.raw(), inherit_mask, 0) } == 0 {
-            return Err(last_error("SetHandleInformation(worker writer)"));
+            return Err(last_error("SetHandleInformation(bootstrap writer)"));
         }
         // Anonymous pipes are implemented by named-pipe handles and support
         // the documented PIPE_NOWAIT compatibility mode.  This is not
@@ -1003,34 +1079,39 @@ impl WorkerPipe {
         // drain the pipe.
         let mode = PIPE_NOWAIT;
         if unsafe { SetNamedPipeHandleState(writer.raw(), &raw const mode, null(), null()) } == 0 {
-            return Err(last_error("SetNamedPipeHandleState(worker writer)"));
+            return Err(last_error("SetNamedPipeHandleState(bootstrap writer)"));
         }
         Ok(Self { reader, writer })
     }
 }
 
-/// Write one complete worker frame through the `PIPE_NOWAIT` anonymous writer.
+/// Write one complete bootstrap frame through the `PIPE_NOWAIT` anonymous writer.
 /// Because the child remains suspended, a partial write cannot make progress;
 /// it fails closed and the caller retains the exact Job Object for cleanup.
-fn write_worker_bootstrap(pipe: WorkerPipe, frame: &[u8]) -> Result<(), PlatformError> {
-    let WorkerPipe { reader, writer } = pipe;
+fn write_bootstrap(
+    pipe: BootstrapPipe,
+    frame: &[u8],
+    max_frame_bytes: usize,
+    timeout: Duration,
+    label: &str,
+) -> Result<(), PlatformError> {
+    let BootstrapPipe { reader, writer } = pipe;
     drop(reader);
-    if frame.is_empty() || frame.len() > MAX_WORKER_BOOTSTRAP_FRAME_BYTES {
+    if frame.is_empty() || frame.len() > max_frame_bytes {
         drop(writer);
-        return Err(PlatformError::Invalid(
-            "worker bootstrap frame exceeds bounds".to_owned(),
-        ));
+        return Err(PlatformError::Invalid(format!(
+            "{label} frame exceeds bounds"
+        )));
     }
-    let count = u32::try_from(frame.len()).map_err(|_| {
-        PlatformError::Invalid("worker bootstrap frame exceeds Win32 bounds".to_owned())
-    })?;
+    let count = u32::try_from(frame.len())
+        .map_err(|_| PlatformError::Invalid(format!("{label} frame exceeds Win32 bounds")))?;
     let deadline = Instant::now()
-        .checked_add(WORKER_BOOTSTRAP_WRITE_TIMEOUT)
+        .checked_add(timeout)
         .unwrap_or_else(Instant::now);
     if Instant::now() >= deadline {
-        return Err(PlatformError::Timeout(
-            "worker bootstrap pipe write deadline elapsed".to_owned(),
-        ));
+        return Err(PlatformError::Timeout(format!(
+            "{label} pipe write deadline elapsed"
+        )));
     }
     let mut written = 0_u32;
     let ok = unsafe {
@@ -1047,22 +1128,21 @@ fn write_worker_bootstrap(pipe: WorkerPipe, frame: &[u8]) -> Result<(), Platform
         if code == windows_sys::Win32::Foundation::ERROR_NO_DATA
             || code == windows_sys::Win32::Foundation::ERROR_PIPE_LISTENING
         {
-            return Err(PlatformError::Timeout(
-                "worker bootstrap pipe cannot accept the complete frame without blocking"
-                    .to_owned(),
-            ));
+            return Err(PlatformError::Timeout(format!(
+                "{label} pipe cannot accept the complete frame without blocking"
+            )));
         }
-        return Err(win32_error("WriteFile(worker bootstrap)", code));
+        return Err(win32_error("WriteFile(bootstrap)", code));
     }
     if written != count {
-        return Err(PlatformError::Unavailable(
-            "worker bootstrap pipe accepted only a partial frame".to_owned(),
-        ));
+        return Err(PlatformError::Unavailable(format!(
+            "{label} pipe accepted only a partial frame"
+        )));
     }
     if Instant::now() >= deadline {
-        return Err(PlatformError::Timeout(
-            "worker bootstrap pipe write exceeded its deadline".to_owned(),
-        ));
+        return Err(PlatformError::Timeout(format!(
+            "{label} pipe write exceeded its deadline"
+        )));
     }
     Ok(())
 }
@@ -1345,8 +1425,8 @@ fn spawn_suspended_with_job(
     job: &OwnedHandle,
     executable: &Path,
     specification: &WindowsLaunchSpec,
-    worker: Option<&WorkerBootstrapLaunch>,
-    worker_pipe_buffer_bytes: usize,
+    bootstrap: Option<&LaunchBootstrap<'_>>,
+    pipe_buffer_bytes: usize,
 ) -> Result<(OwnedHandle, OwnedHandle, u32), SpawnFailure> {
     let mut command_line = command_line(executable, &specification.arguments)?;
     let mut environment = environment_block(&specification.environment)?;
@@ -1360,7 +1440,7 @@ fn spawn_suspended_with_job(
     let desktop = (specification.component == crate::contract::ComponentKind::HostBroker)
         .then(|| wide("winsta0\\default"))
         .transpose()?;
-    if let Some(worker) = worker {
+    if let Some(LaunchBootstrap::Worker(worker)) = bootstrap {
         if specification.component != crate::contract::ComponentKind::Harness {
             return Err(PlatformError::Unsupported(
                 "Windows worker bootstrap is only valid for the Harness role".to_owned(),
@@ -1369,11 +1449,22 @@ fn spawn_suspended_with_job(
         }
         worker.validate()?;
     }
-    let worker_pipe = worker
-        .map(|_| WorkerPipe::create(worker_pipe_buffer_bytes))
+    if let Some(LaunchBootstrap::Gateway(gateway)) = bootstrap {
+        if specification.component != crate::contract::ComponentKind::Gateway {
+            return Err(PlatformError::Unsupported(
+                "Gateway health bootstrap is only valid for the Gateway role".to_owned(),
+            )
+            .into());
+        }
+        gateway.validate_for_launch(specification)?;
+    }
+    let bootstrap_pipe = bootstrap
+        .map(|launch| {
+            BootstrapPipe::create(pipe_buffer_bytes, launch.label(), launch.max_frame_bytes())
+        })
         .transpose()?;
     let mut attribute_size = 0_usize;
-    let attribute_count = if worker.is_some() { 2 } else { 1 };
+    let attribute_count = if bootstrap_pipe.is_some() { 2 } else { 1 };
     let _ = unsafe {
         InitializeProcThreadAttributeList(null_mut(), attribute_count, 0, &raw mut attribute_size)
     };
@@ -1430,14 +1521,14 @@ fn spawn_suspended_with_job(
         unsafe { DeleteProcThreadAttributeList(attribute_list) };
         return Err(last_error("UpdateProcThreadAttribute(JOB_LIST)").into());
     }
-    let worker_handle_list = worker_pipe.as_ref().map(|pipe| [pipe.reader.raw()]);
-    if let Some(handles) = worker_handle_list.as_ref() {
+    let bootstrap_handle_list = bootstrap_pipe.as_ref().map(|pipe| [pipe.reader.raw()]);
+    if let Some(handles) = bootstrap_handle_list.as_ref() {
         let updated = unsafe {
             UpdateProcThreadAttribute(
                 attribute_list,
                 0,
                 usize::try_from(PROC_THREAD_ATTRIBUTE_HANDLE_LIST).map_err(|_| {
-                    PlatformError::Invalid("worker handle-list attribute overflow".to_owned())
+                    PlatformError::Invalid("bootstrap handle-list attribute overflow".to_owned())
                 })?,
                 handles.as_ptr().cast::<c_void>(),
                 size_of::<HANDLE>(),
@@ -1456,7 +1547,7 @@ fn spawn_suspended_with_job(
     startup.StartupInfo.lpDesktop = desktop
         .as_ref()
         .map_or(null_mut(), |value| value.as_ptr().cast_mut());
-    if let Some(pipe) = worker_pipe.as_ref() {
+    if let Some(pipe) = bootstrap_pipe.as_ref() {
         startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
         startup.StartupInfo.hStdInput = pipe.reader.raw();
     }
@@ -1470,7 +1561,7 @@ fn spawn_suspended_with_job(
     // environment.  A null pointer would inherit the service environment.
     let environment_ptr = environment.as_mut_ptr().cast::<c_void>().cast_const();
     let current_directory_ptr = current_directory_wide.as_ref().map_or(null(), Vec::as_ptr);
-    let inherit_handles = i32::from(worker.is_some());
+    let inherit_handles = i32::from(bootstrap_pipe.is_some());
     let result = unsafe {
         match token {
             Some(token) => CreateProcessAsUserW(
@@ -1506,16 +1597,22 @@ fn spawn_suspended_with_job(
     }
     let pid = information.dwProcessId;
     let (process, thread) = wrap_created_process_handles(information)?;
-    if let Some(pipe) = worker_pipe {
-        let Some(worker) = worker else {
+    if let Some(pipe) = bootstrap_pipe {
+        let Some(bootstrap) = bootstrap else {
             drop(thread);
             drop(process);
             return Err(PlatformError::Invalid(
-                "worker pipe was created without worker frame bytes".to_owned(),
+                "bootstrap pipe was created without frame bytes".to_owned(),
             )
             .into());
         };
-        if let Err(error) = write_worker_bootstrap(pipe, worker.frame()) {
+        if let Err(error) = write_bootstrap(
+            pipe,
+            bootstrap.frame(),
+            bootstrap.max_frame_bytes(),
+            bootstrap.write_timeout(),
+            bootstrap.label(),
+        ) {
             drop(thread);
             drop(process);
             return Err(SpawnFailure::Created(error));

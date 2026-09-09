@@ -13,6 +13,10 @@ mod config_file;
 mod config_worker;
 pub use config_worker::WorkerConfig;
 
+#[path = "config_gateway_health.rs"]
+mod config_gateway_health;
+pub use config_gateway_health::GatewayHealthConfig;
+
 const MAX_COMPONENTS: usize = 16;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 8 * 1024;
@@ -245,6 +249,9 @@ pub struct WatchdogConfig {
     /// Explicit immutable harness-worker binding. Absence leaves scheduling disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<WorkerConfig>,
+    /// Approved gateway health binding; its key and nonce are generated per launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_health: Option<GatewayHealthConfig>,
     /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
     /// its digest; native launch admission uses it only as a protected,
@@ -278,6 +285,7 @@ impl Default for WatchdogConfig {
             allow_synthetic_children: false,
             admin: None,
             worker: None,
+            gateway_health: None,
             source_path: None,
         }
     }
@@ -319,6 +327,9 @@ impl WatchdogConfig {
         }
         if let Some(worker) = &self.worker {
             worker.validate(self)?;
+        }
+        if let Some(health) = &self.gateway_health {
+            health.validate(self)?;
         }
         if self.schema_version != 1 {
             return Err(WatchdogError::InvalidInput(format!(

@@ -10,11 +10,15 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod contract;
+mod native_gateway_health_bootstrap;
 mod native_worker_bootstrap;
 pub mod service_command;
 pub use contract::{
     ComponentKind, LifecycleCapability, LifecycleFrame, LifecycleRequest, PlatformError,
     ProcessIdentity, SessionSelector, WindowsLaunchSpec, WindowsPlatformConfig,
+};
+pub use native_gateway_health_bootstrap::{
+    GATEWAY_HEALTH_BOOTSTRAP_FRAME_BYTES, GatewayHealthBootstrapLaunch,
 };
 pub use native_worker_bootstrap::{MAX_WORKER_BOOTSTRAP_FRAME_BYTES, WorkerBootstrapLaunch};
 

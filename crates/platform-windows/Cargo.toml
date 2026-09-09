@@ -15,6 +15,9 @@ native-worker-test-hooks = []
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+
 [[bin]]
 name = "platform_synthetic"
 path = "src/bin/platform_synthetic.rs"
