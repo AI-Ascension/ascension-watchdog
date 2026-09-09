@@ -1339,6 +1339,12 @@ fn validate_lock_path(path: &Path) -> Result<(), FixtureError> {
     Ok(())
 }
 
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::WouldBlock
+        || (error.raw_os_error().is_some()
+            && error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
+}
+
 fn validate_database_integrity(connection: &Connection) -> Result<(), FixtureError> {
     let result: String = connection
         .pragma_query_value(None, "integrity_check", |row| row.get(0))
@@ -1380,7 +1386,7 @@ impl DurableHost {
             .open(&lock_path)
             .map_err(FixtureError::Io)?;
         lock.try_lock_exclusive().map_err(|error| {
-            if error.kind() == ErrorKind::WouldBlock {
+            if is_lock_contention(&error) {
                 FixtureError::Busy
             } else {
                 FixtureError::Io(error)
