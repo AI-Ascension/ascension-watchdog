@@ -7,6 +7,8 @@
 
 #[path = "worker_client_auth.rs"]
 mod auth;
+#[cfg(target_os = "linux")]
+pub(crate) use auth::capture_linux_controller;
 #[path = "worker_client_transport.rs"]
 mod transport;
 

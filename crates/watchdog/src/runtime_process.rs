@@ -44,6 +44,7 @@ pub(crate) struct RuntimeChild {
     portable_identity: ProcessIdentity,
     intent_id: String,
     ownership: OwnershipProof,
+    worker_bootstrap_binding: Option<crate::storage::WorkerBootstrapBinding>,
     handle: RuntimeChildHandle,
 }
 
@@ -189,8 +190,14 @@ impl RuntimeProcessManager {
         planned_containment: &str,
         intent_id: &str,
         now_ms: u64,
+        worker: Option<&crate::worker_bootstrap::WorkerBootstrapLaunch>,
     ) -> std::result::Result<RuntimeChild, RuntimeLaunchError> {
         if self.synthetic {
+            if worker.is_some() {
+                return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
+                    "synthetic launcher cannot consume native worker bootstrap".to_owned(),
+                )));
+            }
             preflight_synthetic_proof_budget(intent_id, specification, planned_containment)
                 .map_err(RuntimeLaunchError::Ordinary)?;
             let child = OwnedChild::spawn_with_cleanup_status(component, now_ms)
@@ -214,16 +221,23 @@ impl RuntimeProcessManager {
                 portable_identity,
                 intent_id: intent_id.to_owned(),
                 ownership,
+                worker_bootstrap_binding: None,
                 handle: RuntimeChildHandle::Synthetic(child),
             });
         }
         let native = self
             .ensure_native(config)
             .map_err(RuntimeLaunchError::Ordinary)?
-            .launch(specification, planned_containment)?;
-        self.finish_native_launch(native, |native| {
+            .launch(specification, planned_containment, worker)?;
+        let mut child = self.finish_native_launch(native, |native| {
             native.identity(intent_id, specification, planned_containment, now_ms)
-        })
+        })?;
+        child.worker_bootstrap_binding =
+            worker.map(|worker| crate::storage::WorkerBootstrapBinding {
+                watchdog_boot_id: worker.bootstrap().watchdog_boot_id.to_string(),
+                frame_sha256: worker.frame_sha256().to_owned(),
+            });
+        Ok(child)
     }
 
     fn finish_native_launch<F>(
@@ -253,6 +267,7 @@ impl RuntimeProcessManager {
             portable_identity,
             intent_id: ownership.intent_id.clone(),
             ownership,
+            worker_bootstrap_binding: None,
             handle: RuntimeChildHandle::Native(native),
         })
     }
@@ -335,6 +350,7 @@ impl RuntimeProcessManager {
             portable_identity: proof.portable_identity(),
             intent_id: intent.id.clone(),
             ownership: proof,
+            worker_bootstrap_binding: None,
             handle: RuntimeChildHandle::Native(native),
         }))
     }
@@ -389,6 +405,11 @@ impl RuntimeProcessManager {
 }
 
 impl RuntimeChild {
+    pub(crate) fn worker_bootstrap_binding(
+        &self,
+    ) -> Option<&crate::storage::WorkerBootstrapBinding> {
+        self.worker_bootstrap_binding.as_ref()
+    }
     #[cfg(windows)]
     pub(crate) fn worker_account_identity(&self) -> Result<(String, u32)> {
         match &self.handle {
@@ -569,25 +590,36 @@ impl NativeBackend {
         &mut self,
         specification: &LaunchSpec,
         planned_containment: &str,
+        worker: Option<&crate::worker_bootstrap::WorkerBootstrapLaunch>,
     ) -> std::result::Result<NativeChild, RuntimeLaunchError> {
         match self {
             #[cfg(target_os = "linux")]
             Self::Linux(adapter) => {
                 let containment = ContainmentId::new(planned_containment.to_owned())
                     .map_err(|error| RuntimeLaunchError::Ordinary(map_adapter_error(error)))?;
-                adapter
-                    .launch_with_planned_containment(specification, &containment)
-                    .map(NativeChild::Linux)
-                    .map_err(|error| {
-                        if crate::platform::linux_process::is_cleanup_uncertain(&error) {
-                            RuntimeLaunchError::CleanupUncertain(map_adapter_error(error))
-                        } else {
-                            RuntimeLaunchError::Ordinary(map_adapter_error(error))
-                        }
-                    })
+                let launched = match worker {
+                    Some(worker) => adapter.launch_with_planned_containment_and_worker_bootstrap(
+                        specification,
+                        &containment,
+                        worker,
+                    ),
+                    None => adapter.launch_with_planned_containment(specification, &containment),
+                };
+                launched.map(NativeChild::Linux).map_err(|error| {
+                    if crate::platform::linux_process::is_cleanup_uncertain(&error) {
+                        RuntimeLaunchError::CleanupUncertain(map_adapter_error(error))
+                    } else {
+                        RuntimeLaunchError::Ordinary(map_adapter_error(error))
+                    }
+                })
             }
             #[cfg(windows)]
             Self::Windows(backend) => {
+                if worker.is_some() {
+                    return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
+                        "Windows worker bootstrap delivery is unavailable".to_owned(),
+                    )));
+                }
                 let expected = format!("windows-job:{}", specification.launch_nonce);
                 if planned_containment != expected {
                     return Err(RuntimeLaunchError::Ordinary(
@@ -1330,6 +1362,24 @@ fn authorize_linux_helper(
             "Linux helper has no unique prepared durable launch intent".to_owned(),
         ));
     }
+    let worker_required = config
+        .worker
+        .as_ref()
+        .is_some_and(|worker| worker.component_id == component.id);
+    let binding = if worker_required {
+        store
+            .worker_bootstrap_binding(&matches[0].id)
+            .map_err(watchdog_to_adapter_error)?
+    } else {
+        None
+    };
+    super::runtime_worker_bootstrap::verify_binding(
+        binding.as_ref(),
+        worker_required,
+        bootstrap.worker_boot_id(),
+        bootstrap.worker_frame_sha256(),
+    )
+    .map_err(watchdog_to_adapter_error)?;
     validate_planned_cgroup_leaf(&request.cgroup_path, planned.as_str())?;
     let delegated_root = bootstrap.delegated_cgroup_root_path().ok_or_else(|| {
         AdapterError::IdentityMismatch(

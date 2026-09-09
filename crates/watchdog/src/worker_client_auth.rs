@@ -4,6 +4,10 @@
 //! durable records.  It is presented only in the transport authentication
 //! prelude, after the peer process has been checked by the operating system.
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "worker_client_sealed_tests.rs"]
+mod sealed_tests;
+
 use crate::config::validate_digest;
 use crate::error::{Result, WatchdogError};
 #[cfg(target_os = "linux")]
@@ -25,6 +29,55 @@ const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
 #[cfg(target_os = "linux")]
 const MAX_PEER_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Capture this controller's held image, not a configured or request-supplied PID.
+#[cfg(target_os = "linux")]
+pub(crate) fn capture_linux_controller(
+    deadline: Instant,
+) -> Result<crate::worker_bootstrap::LinuxPeer> {
+    use std::os::unix::fs::MetadataExt;
+    let pid = std::process::id();
+    let creation_token = process_start_token(pid, deadline)?;
+    let image_path = Path::new("/proc/self/exe");
+    let executable = fs::read_link(image_path)?;
+    let mut image = File::open(image_path)?;
+    let before = image.metadata()?;
+    if !before.is_file() || before.mode() & 0o222 != 0 {
+        return Err(WatchdogError::Unauthorized(
+            "worker controller image must be immutable".to_owned(),
+        ));
+    }
+    let executable_sha256 = hash_file_until(&mut image, Some(deadline))?;
+    let after = image.metadata()?;
+    let named = fs::metadata(&executable)?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+        || before.dev() != named.dev()
+        || before.ino() != named.ino()
+        || fs::read_link(image_path)? != executable
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "worker controller image changed during bootstrap capture".to_owned(),
+        ));
+    }
+    ensure_deadline(deadline, "worker controller bootstrap capture")?;
+    Ok(crate::worker_bootstrap::LinuxPeer {
+        pid,
+        creation_token,
+        executable: executable
+            .to_str()
+            .ok_or_else(|| {
+                WatchdogError::InvalidInput("worker controller image must be Unicode".to_owned())
+            })?
+            .to_owned(),
+        executable_sha256,
+        uid: rustix::process::geteuid().as_raw(),
+        gid: rustix::process::getegid().as_raw(),
+    })
+}
 
 /// Immutable identity of the supervised worker process.
 ///
@@ -49,6 +102,8 @@ pub struct WorkerPeerIdentity {
     pub(crate) windows_account: Option<(String, u32)>,
     #[cfg(target_os = "linux")]
     configured_image_identity: LinuxFileIdentity,
+    #[cfg(target_os = "linux")]
+    sealed_image: Option<std::sync::Arc<LinuxSealedImage>>,
 }
 
 impl std::fmt::Debug for WorkerPeerIdentity {
@@ -64,6 +119,7 @@ impl std::fmt::Debug for WorkerPeerIdentity {
         #[cfg(target_os = "linux")]
         {
             debug.field("configured_image_identity", &self.configured_image_identity);
+            debug.field("sealed_image", &self.sealed_image.is_some());
         }
         #[cfg(windows)]
         debug.field("windows_account", &"<protected-policy>");
@@ -93,6 +149,8 @@ impl WorkerPeerIdentity {
                 device: 0,
                 inode: 0,
             },
+            #[cfg(target_os = "linux")]
+            sealed_image: None,
         };
         #[cfg(target_os = "linux")]
         let mut identity = identity.validate()?;
@@ -109,6 +167,10 @@ impl WorkerPeerIdentity {
     /// process identity.  A missing platform creation fingerprint is a hard
     /// error: image-only or PID-only matching could authorize a second
     /// same-binary process and disclose the worker credential to it.
+    /// This public constructor accepts raw OS birth tokens and file-backed
+    /// images (including explicit synthetic children). Linux native adapter
+    /// identities carry `boot-id:start-ticks` and sealed images; only the
+    /// runtime's private owned-native path may translate and authorize those.
     pub fn from_process_identity(identity: &crate::ProcessIdentity) -> Result<Self> {
         let creation_token = identity.creation_fingerprint.as_deref().ok_or_else(|| {
             WatchdogError::IdentityMismatch(
@@ -121,6 +183,60 @@ impl WorkerPeerIdentity {
             identity.pid,
             creation_token.to_owned(),
         )
+    }
+
+    /// Only the runtime's freshly inspected native child may select this policy.
+    /// Durable records and public file-backed constructors cannot grant it.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_owned_linux_process(
+        identity: &crate::ProcessIdentity,
+        deadline: Instant,
+    ) -> Result<Self> {
+        let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+        let token = identity.creation_fingerprint.as_deref().unwrap_or_default();
+        let (recorded_boot, ticks) = token.split_once(':').ok_or_else(|| {
+            WatchdogError::IdentityMismatch("native worker birth token is malformed".to_owned())
+        })?;
+        if recorded_boot != boot.trim()
+            || ticks.is_empty()
+            || !ticks.bytes().all(|byte| byte.is_ascii_digit())
+            || process_start_token(identity.pid, deadline)? != ticks
+        {
+            return Err(WatchdogError::IdentityMismatch(
+                "native worker birth token is not current".to_owned(),
+            ));
+        }
+        let proc_path = PathBuf::from(format!("/proc/{}/exe", identity.pid));
+        let path = fs::read_link(&proc_path)?;
+        let mut file = File::open(&proc_path)?;
+        require_full_image_seals(&file)?;
+        let image_identity = linux_file_identity(&file)?;
+        let digest = hash_file_until(&mut file, Some(deadline))?;
+        if digest != identity.executable_digest
+            || fs::read_link(&proc_path)? != path
+            || linux_file_identity(&File::open(&proc_path)?)? != image_identity
+            || process_start_token(identity.pid, deadline)? != ticks
+        {
+            return Err(WatchdogError::IdentityMismatch(
+                "native worker sealed image is not approved".to_owned(),
+            ));
+        }
+        ensure_deadline(deadline, "native worker image capture")?;
+        Self {
+            executable: identity.executable.clone(),
+            executable_sha256: digest,
+            uid: None,
+            gid: None,
+            pid: identity.pid,
+            creation_token: ticks.to_owned(),
+            configured_image_identity: image_identity,
+            sealed_image: Some(std::sync::Arc::new(LinuxSealedImage {
+                file,
+                path,
+                identity: image_identity,
+            })),
+        }
+        .validate()
     }
 
     /// Require an explicit peer UID/GID in addition to the executable proof.
@@ -549,9 +665,14 @@ pub(crate) fn authenticate_linux_peer(
     let executable = fs::read_link(&proc_executable).map_err(|_| {
         WatchdogError::Unauthorized("worker peer executable is unavailable".to_owned())
     })?;
-    let expected = fs::canonicalize(identity.executable()).map_err(|_| {
-        WatchdogError::Unauthorized("configured worker executable is unavailable".to_owned())
-    })?;
+    let expected = if let Some(sealed) = &identity.sealed_image {
+        require_full_image_seals(&sealed.file)?;
+        sealed.path.clone()
+    } else {
+        fs::canonicalize(identity.executable()).map_err(|_| {
+            WatchdogError::Unauthorized("configured worker executable is unavailable".to_owned())
+        })?
+    };
     ensure_deadline(deadline, "worker peer authentication")?;
     if executable != expected {
         return Err(WatchdogError::Unauthorized(
@@ -602,6 +723,37 @@ pub(crate) fn authenticate_linux_peer(
 pub(crate) struct LinuxFileIdentity {
     device: u64,
     inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxSealedImage {
+    file: File,
+    path: PathBuf,
+    identity: LinuxFileIdentity,
+}
+
+#[cfg(target_os = "linux")]
+impl PartialEq for LinuxSealedImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity && self.path == other.path
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Eq for LinuxSealedImage {}
+
+#[cfg(target_os = "linux")]
+fn require_full_image_seals(file: &File) -> Result<()> {
+    use rustix::fs::{SealFlags, fcntl_get_seals};
+    let seals = fcntl_get_seals(file).map_err(|_| {
+        WatchdogError::IdentityMismatch("native worker image is not sealed".to_owned())
+    })?;
+    if !seals.contains(SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL) {
+        return Err(WatchdogError::IdentityMismatch(
+            "native worker image is not immutable".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
