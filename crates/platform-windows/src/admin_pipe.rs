@@ -22,7 +22,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_BROKEN_PIPE, ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND,
     ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED,
     ERROR_SEM_TIMEOUT, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-    LocalFree,
+    LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -49,7 +49,7 @@ use windows_sys::Win32::System::Pipes::{
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetProcessId, GetProcessTimes, OpenProcess,
     OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    QueryFullProcessImageNameW,
+    QueryFullProcessImageNameW, WaitForSingleObject,
 };
 
 // `FILE_PIPE_LOCAL_INFORMATION` is declared by ntifs.h rather than the user
@@ -478,6 +478,7 @@ impl AdminPipeServer {
 pub struct AdminPipeClient {
     handle: OwnedHandle,
     _name: String,
+    worker: bool,
     server_process: OwnedHandle,
     server_process_id: u32,
     server_creation_time: u64,
@@ -546,55 +547,14 @@ impl AdminPipeClient {
         }
         // Protect the original configured path before canonicalization can
         // resolve away a reparse component. Retain all guards through exchange.
-        let server_image_ancestors = if worker {
-            validate_local_protected_path(expected_server_executable)?;
-            open_protected_ancestors(expected_server_executable)?
+        let (server_image_ancestors, server_image_leaf) = if worker {
+            let (ancestors, leaf) =
+                open_worker_image_guards(expected_server_executable, connection_deadline)?;
+            (ancestors, Some(leaf))
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
-        let server_image_leaf = if worker {
-            Some(open_worker_image_leaf(expected_server_executable)?)
-        } else {
-            None
-        };
-        let wide_name = wide(&name)?;
-        let timeout_ms = timeout_millis(timeout)?;
-        let waited = unsafe {
-            windows_sys::Win32::System::Pipes::WaitNamedPipeW(wide_name.as_ptr(), timeout_ms)
-        };
-        if waited == 0 {
-            let code = unsafe { GetLastError() };
-            if code == ERROR_SEM_TIMEOUT {
-                return Err(PlatformError::Timeout(
-                    "waiting for the admin named pipe timed out".to_owned(),
-                ));
-            }
-            return Err(win32_error("WaitNamedPipeW", code));
-        }
-        let raw = unsafe {
-            CreateFileW(
-                wide_name.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_NONE,
-                null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                null_mut(),
-            )
-        };
-        let handle = OwnedHandle::new(raw, "CreateFileW(admin pipe)")?;
-        if worker {
-            let mode = PIPE_NOWAIT; // PIPE_READMODE_BYTE is zero.
-            // SAFETY: the owned client handle and mode remain live for this call;
-            // optional remote-buffering pointers are null for this local pipe.
-            if unsafe { SetNamedPipeHandleState(handle.raw(), &raw const mode, null(), null()) }
-                == 0
-            {
-                return Err(last_error("SetNamedPipeHandleState(worker)"));
-            }
-        } else {
-            set_message_nonblocking(handle.raw())?;
-        }
+        let handle = open_client_pipe(&name, worker, timeout, connection_deadline)?;
         let mut server_process_id = 0_u32;
         if unsafe { GetNamedPipeServerProcessId(handle.raw(), &raw mut server_process_id) } == 0
             || server_process_id == 0
@@ -628,6 +588,7 @@ impl AdminPipeClient {
         Ok(Self {
             handle,
             _name: name,
+            worker,
             server_process,
             server_process_id,
             server_creation_time,
@@ -781,8 +742,163 @@ impl AdminPipeClient {
                 "admin pipe server creation identity changed".to_owned(),
             ));
         }
+        if self.worker {
+            // SAFETY: `server_process` is an owned handle opened with
+            // PROCESS_SYNCHRONIZE and remains live for this zero-time wait.
+            let process_state = unsafe { WaitForSingleObject(self.server_process.raw(), 0) };
+            let wait_error = if process_state != WAIT_TIMEOUT && process_state != WAIT_OBJECT_0 {
+                // SAFETY: GetLastError is read on this thread immediately
+                // after the WaitForSingleObject call above.
+                Some(unsafe { GetLastError() })
+            } else {
+                None
+            };
+            let mut connected_server_process_id = 0_u32;
+            // SAFETY: the owned connected client handle and output remain
+            // live for this query.
+            if unsafe {
+                GetNamedPipeServerProcessId(self.handle.raw(), &raw mut connected_server_process_id)
+            } == 0
+                || connected_server_process_id == 0
+            {
+                return Err(last_error(
+                    "GetNamedPipeServerProcessId(worker connected pipe)",
+                ));
+            }
+            validate_worker_server_observation(
+                self.server_process_id,
+                process_state,
+                wait_error,
+                connected_server_process_id,
+            )?;
+        }
         Ok(())
     }
+}
+
+fn open_client_pipe(
+    name: &str,
+    worker: bool,
+    timeout: Duration,
+    connection_deadline: Instant,
+) -> Result<OwnedHandle, PlatformError> {
+    let wide_name = wide(name)?;
+    let wait_timeout = if worker {
+        remaining_timeout(
+            connection_deadline,
+            "worker pipe connection deadline expired before waiting for the pipe",
+        )?
+    } else {
+        timeout
+    };
+    let timeout_ms = timeout_millis(wait_timeout)?;
+    // SAFETY: `wide_name` remains allocated for the synchronous wait and the
+    // timeout is bounded by the validated caller budget.
+    let waited = unsafe {
+        windows_sys::Win32::System::Pipes::WaitNamedPipeW(wide_name.as_ptr(), timeout_ms)
+    };
+    if waited == 0 {
+        let code = unsafe { GetLastError() };
+        if code == ERROR_SEM_TIMEOUT {
+            return Err(PlatformError::Timeout(
+                "waiting for the admin named pipe timed out".to_owned(),
+            ));
+        }
+        return Err(win32_error("WaitNamedPipeW", code));
+    }
+    if worker {
+        ensure_deadline(
+            connection_deadline,
+            "worker pipe connection deadline expired after waiting for the pipe",
+        )?;
+    }
+    let raw = unsafe {
+        CreateFileW(
+            wide_name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_NONE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    let handle = OwnedHandle::new(raw, "CreateFileW(admin pipe)")?;
+    if worker {
+        let mode = PIPE_NOWAIT; // PIPE_READMODE_BYTE is zero.
+        // SAFETY: the owned client handle and mode remain live for this call;
+        // optional remote-buffering pointers are null for this local pipe.
+        if unsafe { SetNamedPipeHandleState(handle.raw(), &raw const mode, null(), null()) } == 0 {
+            return Err(last_error("SetNamedPipeHandleState(worker)"));
+        }
+    } else {
+        set_message_nonblocking(handle.raw())?;
+    }
+    Ok(handle)
+}
+
+fn validate_worker_server_observation(
+    expected_process_id: u32,
+    process_state: u32,
+    wait_error: Option<u32>,
+    connected_server_process_id: u32,
+) -> Result<(), PlatformError> {
+    match process_state {
+        WAIT_TIMEOUT => {}
+        WAIT_OBJECT_0 => {
+            return Err(PlatformError::IdentityMismatch(
+                "worker pipe server exited while connected".to_owned(),
+            ));
+        }
+        code => {
+            return Err(PlatformError::Win32 {
+                operation: "WaitForSingleObject(worker pipe server)".to_owned(),
+                code: wait_error.unwrap_or(code),
+            });
+        }
+    }
+    if connected_server_process_id == 0 {
+        return Err(PlatformError::IdentityMismatch(
+            "worker connected pipe server PID was not observed".to_owned(),
+        ));
+    }
+    if connected_server_process_id != expected_process_id {
+        return Err(PlatformError::IdentityMismatch(
+            "worker connected pipe server PID changed while connected".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn open_worker_image_guards(
+    expected_server_executable: &Path,
+    connection_deadline: Instant,
+) -> Result<(Vec<OwnedHandle>, OwnedHandle), PlatformError> {
+    ensure_deadline(
+        connection_deadline,
+        "worker pipe connection deadline expired before path validation",
+    )?;
+    validate_local_protected_path(expected_server_executable)?;
+    ensure_deadline(
+        connection_deadline,
+        "worker pipe connection deadline expired during path validation",
+    )?;
+    let ancestors =
+        open_protected_ancestors_until(expected_server_executable, Some(connection_deadline))?;
+    ensure_deadline(
+        connection_deadline,
+        "worker pipe connection deadline expired after protected ancestors",
+    )?;
+    ensure_deadline(
+        connection_deadline,
+        "worker pipe connection deadline expired before image validation",
+    )?;
+    let leaf = open_worker_image_leaf(expected_server_executable)?;
+    ensure_deadline(
+        connection_deadline,
+        "worker pipe connection deadline expired during image validation",
+    )?;
+    Ok((ancestors, leaf))
 }
 
 /// Validate and inspect a credential file on Windows.  Owner-only Unix mode
@@ -927,10 +1043,23 @@ fn open_worker_image_leaf(path: &Path) -> Result<OwnedHandle, PlatformError> {
 }
 
 fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformError> {
+    open_protected_ancestors_until(path, None)
+}
+
+fn open_protected_ancestors_until(
+    path: &Path,
+    connection_deadline: Option<Instant>,
+) -> Result<Vec<OwnedHandle>, PlatformError> {
     let components = path.components().collect::<Vec<_>>();
     let mut current = PathBuf::new();
     let mut ancestors = Vec::new();
     for (index, component) in components.iter().enumerate() {
+        if let Some(deadline) = connection_deadline {
+            ensure_deadline(
+                deadline,
+                "worker pipe connection deadline expired while walking protected ancestors",
+            )?;
+        }
         match component {
             std::path::Component::Prefix(_) | std::path::Component::RootDir => {
                 current.push(component.as_os_str());
@@ -961,6 +1090,12 @@ fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformErr
                 let handle = OwnedHandle::new(raw, "CreateFileW(payload ancestor)")?;
                 validate_directory_handle(&handle)?;
                 ancestors.push(handle);
+                if let Some(deadline) = connection_deadline {
+                    ensure_deadline(
+                        deadline,
+                        "worker pipe connection deadline expired after opening a protected ancestor",
+                    )?;
+                }
             }
             std::path::Component::CurDir | std::path::Component::ParentDir => {
                 return Err(PlatformError::Invalid(
@@ -1381,6 +1516,21 @@ fn ensure_io_deadline(
     Ok(())
 }
 
+fn ensure_deadline(deadline: Instant, message: &str) -> Result<(), PlatformError> {
+    if Instant::now() >= deadline {
+        return Err(PlatformError::Timeout(message.to_owned()));
+    }
+    Ok(())
+}
+
+fn remaining_timeout(deadline: Instant, message: &str) -> Result<Duration, PlatformError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(PlatformError::Timeout(message.to_owned()));
+    }
+    Ok(remaining)
+}
+
 fn is_pending_pipe_error(code: u32) -> bool {
     code == ERROR_PIPE_LISTENING
 }
@@ -1398,6 +1548,12 @@ fn deadline(timeout: Duration) -> Instant {
 fn timeout_millis(timeout: Duration) -> Result<u32, PlatformError> {
     validate_timeout(timeout)?;
     let millis = timeout.as_millis();
+    if millis == 0 {
+        // A zero WaitNamedPipe timeout means USE_DEFAULT_WAIT, which can
+        // exceed the caller's already-expiring absolute deadline.  NOWAIT
+        // performs an immediate availability check instead.
+        return Ok(1);
+    }
     u32::try_from(millis)
         .map_err(|_| PlatformError::Invalid("admin timeout does not fit Win32".to_owned()))
 }
@@ -1831,6 +1987,39 @@ mod ancestor_lock_tests {
         assert!(matches!(
             crate::native::IntegrityGuards::open_until(Path::new("unused"), Some(Instant::now())),
             Err(PlatformError::Timeout(_))
+        ));
+    }
+
+    #[test]
+    fn remaining_worker_connect_budget_rejects_expiry() {
+        let result = remaining_timeout(Instant::now(), "expired worker budget");
+        assert!(matches!(
+            result,
+            Err(PlatformError::Timeout(message)) if message == "expired worker budget"
+        ));
+    }
+
+    #[test]
+    fn submillisecond_worker_wait_uses_nonblocking_sentinel() {
+        assert_eq!(timeout_millis(Duration::from_nanos(1)), Ok(1));
+        assert_eq!(timeout_millis(Duration::from_millis(1)), Ok(1));
+    }
+
+    #[test]
+    fn worker_server_observation_rejects_dead_or_changed_server() {
+        assert!(matches!(
+            validate_worker_server_observation(41, WAIT_OBJECT_0, None, 41),
+            Err(PlatformError::IdentityMismatch(message))
+                if message.contains("server exited")
+        ));
+        assert!(matches!(
+            validate_worker_server_observation(41, WAIT_TIMEOUT, None, 42),
+            Err(PlatformError::IdentityMismatch(message))
+                if message.contains("server PID changed")
+        ));
+        assert!(matches!(
+            validate_worker_server_observation(41, u32::MAX, Some(87), 41),
+            Err(PlatformError::Win32 { code: 87, .. })
         ));
     }
 
