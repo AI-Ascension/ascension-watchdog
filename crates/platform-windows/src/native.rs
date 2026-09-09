@@ -600,15 +600,16 @@ impl WindowsProcessLauncher {
     /// The callback runs only after executable identity, Job Object
     /// assignment, and complete worker-frame handoff have succeeded.  A
     /// callback error is treated as a post-spawn failure and the exact Job is
-    /// cleaned up before the error is returned.
-    pub fn launch_with_worker_bootstrap_and_barrier<F>(
+    /// cleaned up before the error is returned. A successful callback's guard
+    /// is retained through `ResumeThread`, then dropped to release admission.
+    pub fn launch_with_worker_bootstrap_and_barrier<F, G>(
         &self,
         specification: &WindowsLaunchSpec,
         worker: &WorkerBootstrapLaunch,
         before_resume: F,
     ) -> Result<JobOwnedProcess, WindowsLaunchError>
     where
-        F: FnOnce() -> Result<(), PlatformError>,
+        F: FnOnce() -> Result<G, PlatformError>,
     {
         if specification.component != crate::contract::ComponentKind::Harness {
             return Err(WindowsLaunchError::Ordinary(PlatformError::Unsupported(
@@ -648,14 +649,14 @@ impl WindowsProcessLauncher {
         )
     }
 
-    fn launch_inner<F>(
+    fn launch_inner<F, G>(
         &self,
         specification: &WindowsLaunchSpec,
         worker: Option<&WorkerBootstrapLaunch>,
         before_resume: F,
     ) -> Result<JobOwnedProcess, WindowsLaunchError>
     where
-        F: FnOnce() -> Result<(), PlatformError>,
+        F: FnOnce() -> Result<G, PlatformError>,
     {
         self.launch_inner_with_pipe_buffer(
             specification,
@@ -666,7 +667,7 @@ impl WindowsProcessLauncher {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn launch_inner_with_pipe_buffer<F>(
+    fn launch_inner_with_pipe_buffer<F, G>(
         &self,
         specification: &WindowsLaunchSpec,
         worker: Option<&WorkerBootstrapLaunch>,
@@ -674,7 +675,7 @@ impl WindowsProcessLauncher {
         before_resume: F,
     ) -> Result<JobOwnedProcess, WindowsLaunchError>
     where
-        F: FnOnce() -> Result<(), PlatformError>,
+        F: FnOnce() -> Result<G, PlatformError>,
     {
         specification
             .validate(&self.config)
@@ -724,6 +725,7 @@ impl WindowsProcessLauncher {
         integrity
             .verify_path_barrier()
             .map_err(WindowsLaunchError::Ordinary)?;
+        let caller_session = current_process_session().map_err(WindowsLaunchError::Ordinary)?;
         let session_id = match specification.session {
             SessionSelector::ActiveUser => match select_active_session() {
                 ActiveSession::Available(session) => session,
@@ -733,8 +735,11 @@ impl WindowsProcessLauncher {
                     )));
                 }
             },
-            SessionSelector::CurrentService | SessionSelector::Explicit(0) => {
-                current_process_session().map_err(WindowsLaunchError::Ordinary)?
+            SessionSelector::CurrentService => caller_session,
+            SessionSelector::Explicit(0) if caller_session != 0 => {
+                return Err(WindowsLaunchError::Ordinary(PlatformError::Unavailable(
+                    "explicit service session 0 requires a session-0 controller".to_owned(),
+                )));
             }
             SessionSelector::Explicit(session) => session,
         };
@@ -747,7 +752,6 @@ impl WindowsProcessLauncher {
         // unprivileged synthetic tests useful); otherwise obtain the target
         // interactive user's token through WTS.  HostBroker always follows
         // the same explicit session policy.
-        let caller_session = current_process_session().map_err(WindowsLaunchError::Ordinary)?;
         let token = if caller_session == session_id {
             None
         } else {
@@ -782,14 +786,21 @@ impl WindowsProcessLauncher {
                 error,
             ));
         }
-        if let Err(error) = before_resume() {
-            return Err(classify_spawn_cleanup(
-                &job,
-                launch_force_timeout(specification),
-                error,
-            ));
-        }
+        // Retain the caller's admission reservation across ResumeThread. A
+        // durable operator Stop cannot commit in the check-to-resume interval
+        // when the caller returns its owner-local transaction guard here.
+        let admission_guard = match before_resume() {
+            Ok(guard) => guard,
+            Err(error) => {
+                return Err(classify_spawn_cleanup(
+                    &job,
+                    launch_force_timeout(specification),
+                    error,
+                ));
+            }
+        };
         let resumed = unsafe { ResumeThread(thread_handle.raw()) };
+        drop(admission_guard);
         if resumed == u32::MAX {
             return Err(classify_spawn_cleanup(
                 &job,

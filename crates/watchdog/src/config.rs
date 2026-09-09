@@ -247,8 +247,9 @@ pub struct WatchdogConfig {
     pub worker: Option<WorkerConfig>,
     /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
-    /// its digest; the Linux launch helper uses it only as a protected,
-    /// separately supplied bootstrap reference for fresh durable authorization.
+    /// its digest; native launch admission uses it only as a protected,
+    /// separately supplied reference for fresh durable authorization (Linux
+    /// helper release and Windows worker pre-resume admission).
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
 }

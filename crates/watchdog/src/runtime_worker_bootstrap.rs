@@ -79,7 +79,7 @@ impl super::Supervisor {
     }
 
     pub(crate) fn prepare_worker_bootstrap(
-        &self,
+        &mut self,
         component: &ComponentConfig,
         launch_nonce: &str,
     ) -> Result<Option<WorkerBootstrapLaunch>> {
@@ -92,6 +92,28 @@ impl super::Supervisor {
         {
             return Ok(None);
         }
+        #[cfg(windows)]
+        {
+            if self.windows_controller_identity.is_none() {
+                self.windows_controller_identity = Some(
+                    ascension_platform_windows::capture_current_controller(
+                        std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    )
+                    .map_err(|error| {
+                        WatchdogError::IdentityMismatch(format!(
+                            "worker controller capture failed: {error}"
+                        ))
+                    })?,
+                );
+            }
+            let identity = self.windows_controller_identity.as_ref().ok_or_else(|| {
+                WatchdogError::IdentityMismatch(
+                    "worker controller image proof is unavailable".to_owned(),
+                )
+            })?;
+            native_bootstrap(component, launch_nonce, &self.worker_boot_id, identity).map(Some)
+        }
+        #[cfg(not(windows))]
         native_bootstrap(component, launch_nonce, &self.worker_boot_id).map(Some)
     }
 }
@@ -442,7 +464,35 @@ mod tests {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn native_bootstrap(
+    component: &ComponentConfig,
+    launch_nonce: &str,
+    watchdog_boot_id: &str,
+    identity: &ascension_platform_windows::CurrentControllerIdentity,
+) -> Result<WorkerBootstrapLaunch> {
+    use crate::worker_bootstrap::{WindowsPeer, WorkerBootstrap};
+    let nonce = uuid::Uuid::parse_str(launch_nonce)
+        .map_err(|_| WatchdogError::InvalidInput("invalid worker launch nonce".to_owned()))?;
+    let boot = uuid::Uuid::parse_str(watchdog_boot_id)
+        .map_err(|_| WatchdogError::InvalidInput("invalid watchdog boot identity".to_owned()))?;
+    let executable = identity.executable.to_str().ok_or_else(|| {
+        WatchdogError::InvalidInput("worker controller image path must be Unicode".to_owned())
+    })?;
+    WindowsPeer::new(
+        identity.pid,
+        identity.creation_time_100ns.to_string(),
+        executable,
+        identity.sha256.clone(),
+        identity.session_id,
+        identity.user_sid.clone(),
+    )
+    .and_then(|peer| WorkerBootstrap::windows(nonce, boot, component.id.clone(), peer))
+    .and_then(WorkerBootstrapLaunch::new)
+    .map_err(|_| WatchdogError::InvalidInput("invalid Windows worker bootstrap policy".to_owned()))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn native_bootstrap(
     _component: &ComponentConfig,
     _launch_nonce: &str,
