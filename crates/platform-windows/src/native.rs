@@ -505,12 +505,15 @@ impl JobOwnedProcess {
                 code: process_state,
             });
         }
-        if process_state == WAIT_OBJECT_0 && live_identity_verified {
-            // Windows may no longer expose image metadata after a process has
-            // terminated. The held process handle's PID and creation token,
-            // plus the retained immutable release digest, still bind this
-            // terminal owner after its full live identity was verified; no
-            // live-process identity is being authorized.
+        if live_identity_verified {
+            // The witness is private to this held owner and is set only after
+            // the live process passed the image, session, and Job membership
+            // checks below. Keep validating the held handle's PID, creation
+            // token, immutable digest, and wait state above on every call,
+            // then avoid re-querying metadata that Windows may withdraw while
+            // TerminateProcess is still making the same process object
+            // signaled. A reopened owner starts with no witness and cannot
+            // inherit this fast path from serialized identity fields.
             return Ok(());
         }
         if process_state == WAIT_OBJECT_0 {
@@ -518,20 +521,7 @@ impl JobOwnedProcess {
                 "terminal process has no previously verified live ownership witness".to_owned(),
             ));
         }
-        let executable = match query_image_path(self.process.raw()) {
-            Ok(executable) => executable,
-            Err(error) => {
-                // A process can exit between the first wait and the image
-                // query. Treat that narrow race like the already-terminal
-                // case, but preserve every query error while it remains live.
-                if live_identity_verified
-                    && unsafe { WaitForSingleObject(self.process.raw(), 0) } == WAIT_OBJECT_0
-                {
-                    return Ok(());
-                }
-                return Err(error);
-            }
-        };
+        let executable = query_image_path(self.process.raw())?;
         if normalize_path(&executable) != normalize_path(&self.identity.executable) {
             return Err(PlatformError::IdentityMismatch(
                 "process executable differs from recorded identity".to_owned(),

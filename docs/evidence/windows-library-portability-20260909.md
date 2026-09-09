@@ -146,3 +146,27 @@ passed all eight tests in 2.07 seconds. Formatting and diff checks passed.
 CI now uses Cargo's `--no-fail-fast` so later test binaries still run after a
 failure; failures remain fatal. A fresh exact-revision hosted workspace run
 is required. These are native synthetic tests, not service or game-host proof.
+
+### Hosted zero-window follow-up
+
+Run `34310012164` at `6d862658a58e417237819e58a9b75fec98d238fe`
+passed Linux and dependency gates but still failed the Windows transport test:
+the prefilled connection later accepted its whole write. A transient nonblocking
+`WouldBlock` was not proof of sustained receive-side backpressure. The same
+Windows run separately failed the native leader-exit test with
+`QueryFullProcessImageNameW` error 5; that is a distinct open issue.
+
+The Windows-only fixture now accepts its peer and sets its receive buffer to
+zero without posting reads, while retaining a nonzero send buffer. Microsoft's
+[Winsock sample explanation](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/Win7Samples/netds/winsock/iocp/server/IocpServer.Cpp)
+describes the resulting zero receive window. This is test setup, not a production
+socket-policy change. An intermediate experiment that also disabled send
+buffering exceeded the outer deadline and its exact owned test process was
+stopped; that experiment is not passing evidence.
+
+Root's final native artifact passed all eight tests in five consecutive runs:
+2.21, 2.27, 2.29, 2.23 and 2.29 seconds, each exit 0. Artifact SHA-256:
+`a7ad4502e22057e126ec0fea41d763e1d575a513bbc53545dc03958a5a59389e`.
+The source and staged executable hashes matched. The prior hosted failure
+remains unresolved until a new exact-revision CI run passes; repeated local
+native execution does not substitute for that result.
