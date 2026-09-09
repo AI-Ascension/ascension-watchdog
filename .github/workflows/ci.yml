@@ -37,6 +37,20 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Run unit and synthetic tests
         run: cargo test --workspace --all-targets --all-features --locked
+      - name: Run service-session synthetic worker admission when available
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          if ($session -ne 0) {
+            Write-Output "UNVERIFIED: session-0 worker admission requires a session-0 runner; current session is $session. No service or session change will be attempted."
+            exit 0
+          }
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child -- --exact --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job -- --exact --ignored --nocapture
+          exit $LASTEXITCODE
       - name: Build exact locked release
         run: cargo build --workspace --release --locked
 
