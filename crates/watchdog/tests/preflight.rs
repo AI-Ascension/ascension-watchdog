@@ -2,6 +2,36 @@
 
 use ascension_watchdog::preflight::DiskRequirements;
 
+#[cfg(windows)]
+fn protect_config_for_native_read(
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_CONFIG_PATH", path)
+        .status()?;
+    if !status.success() {
+        return Err("PowerShell failed to protect the oversized config fixture".into());
+    }
+    Ok(())
+}
+
 #[test]
 fn staging_and_backups_cannot_consume_the_runtime_reserve() -> Result<(), String> {
     let requirements = DiskRequirements {
@@ -86,8 +116,25 @@ fn oversized_configuration_is_rejected_before_parsing() -> Result<(), Box<dyn st
     let root = tempfile::tempdir()?;
     let config = root.path().join("oversized.json");
     std::fs::write(&config, vec![b' '; 65_537])?;
+    #[cfg(windows)]
+    protect_config_for_native_read(&config)?;
     let result = ascension_watchdog::WatchdogConfig::from_file(&config);
-    assert!(result.is_err_and(|error| error.to_string().contains("65536-byte limit")));
+    #[cfg(windows)]
+    let bound_message = "protected payload file exceeds the payload bound";
+    #[cfg(not(windows))]
+    let bound_message = "65536-byte limit";
+    assert!(
+        matches!(&result, Err(ascension_watchdog::error::WatchdogError::InvalidInput(message))
+            if message.contains(bound_message)),
+        "oversized configuration must fail at the protected byte bound: {result:?}"
+    );
+    // The same protected file at the exact bound reaches JSON parsing. This
+    // distinguishes the size rejection above from an unrelated ACL/path error.
+    std::fs::write(&config, vec![b' '; 65_536])?;
+    assert!(matches!(
+        ascension_watchdog::WatchdogConfig::from_file(&config),
+        Err(ascension_watchdog::error::WatchdogError::Json(_))
+    ));
     Ok(())
 }
 
