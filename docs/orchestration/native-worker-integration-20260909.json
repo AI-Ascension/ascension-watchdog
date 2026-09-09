@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "classification": "confirmed-checkpoint-not-a-release",
-  "observed_at_utc": "2026-09-09T07:44:02Z",
+  "observed_at_utc": "2026-09-09 10:01:59 UTC",
   "remote_candidates": {
     "ascension-watchdog": {
-      "commit": "280906818eacca46b48998ffbe452194b851cba5",
+      "commit": "d50c475ebb2d9ec576da46255e9b3d3e41a47fbe",
       "pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/5",
       "state": "OPEN",
       "draft": true,
-      "ci_run": 34320515164,
+      "ci_run": 34329441134,
       "ci": "Linux synthetic, Windows synthetic, and dependency/license checks passed"
     },
     "sts2-harness": {
@@ -16,7 +16,10 @@
       "pr": "https://github.com/AI-Ascension/sts2-harness/pull/40",
       "state": "OPEN",
       "draft": true,
-      "ci_runs": [34322600518, 34322600468],
+      "ci_runs": [
+        34322600518,
+        34322600468
+      ],
       "ci": "Rust quality and repository policy passed",
       "qualification": "Earlier run 34321689326 failed an image-peer test; diagnostics were added, but its intermittent cause is not established."
     }
@@ -24,8 +27,8 @@
   "native_evidence": {
     "windows_watchdog_owner_lifecycle": "Seven focused native tests passed; not service installation or Session 0 evidence.",
     "windows_fault_fixture": "Nine native tests passed, including a non-reading-peer write deadline.",
-    "linux_real_harness": "Authenticated Running control reached, but queued job handoff failed. Failed fixtures were retained with durable Stopped intent; this is not an integration pass.",
-    "windows_real_harness": "Native transport implementation remains isolated under independent review. Root reran ten package tests on Windows: nine pure contract tests and one native overlapped-read timeout passed in 0.29 seconds. Authentication, ACL, peer-identity and full worker exchange remain unverified."
+    "linux_real_harness": "Root native test passed once in 114.50 seconds: actual watchdog/harness authenticated dispatch admission, retained handoff projection, durable Stop and exact cleanup. Synthetic downstream fault fixtures; not game or provider recovery.",
+    "windows_real_harness": "Isolated package artifact b616920b6147bb624ae4876719fdc79bd18a51ecb07d07568e942ae39f274bf4 passed 14 native Windows tests in 0.34 seconds. Successful shutdown handle-release semantics and repository-size corrections remain under implementation; complete authenticated exchange matrix remains unverified."
   },
   "harness_build": {
     "source_commit": "baabf9767264de11e09cd65cc7262ba36664ec2d",
@@ -36,47 +39,55 @@
   },
   "pending_work": [
     {
-      "owner": "worker_image_review",
+      "owner": "root",
       "subject": "Same-pass authenticated worker heartbeat",
-      "status": "locally integrated; root full Linux workspace, strict clippy and formatting passed; independent review and real second-reconciliation claim remain pending",
-      "reviewer": "linux_pipe_review",
-      "review_qualification": "Prior sealed_peer_review turn failed at the account usage limit before returning a verdict."
+      "status": "committed and pushed as d50c475; independent review passed; native Linux second-reconciliation claim and handoff now passed",
+      "reviewer": "linux_pipe_review"
     },
     {
-      "owner": "harness_conflict_audit",
+      "owner": "root",
       "subject": "Systemd-bounded real-worker smoke cleanup",
-      "status": "root repaired helper bounds and removed name-based scope stop; six focused checks passed; not integrated or natively verified",
-      "reviewer": "worker_image_review"
+      "status": "locally integrated; nine scope checks and strict all-target Clippy passed; independent review and native cleanup passed",
+      "reviewer": "release_activation_lead"
     },
     {
-      "owner": "windows_admission_review",
+      "owner": "windows_final_ffi_review",
       "subject": "Native Windows worker IPC",
-      "status": "repair required: asynchronous memory ownership, deadline enforcement, identity parsing, secret cleanup, and protected-path policy; native fault matrix outstanding"
+      "status": "quarantine fencing artifact passed 14 native tests; shutdown handle-release contract and source-size splits being repaired; authenticated fault matrix separate",
+      "parallel_owners": [
+        "worker_image_review",
+        "linux_pipe_review"
+      ]
     },
     {
       "owner": "release_activation_lead",
-      "subject": "Protected staged release capability and selection storage",
-      "status": "isolated candidate under repair; no selector, CLI activation, or runtime integration yet"
+      "subject": "Protected staged release capability",
+      "status": "base staging module locally integrated with ten integration tests, posthash unit test and strict Clippy passing; independently approved owner/ancestor policy remains under development; no selector or activation consumer"
+    },
+    {
+      "owner": "gateway_health_audit",
+      "subject": "Gateway authenticated health status",
+      "status": "read-only audit confirmed non-worker health consumer gap; dedicated additive gateway status slice under development; watchdog consumer not implemented"
     }
   ],
   "agent_reservations": {
     "descendant_ceiling": 12,
-    "existing_descendants": 7,
+    "existing_descendants": 8,
     "reserved_nested_slots": 0,
     "required_model": "gpt-5.6-luna",
     "required_effort": "max",
     "three_descendant_levels_verified": false,
-    "qualification": "Windows author reported its actual schema has no spawn_agent, send_message, followup_task, or collaboration capability. The two nested reservations were released; no alternate client was used. One additional root-level independent Windows reviewer was requested with explicit Luna/max arguments. Neither requested settings nor this shallow task proves the required depth-three execution."
+    "qualification": "Root-level native tasks requested explicit gpt-5.6-luna/max and stayed below the twelve-descendant ceiling. Three existing threads ended at the account usage limit. Earlier native child schema lacked delegation tools, so the requested three descendant levels remain unverified; no alternate client or provider was used."
   },
   "windows_ipc_package_test": {
-    "artifact_sha256": "5d74f8a91c983a6f4f82aeceeff0bef9888fba421d03f5f37ed32d4944816ca8",
-    "native_tests_passed": 10,
+    "artifact_sha256": "b616920b6147bb624ae4876719fdc79bd18a51ecb07d07568e942ae39f274bf4",
+    "native_tests_passed": 14,
     "native_tests_failed": 0,
-    "test_elapsed_seconds": 0.29,
+    "test_elapsed_seconds": 0.34,
     "outer_process_deadline_seconds": 20,
     "outer_kill_reap_seconds": 5,
     "outer_kill_required": false,
-    "source_status": "isolated uncommitted Windows transport candidate, not integrated harness"
+    "source_status": "isolated frozen quarantine-correction artifact before subsequent shutdown and source-structure repairs; not integrated harness"
   },
   "implementation_complete": false,
   "synthetic_integration_verified": false,
@@ -88,5 +99,32 @@
   "installed_services_this_checkpoint": false,
   "launched_games_or_providers_this_checkpoint": false,
   "rebooted_hosts_this_checkpoint": false,
-  "activated_releases_this_checkpoint": false
+  "activated_releases_this_checkpoint": false,
+  "linux_native_worker_test": {
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "tests_ignored": 0,
+    "total_test_seconds": 114.5,
+    "watchdog_image_sha256": "7dc810a347e32653b961cf0fe6ebea0348e523c131b7b9d0d8303d54c4ccc2c3",
+    "test_image_sha256": "20c75b8ef86eeb5bbdb28d3de3df7aceef4241c84a554b7155e9963c95f8c484",
+    "harness_image_sha256": "77d90b453f5d075bd035e5773e1182014fc303797da65eef1208d159df4ebcf2",
+    "watchdog_source_base": "d50c475ebb2d9ec576da46255e9b3d3e41a47fbe",
+    "watchdog_source_status": "plus local staged-release and reviewed native helper changes committed with this checkpoint",
+    "scope": "unique transient systemd user scope with RuntimeMaxSec=120s and TimeoutStopSec=5s",
+    "cleanup_verified": true,
+    "successful_fixture_removed": true,
+    "prior_failed_fixtures_preserved": true,
+    "qualification": "incremental debug binary and separately built harness; native process boundary only, downstream HTTP 503 and MCP true fixtures"
+  },
+  "local_gates": {
+    "workspace_all_targets_all_features_tests": "passed",
+    "strict_workspace_clippy": "passed after integrated helper correction",
+    "format": "passed",
+    "locked_release_build": "passed in 12m01s",
+    "dependency_checks": "advisories, bans, licenses and sources passed; two permitted duplicate-version warnings",
+    "native_scope_tests": "9 passed",
+    "default_real_harness_target": "5 passed, native test ignored in default run",
+    "staged_release_tests": "10 integration tests and 1 posthash unit passed"
+  },
+  "linux_service_adapter_verified": false
 }
