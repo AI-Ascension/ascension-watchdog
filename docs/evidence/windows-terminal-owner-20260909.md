@@ -42,3 +42,19 @@ Synthetic fixture SHA-256:
 Windows-target build, strict all-target Clippy, formatting, and diff checks passed.
 Integrated/hosted CI must still validate the published candidate. No service,
 account-security change, gameplay, reboot, release activation, or soak occurred.
+
+## Initial witness before resumption
+
+The integrated launcher now constructs and verifies the complete process owner
+while its initial thread remains suspended, then runs durable admission and resumes
+it. This prevents a legitimate immediate exit from racing the first live identity
+check. A failed `ResumeThread` error is captured before dropping the caller's guard,
+so guard cleanup cannot overwrite the native error code.
+
+Native integrated checks passed: seven synthetic tests in 9.27 seconds and five
+worker-pipe/guard tests in 2.67 seconds, both exit 0. The synthetic suite now includes
+a zero-delay process exit and the forged terminal reopen regression. Exact hashes:
+
+- Synthetic suite: `6767c9891ce61796a53d7e134b7c69d631431428b131ae9d8731eaf3c645a8ba`
+- Worker suite: `f33b20c87843cfc7d23b0424abf05b579cdca1af6f9797bcc72b6fc2e7c04383`
+- Synthetic fixture: `edb4d615091ac47bf8809703e155c07d2b7422595ea4d932a48c62f9dcef52fc`

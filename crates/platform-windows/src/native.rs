@@ -820,28 +820,9 @@ impl WindowsProcessLauncher {
                 error,
             ));
         }
-        // Retain the caller's admission reservation across ResumeThread. A
-        // durable operator Stop cannot commit in the check-to-resume interval
-        // when the caller returns its owner-local transaction guard here.
-        let admission_guard = match before_resume() {
-            Ok(guard) => guard,
-            Err(error) => {
-                return Err(classify_spawn_cleanup(
-                    &job,
-                    launch_force_timeout(specification),
-                    error,
-                ));
-            }
-        };
-        let resumed = unsafe { ResumeThread(thread_handle.raw()) };
-        drop(admission_guard);
-        if resumed == u32::MAX {
-            return Err(classify_spawn_cleanup(
-                &job,
-                launch_force_timeout(specification),
-                last_error("ResumeThread"),
-            ));
-        }
+        // Establish the live ownership witness while the child is still
+        // suspended. A legitimate short-lived child must not race its first
+        // image/session/membership verification after resumption.
         let creation_time = match process_creation_time(process_handle.raw()) {
             Ok(value) => value,
             Err(error) => {
@@ -902,6 +883,21 @@ impl WindowsProcessLauncher {
                     "spawned process is not a member of its Job Object".to_owned(),
                 ),
             ));
+        }
+        // Retain the caller's admission reservation across ResumeThread. A
+        // durable operator Stop cannot commit in the check-to-resume interval
+        // when the caller returns its owner-local transaction guard here.
+        let admission_guard = match before_resume() {
+            Ok(guard) => guard,
+            Err(error) => {
+                return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
+            }
+        };
+        let resumed = unsafe { ResumeThread(thread_handle.raw()) };
+        let resume_error = (resumed == u32::MAX).then(|| last_error("ResumeThread"));
+        drop(admission_guard);
+        if let Some(error) = resume_error {
+            return Err(classify_spawn_cleanup(&owner.job, force_timeout, error));
         }
         Ok(owner)
     }
