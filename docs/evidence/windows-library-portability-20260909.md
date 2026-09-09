@@ -120,3 +120,29 @@ environment or machine/account policy. Artifact SHA-256:
 `dd85c85aa83168abc9fbf371794604eb4dbb7f706fef3846af037943a7a1f218`.
 Formatting and diff checks passed. The hosted full Windows run remains a separate
 required gate, including its explicitly gated service-session tests.
+
+## Fault-fixture lock and transport portability
+
+CI run `34306074494` at `1be13d694a9626d9eaba4ba0e7abd8023de4211c`
+failed two fault-fixture library tests on Windows. Lock contention now recognizes
+the exact native error returned by `fs2::lock_contended_error`, as well as
+`WouldBlock`; unrelated I/O failures remain errors. The transport test no longer
+assumes that a payload larger than configured socket buffers necessarily blocks.
+
+An intermediate native artifact with 4 KiB configured socket buffers and a
+256 KiB payload still failed: Windows accepted the entire payload. Its seven
+passes and one failure are not passing transport evidence. The final fixture
+leaves the connection unaccepted, uses bounded nonblocking prefill to observe
+actual `WouldBlock`, then requires the production deadline writer to return
+`TimedOut` or `WouldBlock`. Prefill is bounded by both bytes and time. Test-only
+`socket2` configures the sockets; production timeout policy is unchanged.
+
+Root cross-built the integrated library test executable, verified source/copy
+SHA-256, and executed all eight tests natively under a 55-second outer deadline:
+eight passed, zero failed, 2.19 seconds, exit 0. Artifact SHA-256:
+`16417be1c1131c6d633d8a09737ba4a72a6b5f8192343987355f489b50e89452`.
+Root's Linux `cargo test --locked -p watchdog-fault-fixture --lib -j 2` also
+passed all eight tests in 2.07 seconds. Formatting and diff checks passed.
+CI now uses Cargo's `--no-fail-fast` so later test binaries still run after a
+failure; failures remain fatal. A fresh exact-revision hosted workspace run
+is required. These are native synthetic tests, not service or game-host proof.

@@ -64,7 +64,8 @@ pub(crate) fn is_peer_error(error: &io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+    use socket2::{Domain, SockAddr, SockRef, Socket, Type};
+    use std::net::{SocketAddr, TcpListener};
 
     #[test]
     fn expired_deadline_rejects_even_already_available_bytes() -> io::Result<()> {
@@ -80,15 +81,57 @@ mod tests {
 
     #[test]
     fn nonreading_peer_cannot_hold_a_writer_indefinitely() -> io::Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        const SOCKET_BUFFER_BYTES: usize = 4 * 1024;
+        const MAX_PREFILL_BYTES: usize = 1024 * 1024;
+        let listener_socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+        listener_socket.set_recv_buffer_size(SOCKET_BUFFER_BYTES)?;
+        listener_socket.bind(&SockAddr::from(SocketAddr::from(([127, 0, 0, 1], 0))))?;
+        listener_socket.listen(1)?;
+        let listener: TcpListener = listener_socket.into();
         let mut peer = TcpStream::connect_timeout(&listener.local_addr()?, IO_TIMEOUT)?;
-        let (_nonreading, _) = listener.accept()?;
-        // Exceed the local TCP send buffer without depending on native socket
-        // options. This test payload is not an exposed fixture frame.
-        let bytes = vec![0; 16 * 1024 * 1024];
+        let send_buffer_bytes = {
+            let socket = SockRef::from(&peer);
+            socket.set_send_buffer_size(SOCKET_BUFFER_BYTES)?;
+            socket.send_buffer_size()?
+        };
+        let receive_buffer_bytes = {
+            let socket = SockRef::from(&listener);
+            socket.recv_buffer_size()?
+        };
+        // Leave the connection pending without accepting or reading it. Observe
+        // real backpressure before testing the deadline; socket buffer settings
+        // alone do not prove the effective capacity on every platform.
+        let effective_buffer_bytes = send_buffer_bytes.saturating_add(receive_buffer_bytes);
+        assert!(effective_buffer_bytes <= MAX_PREFILL_BYTES / 4);
+        let chunk = vec![0; SOCKET_BUFFER_BYTES];
+        peer.set_nonblocking(true)?;
+        let mut prefilled_bytes = 0;
+        let mut backpressure_observed = false;
+        let prefill_deadline = Instant::now() + IO_TIMEOUT;
+        while prefilled_bytes < MAX_PREFILL_BYTES && Instant::now() < prefill_deadline {
+            match peer.write(&chunk) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => prefilled_bytes += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    backpressure_observed = true;
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        peer.set_nonblocking(false)?;
+        assert!(
+            backpressure_observed,
+            "nonreading peer accepted the bounded prefill ({prefilled_bytes} bytes)"
+        );
+        let bytes = vec![0; MAX_PREFILL_BYTES];
         let started = Instant::now();
         let error = write_bytes(&mut peer, &bytes).expect_err("peer never drains");
-        assert!(is_peer_error(&error));
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ));
         assert!(started.elapsed() < Duration::from_secs(4));
         Ok(())
     }
