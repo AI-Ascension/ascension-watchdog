@@ -44,6 +44,16 @@ pub(super) struct OpenedFile {
     pub(super) ancestors: Vec<HeldDirectory>,
 }
 
+/// A directory opened while walking the catalog path.  The final directory is
+/// returned separately so its owner can be checked against the caller-supplied
+/// catalog policy; every directory above it remains retained for later path
+/// identity checks.
+#[derive(Debug)]
+pub(super) struct OpenedDirectoryPath {
+    pub(super) file: File,
+    pub(super) ancestors: Vec<HeldDirectory>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct FileIdentity {
     pub(super) owner: u64,
@@ -85,6 +95,50 @@ pub(super) fn validate_directory_identity(
         return Err(format!("{name} identity changed while staged"));
     }
     Ok(())
+}
+
+pub(super) fn validate_ancestor_directory_identity(
+    directory: &HeldDirectory,
+    expected_owner: Option<u64>,
+    name: &str,
+) -> Result<(), String> {
+    let identity =
+        validate_ancestor_directory_handle(&directory.file, &directory.path, expected_owner, name)?;
+    if identity != directory.identity {
+        return Err(format!("{name} identity changed while staged"));
+    }
+    Ok(())
+}
+
+/// Validate an ancestor above the catalog root.  Under an approved policy,
+/// such ancestors may be root-owned or owned by the expected deployment
+/// account; the policy deliberately does not require every OS ancestor to use
+/// the runtime UID.  The inspection-only path leaves ancestor ownership
+/// observational.  All variants must nevertheless be real directories with
+/// no group/other write access, and their no-follow descriptor/path identity is
+/// retained for the capability lifetime.
+pub(super) fn validate_ancestor_directory_handle(
+    file: &File,
+    path: &Path,
+    expected_owner: Option<u64>,
+    name: &str,
+) -> Result<FileIdentity, String> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("{name} handle metadata unavailable: {error}"))?;
+    if !metadata.is_dir() || indirect(&metadata) {
+        return Err(format!("{name} must be a real directory"));
+    }
+    validate_ancestor_protection(&metadata, expected_owner, name)?;
+    let path_metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("{name} path unavailable: {error}"))?;
+    if !path_metadata.is_dir() || indirect(&path_metadata) {
+        return Err(format!("{name} path is not a real directory"));
+    }
+    if file_identity(&path_metadata) != file_identity(&metadata) {
+        return Err(format!("{name} path changed while opening"));
+    }
+    Ok(file_identity(&metadata))
 }
 
 pub(super) fn validate_directory_handle(
@@ -207,6 +261,39 @@ fn validate_protection(
     Ok(())
 }
 
+fn validate_ancestor_protection(
+    metadata: &Metadata,
+    expected_owner: Option<u64>,
+    name: &str,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(expected_owner) = expected_owner {
+            let owner = u64::from(metadata.uid());
+            if owner != expected_owner && owner != 0 {
+                return Err(format!(
+                    "{name} owner is outside the approved runtime/root ancestor set"
+                ));
+            }
+        }
+        // A sticky world-writable directory such as `/tmp` prevents an
+        // untrusted user from renaming or unlinking a child owned by the
+        // approved runtime UID.  Non-sticky group/other writes remain unsafe.
+        if metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0 {
+            return Err(format!(
+                "{name} is writable by an untrusted group or other user"
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (metadata, expected_owner);
+        Err(format!("{name} protected filesystem proof is unavailable"))
+    }
+}
+
 fn file_identity(metadata: &Metadata) -> FileIdentity {
     #[cfg(unix)]
     {
@@ -237,26 +324,55 @@ fn indirect(metadata: &Metadata) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn open_directory_path(path: &Path) -> Result<File, String> {
+pub(super) fn open_directory_path(
+    path: &Path,
+    expected_owner: Option<u64>,
+) -> Result<OpenedDirectoryPath, String> {
     use rustix::fs::{Mode, OFlags, open, openat};
     let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY;
     let mut directory = File::from(
         open("/", flags, Mode::empty())
             .map_err(|error| format!("release root open failed: {error}"))?,
     );
-    for component in path.components() {
+    let mut current_path = PathBuf::from("/");
+    let mut ancestors = Vec::new();
+    let components = path.components().collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
         let Component::Normal(name) = component else {
             continue;
         };
-        let descriptor = openat(&directory, name, flags, Mode::empty())
+        let descriptor = openat(&directory, *name, flags, Mode::empty())
             .map_err(|error| format!("release root component open failed: {error}"))?;
-        directory = File::from(descriptor);
+        let file = File::from(descriptor);
+        current_path.push(name);
+        if index + 1 != components.len() {
+            let identity = validate_ancestor_directory_handle(
+                &file,
+                &current_path,
+                expected_owner,
+                "release catalog ancestor",
+            )?;
+            ancestors.push(HeldDirectory {
+                path: current_path.clone(),
+                file: file.try_clone().map_err(|error| {
+                    format!("release catalog ancestor handle clone failed: {error}")
+                })?,
+                identity,
+            });
+        }
+        directory = file;
     }
-    Ok(directory)
+    Ok(OpenedDirectoryPath {
+        file: directory,
+        ancestors,
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(super) fn open_directory_path(_path: &Path) -> Result<File, String> {
+pub(super) fn open_directory_path(
+    _path: &Path,
+    _expected_owner: Option<u64>,
+) -> Result<OpenedDirectoryPath, String> {
     Err("protected release directory handles are unavailable on this platform".to_owned())
 }
 

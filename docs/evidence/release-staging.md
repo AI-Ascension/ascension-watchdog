@@ -27,18 +27,37 @@ Root integration validation on 2026-09-09:
 - `cargo clippy --locked -p ascension-watchdog --lib --all-features -- -D warnings`:
   passed, without lint allowances.
 
+Caller-approved owner-policy integration on 2026-09-09:
+
+- `cargo test --package ascension-watchdog --test release_staged --locked`:
+  13 passed, including approved/wrong UID and replaced above-catalog ancestor.
+- `cargo test --workspace --all-targets --all-features --locked --no-fail-fast -j 2`:
+  passed; explicit native/service fixture gates remain ignored by this command.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`:
+  passed without lint allowances.
+- The same strict Clippy command with `--target x86_64-pc-windows-gnu` passed;
+  cross-compilation does not establish native Windows staging support.
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+
 The dormant release-selection prototype is deliberately not integrated into
 this change. No selector, CLI activation command, runtime activation consumer,
 or durable release-state transition is added here.
 
 ## Remaining protection boundary
 
-The catalog owner is observed rather than independently authorized. Ancestors
-above the catalog root are not retained. Read-only mode does not prevent the
-owner from changing permissions, a pre-opened writer from modifying bytes, or a
-privileged writer from doing so. Activation must enforce an independently
-approved owner/ancestor policy and consume a protected or sealed byte handoff;
-it must never reopen the returned paths as launch authority. Windows staging
-currently fails closed because its protected-handle strategy is not implemented.
+The inspection constructor retains an observed owner, not independent trust.
+The explicit `CatalogOwnerPolicy::approved_unix_uid` constructor instead accepts
+a caller-approved UID and checks it against the catalog and release objects.
+Above-catalog normal path components are retained and revalidated; approved
+policy permits root or the approved UID as their owner. Non-sticky group/other
+writes are rejected. Sticky shared ancestors such as `/tmp` are allowed with
+the approved owner checks. The initial `/` descriptor is not retained.
+
+Read-only mode does not prevent the owner from changing permissions, a pre-opened
+writer from modifying bytes, or a privileged writer from doing so. Activation
+must require an independently approved owner policy and consume a protected or
+sealed byte handoff; it must never reopen returned paths as launch authority.
+Windows staging currently fails closed because its protected-handle strategy
+is not implemented.
 
 These limits remain implementation work, not external deployment blockers.
