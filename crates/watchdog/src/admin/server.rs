@@ -837,6 +837,8 @@ mod windows_config_tests {
                 "-Command",
                 r"
 $ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 foreach ($path in @($env:ASCENSION_TEST_READ_TOKEN, $env:ASCENSION_TEST_ADMIN_TOKEN)) {
     $acl = [System.Security.AccessControl.FileSecurity]::new()

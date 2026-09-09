@@ -121,6 +121,8 @@ fn protect_config(path: &Path) -> Result<(), Box<dyn Error>> {
             "-Command",
             r"
 $ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl = [System.Security.AccessControl.FileSecurity]::new()
 $acl.SetOwner($sid)
