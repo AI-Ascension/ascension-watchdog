@@ -394,7 +394,14 @@ fn exercise_uncertain_stop(
     let config = config(&directory);
     let mut supervisor = Supervisor::initialize(config)?;
     let start_report = supervisor.reconcile_once(1_000)?;
-    assert_eq!(start_report.started, [COMPONENT_ID]);
+    assert_eq!(
+        start_report.started,
+        [COMPONENT_ID],
+        "initial synthetic launch did not settle: report={start_report:?}; desired_mode={:?}; component={:?}; intents={:?}",
+        supervisor.store.desired_mode()?,
+        supervisor.store.component(COMPONENT_ID)?,
+        supervisor.store.unsettled_launch_intents()?
+    );
     let (expected_identity, expected_intent) = launch_snapshot(&supervisor)?;
     ensure_identity(&expected_identity)?;
 
