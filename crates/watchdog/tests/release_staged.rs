@@ -508,4 +508,5 @@ fn unsupported_platforms_fail_closed_before_minting_a_capability() {
     let error = ProtectedReleaseCatalog::new(&fixture.catalog_root)
         .expect_err("non-Linux platform must not mint a staged capability");
     assert!(error.contains("fail-closed"));
+    assert!(!fixture.temp.path().join("watchdog.sqlite3").exists());
 }
