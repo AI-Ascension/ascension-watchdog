@@ -345,6 +345,26 @@ fn native_terminal_reopen_cannot_inherit_another_owners_live_identity_witness()
 }
 
 #[test]
+fn native_immediate_exit_has_a_pre_resume_identity_witness() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let launcher = WindowsProcessLauncher::new(config(&executable, "immediate-exit"))?;
+    let owner = launcher.launch(&launch_spec(
+        &executable,
+        directory.path(),
+        SessionSelector::CurrentService,
+        &unique_nonce("immediate-exit"),
+        vec!["--crash-after-ms".to_owned(), "0".to_owned()],
+    ))?;
+    assert!(wait_until(|| Ok(!owner.is_running()?))?);
+    assert!(matches!(
+        owner.force_stop()?,
+        StopOutcome::AlreadyExited | StopOutcome::Exited
+    ));
+    Ok(())
+}
+
+#[test]
 fn native_prepared_job_recovery_uses_exact_authority() -> Result<(), Box<dyn Error>> {
     let directory = TestDirectory::create()?;
     let executable = fixture();
