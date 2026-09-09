@@ -475,10 +475,19 @@ fn supervisor_stop_error_retains_owned_child_and_blocks_running_replacement()
 #[cfg(unix)]
 fn aborting_supervisor_process() -> std::result::Result<(), Box<dyn Error>> {
     let config_path = std::env::var_os(ABORT_CONFIG_ENV).ok_or("missing helper config path")?;
+    let stage_path = PathBuf::from(&config_path).with_extension("stage");
+    std::fs::write(&stage_path, "reading-config")?;
     let config = WatchdogConfig::from_file(config_path)?;
+    std::fs::write(&stage_path, "initializing-supervisor")?;
     let mut supervisor = Supervisor::initialize(config)?;
+    std::fs::write(&stage_path, "launching-child")?;
     let start_report = supervisor.reconcile_once(4_000)?;
-    assert_eq!(start_report.started, [COMPONENT_ID]);
+    assert_eq!(
+        start_report.started,
+        [COMPONENT_ID],
+        "helper launch report: {start_report:?}"
+    );
+    std::fs::write(&stage_path, "checking-child-identity")?;
     let (expected_identity, _) = launch_snapshot(&supervisor)?;
     ensure_identity(&expected_identity)?;
 
@@ -486,7 +495,9 @@ fn aborting_supervisor_process() -> std::result::Result<(), Box<dyn Error>> {
         .process_manager
         .inject_stop_result(Ok(RuntimeStopOutcome::TimedOut));
     supervisor.request_stop(5_000)?;
+    std::fs::write(&stage_path, "reconciling-stop")?;
     let stop_report = supervisor.reconcile_once(5_001)?;
+    std::fs::write(&stage_path, "checking-quarantine")?;
     assert_eq!(stop_report.quarantined, [COMPONENT_ID]);
     let (_, expected_intent) = launch_snapshot(&supervisor)?;
     let _expected_error = assert_quarantined_snapshot(
@@ -498,6 +509,7 @@ fn aborting_supervisor_process() -> std::result::Result<(), Box<dyn Error>> {
     supervisor
         .store
         .set_desired_mode_at(DesiredMode::Running, 5_002)?;
+    std::fs::write(&stage_path, "exiting-abruptly")?;
 
     // Deliberately bypass Drop. This models the fatal self-abort boundary and
     // leaves the synthetic child alive while the next controller reopens the
@@ -537,9 +549,19 @@ fn abrupt_supervisor_exit_reopens_uncertainty_without_replacement()
         .stderr(Stdio::null())
         .spawn()?;
     let mut helper = HelperProcessGuard::new(helper);
-    let helper_status = helper
-        .wait_bounded(Instant::now() + Duration::from_secs(5))?
-        .ok_or("abrupt supervisor helper exceeded its five-second deadline")?;
+    let Some(helper_status) = helper.wait_bounded(Instant::now() + Duration::from_secs(5))? else {
+        // This file contains only fixed fixture phase labels. Bound the
+        // diagnostic read even if a failing fixture writes unexpected data.
+        use std::io::Read;
+        let mut stage = String::new();
+        if let Ok(file) = std::fs::File::open(config_path.with_extension("stage")) {
+            let _ = file.take(128).read_to_string(&mut stage);
+        }
+        return Err(format!(
+            "abrupt supervisor helper exceeded its five-second deadline; phase={stage:?}"
+        )
+        .into());
+    };
     assert!(
         helper_status.code() == Some(HELPER_EXIT_CODE),
         "fatal helper did not return the deliberate abrupt-exit code: {helper_status:?}"

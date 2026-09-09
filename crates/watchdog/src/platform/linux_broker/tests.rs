@@ -113,10 +113,16 @@ fn policy() -> BrokerPolicy {
 }
 
 fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) {
-    let child = std::process::Command::new("/usr/bin/sleep")
+    let executable = fs::canonicalize("/usr/bin/sleep").expect("peer fixture executable path");
+    let mut child = std::process::Command::new(&executable)
         .arg("30")
         .spawn()
         .expect("peer fixture process");
+    if let Err(error) = wait_for_fixture_executable(&mut child, &executable) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("peer fixture did not reach its approved image: {error}");
+    }
     (
         PeerCredentials {
             pid: child.id(),
@@ -125,6 +131,37 @@ fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) 
         },
         child,
     )
+}
+
+fn wait_for_fixture_executable(
+    child: &mut std::process::Child,
+    expected: &Path,
+) -> Result<(), String> {
+    let parent = fs::canonicalize("/proc/self/exe").ok();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let proc_executable = format!("/proc/{}/exe", child.id());
+    loop {
+        match fs::canonicalize(&proc_executable) {
+            Ok(actual) if actual == expected => return Ok(()),
+            Ok(actual) if parent.as_ref() == Some(&actual) => {}
+            Ok(actual) => {
+                return Err(format!(
+                    "unexpected executable {} while waiting for {}",
+                    actual.display(),
+                    expected.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "executable did not become {} before readiness deadline",
+                expected.display()
+            ));
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn request(nonce: &str) -> BrokerRequest {
@@ -399,7 +436,10 @@ fn durable_pending_record_never_relaunches_an_inactive_unit() {
         .expect_err("inactive durable record must remain uncertain");
     let _ = child.kill();
     let _ = child.wait();
-    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert!(
+        matches!(error, BrokerError::Conflict(_)),
+        "unexpected durable pending error: {error:?}"
+    );
     assert_eq!(broker.backend.starts, 0);
 }
 

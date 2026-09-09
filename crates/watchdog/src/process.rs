@@ -28,6 +28,10 @@ use rustix::process::{
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 #[cfg(unix)]
 const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const CHILD_EXEC_READINESS_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(target_os = "linux")]
+const CHILD_EXEC_READINESS_POLL: Duration = Duration::from_millis(1);
 
 /// Immutable launch identity.  It is persisted alongside the component state
 /// and is intentionally richer than a PID.
@@ -309,6 +313,14 @@ impl OwnedChild {
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
+        #[cfg(target_os = "linux")]
+        // Linux may use `posix_spawn` for this command shape.  Its parent can
+        // observe the new PID before the child has completed exec, at which
+        // point `/proc/<pid>/exe` still names this process image.  Capture the
+        // image before spawn so that value is recognized only while waiting
+        // for a different approved child image; it is not an identity witness
+        // on its own.
+        let parent_executable = current_process_executable();
         let mut child = command.spawn().map_err(|error| {
             WatchdogError::Io(std::io::Error::new(
                 error.kind(),
@@ -355,7 +367,34 @@ impl OwnedChild {
                 }
             }
         };
-        if still_running && let Err(error) = ensure_identity(&identity) {
+        #[cfg(target_os = "linux")]
+        let child_ready = if still_running {
+            match wait_for_exact_child_executable(
+                &mut child,
+                &identity.executable,
+                parent_executable.as_deref(),
+                Instant::now() + CHILD_EXEC_READINESS_TIMEOUT,
+            ) {
+                Ok(ready) => ready,
+                Err(error) => {
+                    // A pre-exec identity failure still owns the exact child
+                    // and its exact process group.  Preserve the same bounded
+                    // cleanup classification as every other post-spawn
+                    // failure; never return early and detach the child.
+                    let cleanup = abort_spawned_child(
+                        &mut child,
+                        &mut process_group,
+                        Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT,
+                    );
+                    return Err(report_spawn_cleanup(error, cleanup));
+                }
+            }
+        } else {
+            false
+        };
+        #[cfg(not(target_os = "linux"))]
+        let child_ready = still_running;
+        if child_ready && let Err(error) = ensure_identity(&identity) {
             // The direct Child handle is still the exact object returned by
             // spawn, and the process group is the exact containment created
             // for that handle.  Cleanup does not fall back to a PID/name
@@ -627,6 +666,91 @@ fn observe_child_exit(child: &mut Child) -> Result<Option<()>> {
     )
     .map_err(|error| WatchdogError::Io(std::io::Error::from(error)))?;
     Ok(status.map(|_| ()))
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_executable() -> Option<PathBuf> {
+    std::fs::canonicalize("/proc/self/exe")
+        .or_else(|_| std::env::current_exe().and_then(std::fs::canonicalize))
+        .ok()
+}
+
+/// Wait for the exact child image after a spawn that may return before exec.
+///
+/// A newly-created child can briefly expose the invoking process image through
+/// `/proc/<pid>/exe` while the platform spawn primitive is still performing
+/// exec.  When that image differs from the configured target, it is an
+/// explicitly captured transient only: it may extend the bounded wait, but it
+/// cannot satisfy the approved identity.  If the configured target is exactly
+/// the invoking image, the exact path is already observed and no path
+/// transition is available to prove.  Any other image is an immediate identity
+/// failure, because it is not explained by the known pre-exec state and must
+/// not be converted into a retry.
+///
+/// The returned boolean is false when the child exits before an approved image
+/// can be observed.  This preserves the existing short-lived-child behavior;
+/// the direct `Child` handle remains responsible for the later reap.
+#[cfg(target_os = "linux")]
+fn wait_for_exact_child_executable(
+    child: &mut Child,
+    expected: &Path,
+    parent_executable: Option<&Path>,
+    deadline: Instant,
+) -> Result<bool> {
+    let pid = child.id();
+    let proc_executable = format!("/proc/{pid}/exe");
+    let mut observed_parent_image = false;
+
+    loop {
+        if observe_child_exit(child)?.is_some() {
+            return Ok(false);
+        }
+
+        match std::fs::canonicalize(&proc_executable) {
+            Ok(actual) if actual == expected => {
+                // If the approved target is the same image as the invoking
+                // process, the path is already the exact configured image and
+                // there is no observable path transition to wait for.  This
+                // explicit case preserves supported self-exec fixtures; the
+                // parent image is never accepted when it differs from the
+                // configured target.
+                return Ok(true);
+            }
+            Ok(actual) if parent_executable == Some(actual.as_path()) => {
+                // The invoking image is allowed only while waiting for a
+                // different configured target; it is never an identity witness
+                // on its own.
+                observed_parent_image = true;
+            }
+            Ok(actual) => {
+                return Err(WatchdogError::IdentityMismatch(format!(
+                    "pid {pid} exposed unexpected executable {} before approved image {}",
+                    actual.display(),
+                    expected.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // `/proc/<pid>/exe` can be briefly unavailable while the
+                // process transitions.  A still-live direct child keeps this
+                // observation bounded and authoritative.
+            }
+            Err(error) => return Err(WatchdogError::Io(error)),
+        }
+
+        if Instant::now() >= deadline {
+            if observed_parent_image {
+                return Err(WatchdogError::Timeout(format!(
+                    "pid {pid} remained on the invoking image before reaching approved executable {}",
+                    expected.display()
+                )));
+            }
+            return Err(WatchdogError::Timeout(format!(
+                "pid {pid} did not reach approved executable {} before readiness deadline",
+                expected.display()
+            )));
+        }
+        std::thread::sleep(CHILD_EXEC_READINESS_POLL);
+    }
 }
 
 #[cfg(unix)]
@@ -994,6 +1118,89 @@ mod tests {
             executable_sha256: None,
             restart: false,
         }
+    }
+
+    #[test]
+    fn self_exec_target_remains_supported_when_paths_are_identical() {
+        let executable = std::env::current_exe().expect("test executable");
+        let component = ComponentConfig {
+            id: "process-self-exec".to_owned(),
+            executable,
+            args: vec!["--list".to_owned()],
+            cwd: None,
+            environment: BTreeMap::new(),
+            executable_sha256: None,
+            restart: false,
+        };
+        let mut child = OwnedChild::spawn(&component, 1_000).expect("self-exec spawn");
+        child.wait().expect("self-exec wait and cleanup");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exec_readiness_times_out_on_a_persistent_invoking_image() {
+        let executable = std::env::current_exe().expect("test executable");
+        let parent = current_process_executable().expect("invoking executable");
+        let mut child = std::process::Command::new(&executable)
+            .args([
+                "--exact",
+                "process::tests::exec_readiness_fixture_sleep",
+                "--ignored",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("persistent invoking-image fixture");
+        let expected = Path::new("/definitely-not-the-approved-image");
+        let result = wait_for_exact_child_executable(
+            &mut child,
+            expected,
+            Some(&parent),
+            Instant::now() + Duration::from_millis(50),
+        );
+        let _ = child.kill();
+        let status = child.wait();
+        assert!(status.is_ok(), "fixture child was not reaped: {status:?}");
+        assert!(
+            matches!(&result, Err(WatchdogError::Timeout(message))
+                if message.contains("remained on the invoking image")),
+            "unexpected readiness result: {result:?}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exec_readiness_rejects_an_unexpected_third_image_and_reaps_exact_child() {
+        let parent = current_process_executable().expect("invoking executable");
+        let executable = std::fs::canonicalize("/usr/bin/sleep").expect("sleep executable");
+        let mut child = std::process::Command::new(&executable)
+            .arg("30")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("third-image fixture");
+        let expected = Path::new("/definitely-not-the-approved-image");
+        let result = wait_for_exact_child_executable(
+            &mut child,
+            expected,
+            Some(&parent),
+            Instant::now() + Duration::from_secs(1),
+        );
+        let _ = child.kill();
+        let status = child.wait();
+        assert!(status.is_ok(), "fixture child was not reaped: {status:?}");
+        assert!(
+            matches!(&result, Err(WatchdogError::IdentityMismatch(message))
+                if message.contains("unexpected executable")),
+            "unexpected readiness result: {result:?}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "spawned process image fixture"]
+    fn exec_readiness_fixture_sleep() {
+        std::thread::sleep(Duration::from_secs(5));
     }
 
     #[test]
