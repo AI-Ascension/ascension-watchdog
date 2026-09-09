@@ -100,3 +100,23 @@ zero failed, 0.58 seconds, exit 0. Artifact SHA-256:
 The isolated author also passed Linux's three tests, Windows-target all-target
 check and strict Clippy, formatting and diff checks. A fresh hosted Windows
 workspace run remains required; this result is native synthetic evidence only.
+
+## Credential fixture module loading
+
+CI run `34305449795` at `a0228c5f5c46f608656b09bfd8569c639819243c`
+passed the repaired storage queries, then failed
+`worker_config::derived_worker_endpoint_constructs_client_and_rejects_admin_namespace`:
+Windows PowerShell could not autoload the module containing `Set-Acl`. This
+credential fixture now explicitly imports the same module from `$PSHOME`.
+The protected owner-only DACL and the endpoint/client assertions are unchanged.
+A repository search of all five `Set-Acl` helpers found no other missing imports.
+
+Root's Linux worker-config target passed all 11 tests. Root cross-built,
+SHA-256 verified and executed the Windows target: all 13 tests passed in
+0.55 seconds, exit 0, under a 55-second outer deadline. The test process's
+inherited `PSModulePath` was set to a nonexistent temporary directory to exercise
+the explicit import without normal module discovery. This changed no persistent
+environment or machine/account policy. Artifact SHA-256:
+`dd85c85aa83168abc9fbf371794604eb4dbb7f706fef3846af037943a7a1f218`.
+Formatting and diff checks passed. The hosted full Windows run remains a separate
+required gate, including its explicitly gated service-session tests.
