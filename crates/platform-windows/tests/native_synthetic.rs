@@ -46,7 +46,17 @@ impl Drop for TestDirectory {
 }
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_platform_synthetic"))
+    // Cross-built tests are copied together with their checked-in fixture
+    // into one fresh Windows directory; the build-host path is not usable
+    // there. Native Cargo execution retains its ordinary artifact path.
+    let adjacent = std::env::current_exe()
+        .expect("native test image path")
+        .with_file_name("platform_synthetic.exe");
+    if adjacent.is_file() {
+        adjacent
+    } else {
+        PathBuf::from(env!("CARGO_BIN_EXE_platform_synthetic"))
+    }
 }
 
 fn config(executable: &Path, pipe_suffix: &str) -> WindowsPlatformConfig {
@@ -73,7 +83,7 @@ fn config(executable: &Path, pipe_suffix: &str) -> WindowsPlatformConfig {
 fn launch_spec(
     executable: &Path,
     working_directory: &Path,
-    session: u32,
+    session: SessionSelector,
     nonce: &str,
     arguments: Vec<String>,
 ) -> WindowsLaunchSpec {
@@ -83,7 +93,7 @@ fn launch_spec(
         arguments,
         environment: BTreeMap::new(),
         working_directory: Some(working_directory.to_owned()),
-        session: SessionSelector::Explicit(session),
+        session,
         launch_nonce: nonce.to_owned(),
         graceful_timeout_ms: 500,
         force_timeout_ms: 5_000,
@@ -120,7 +130,7 @@ fn native_launch_rejects_an_approved_digest_mismatch_before_job_creation()
         .launch(&launch_spec(
             &executable,
             directory.path(),
-            0,
+            SessionSelector::CurrentService,
             &unique_nonce("digest-mismatch-child"),
             vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
         ))
@@ -200,7 +210,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     let owner = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &unique_nonce("descendant"),
         vec![
             "--spawn-descendant".to_owned(),
@@ -232,14 +242,14 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
         ascension_platform_windows::StopOutcome::Exited
     );
     assert!(wait_until(|| Ok(!reopened.is_member_running(child_pid)?))?);
-    assert!(!reopened.is_running()?);
+    assert!(wait_until(|| Ok(!reopened.is_running()?))?);
     drop(reopened);
     drop(owner);
 
     let crashed = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &unique_nonce("crash"),
         vec!["--crash-after-ms".to_owned(), "50".to_owned()],
     ))?;
@@ -249,7 +259,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
     let restarted = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &unique_nonce("restart"),
         vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
     ))?;
@@ -258,7 +268,7 @@ fn native_synthetic_child_crash_restart_and_durable_job_stop() -> Result<(), Box
         restarted.force_stop()?,
         ascension_platform_windows::StopOutcome::Exited
     );
-    assert!(!restarted.is_running()?);
+    assert!(wait_until(|| Ok(!restarted.is_running()?))?);
     Ok(())
 }
 
@@ -271,7 +281,7 @@ fn native_leader_exit_still_forces_job_descendant_cleanup() -> Result<(), Box<dy
     let owner = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &unique_nonce("leader-exit"),
         vec![
             "--spawn-descendant".to_owned(),
@@ -300,6 +310,41 @@ fn native_leader_exit_still_forces_job_descendant_cleanup() -> Result<(), Box<dy
 }
 
 #[test]
+fn native_terminal_reopen_cannot_inherit_another_owners_live_identity_witness()
+-> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create()?;
+    let executable = fixture();
+    let alternate = directory.path().join("different-approved-image.exe");
+    fs::copy(&executable, &alternate)?;
+    let launcher = WindowsProcessLauncher::new(config(&executable, "terminal-witness"))?;
+    let owner = launcher.launch(&launch_spec(
+        &executable,
+        directory.path(),
+        SessionSelector::CurrentService,
+        &unique_nonce("terminal-witness"),
+        vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
+    ))?;
+    assert!(owner.is_running()?);
+    let mut forged = owner.identity().clone();
+    forged.executable = alternate;
+    owner.force_stop()?;
+    assert!(wait_until(|| Ok(!owner.is_running()?))?);
+    // The existing owner has a private live witness. Reopening from serialized
+    // fields must not inherit it, even with the exact old PID and birth token.
+    let reopened = JobOwnedProcess::reopen(
+        forged,
+        8,
+        Duration::from_millis(500),
+        Duration::from_secs(5),
+    );
+    assert!(
+        reopened.is_err(),
+        "terminal reopen accepted an unwitnessed image"
+    );
+    Ok(())
+}
+
+#[test]
 fn native_prepared_job_recovery_uses_exact_authority() -> Result<(), Box<dyn Error>> {
     let directory = TestDirectory::create()?;
     let executable = fixture();
@@ -308,7 +353,7 @@ fn native_prepared_job_recovery_uses_exact_authority() -> Result<(), Box<dyn Err
     let owner = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &nonce,
         vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
     ))?;
@@ -317,7 +362,10 @@ fn native_prepared_job_recovery_uses_exact_authority() -> Result<(), Box<dyn Err
         launcher.force_cleanup_planned_containment(&planned, Duration::from_secs(5))?,
         StopOutcome::Exited
     );
-    assert!(!owner.is_running()?);
+    // Job accounting can become empty just before the terminated leader's
+    // process handle is signaled; wait on that exact identity before dropping
+    // the owner witness.
+    assert!(wait_until(|| Ok(!owner.is_running()?))?);
     drop(owner);
 
     // Once the exact named object has no remaining handles, a missing-object
@@ -343,7 +391,7 @@ fn native_launch_reopens_integrity_barrier_before_resuming_child() -> Result<(),
     let owner = launcher.launch(&launch_spec(
         &executable,
         directory.path(),
-        0,
+        SessionSelector::CurrentService,
         &unique_nonce("barrier-child"),
         vec!["--crash-after-ms".to_owned(), "5000".to_owned()],
     ))?;
