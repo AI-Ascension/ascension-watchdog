@@ -325,7 +325,7 @@ mod tests {
             component: ComponentKind::Synthetic,
             incarnation: "incarnation-1".to_owned(),
             launch_nonce: "nonce-1".to_owned(),
-            executable: PathBuf::from("/bin/true"),
+            executable: std::env::current_exe().expect("test executable"),
             executable_sha256: "a".repeat(64),
             arguments: Vec::new(),
             working_directory: None,
