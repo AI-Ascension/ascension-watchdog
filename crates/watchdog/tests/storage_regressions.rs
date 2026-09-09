@@ -16,6 +16,59 @@ fn config(temp: &TempDir, deployment_id: &str) -> WatchdogConfig {
 }
 
 #[test]
+fn absent_component_identity_is_not_a_sqlite_decode_failure() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = config(&temp, "absent-component-identity");
+    let mut store = Store::initialize(&config.database, &config).expect("initialize");
+    assert!(
+        store
+            .component_identity("gateway")
+            .expect("missing row")
+            .is_none()
+    );
+    store
+        .upsert_component(
+            &ComponentRecord {
+                id: "gateway".to_owned(),
+                state: ComponentState::Stopped,
+                launch_nonce: None,
+                pid: None,
+                executable_digest: None,
+                started_at_ms: None,
+                restart_attempts: 0,
+                last_restart_at_ms: None,
+                last_error: None,
+            },
+            1,
+        )
+        .expect("stopped component");
+    assert!(
+        store
+            .component_identity("gateway")
+            .expect("null identity")
+            .is_none()
+    );
+    drop(store);
+    let store = Store::open(&config.database, &config).expect("reopen");
+    assert!(
+        store
+            .component_identity("gateway")
+            .expect("reopened null identity")
+            .is_none()
+    );
+    let raw = rusqlite::Connection::open(&config.database).expect("raw connection");
+    raw.execute(
+        "UPDATE components SET identity_json='malformed' WHERE id='gateway'",
+        [],
+    )
+    .expect("corrupt fixture");
+    assert!(
+        store.component_identity("gateway").is_err(),
+        "malformed non-null identity must fail closed"
+    );
+}
+
+#[test]
 fn read_only_open_is_noncreating_and_nonmutating() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = config(&temp, "readonly");

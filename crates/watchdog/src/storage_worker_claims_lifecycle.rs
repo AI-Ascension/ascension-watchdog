@@ -31,42 +31,33 @@ impl Store {
             .query_row(BINDING_SELECT, [], binding_from_row)
             .optional()?;
         if let Some(existing) = existing {
-            let previous_updated_at: i64 = tx.query_row(
-                "SELECT updated_at_ms FROM worker_bindings WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )?;
-            ensure_phase_time_at_least(now_ms, previous_updated_at, "worker binding")?;
             if existing != *binding {
                 tx.rollback()?;
                 return Err(WatchdogError::Conflict(
                     "worker binding is immutable; explicit owner migration is required".to_owned(),
                 ));
             }
-            tx.execute(
-                "UPDATE worker_bindings SET updated_at_ms=? WHERE singleton=1",
-                params![sqlite_timestamp(now_ms)?],
-            )?;
-        } else {
-            tx.execute(
-                "INSERT INTO worker_bindings (singleton, deployment_id, worker_owner_id, worker_profile_digest, release_digest, config_digest, schema_digest, updated_at_ms) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    binding.deployment_id,
-                    binding.worker_owner_id,
-                    binding.worker_profile_digest,
-                    binding.release_digest,
-                    binding.config_digest,
-                    binding.schema_digest,
-                    sqlite_timestamp(now_ms)?
-                ],
-            )?;
-            insert_audit_tx(
-                &tx,
-                "worker_binding_configured",
-                &binding.worker_owner_id,
-                now_ms,
-            )?;
+            tx.commit()?;
+            return Ok(binding.clone());
         }
+        tx.execute(
+            "INSERT INTO worker_bindings (singleton, deployment_id, worker_owner_id, worker_profile_digest, release_digest, config_digest, schema_digest, updated_at_ms) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                binding.deployment_id,
+                binding.worker_owner_id,
+                binding.worker_profile_digest,
+                binding.release_digest,
+                binding.config_digest,
+                binding.schema_digest,
+                sqlite_timestamp(now_ms)?
+            ],
+        )?;
+        insert_audit_tx(
+            &tx,
+            "worker_binding_configured",
+            &binding.worker_owner_id,
+            now_ms,
+        )?;
         tx.commit()?;
         Ok(binding.clone())
     }

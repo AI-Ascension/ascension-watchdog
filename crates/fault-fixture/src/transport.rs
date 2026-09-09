@@ -35,18 +35,40 @@ impl Read for DeadlineReader {
     }
 }
 
-pub(crate) fn write_bytes(stream: &mut TcpStream, mut bytes: &[u8]) -> io::Result<()> {
-    let deadline = Instant::now() + IO_TIMEOUT;
-    while !bytes.is_empty() {
-        stream.set_write_timeout(Some(remaining(deadline)?))?;
-        match stream.write(bytes) {
-            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-            Ok(count) => bytes = &bytes[count..],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
+pub(crate) fn write_bytes(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+    write_bytes_until(stream, bytes, Instant::now() + IO_TIMEOUT)
+}
+
+// Connections are blocking and single-owner outside this write phase. Restoring
+// that mode keeps subsequent read handling unchanged on both success and failure.
+fn write_bytes_until(
+    stream: &mut TcpStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    const WRITE_CHUNK_BYTES: usize = 16 * 1024;
+    stream.set_nonblocking(true)?;
+    let result = (|| {
+        while !bytes.is_empty() {
+            remaining(deadline)?;
+            let chunk = &bytes[..bytes.len().min(WRITE_CHUNK_BYTES)];
+            match stream.write(chunk) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => bytes = &bytes[count..],
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(remaining(deadline)?.min(Duration::from_millis(1)));
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(())
+    })();
+    let restore = stream.set_nonblocking(false);
+    match (result, restore) {
+        (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
     }
-    Ok(())
 }
 
 pub(crate) fn is_peer_error(error: &io::Error) -> bool {
@@ -80,41 +102,70 @@ mod tests {
     }
 
     #[test]
+    fn expired_write_deadline_rejects_a_writable_socket() -> io::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let mut writer = TcpStream::connect_timeout(&listener.local_addr()?, IO_TIMEOUT)?;
+        let (mut receiver, _) = listener.accept()?;
+        let error = write_bytes_until(&mut writer, b"must-not-send", Instant::now())
+            .expect_err("an expired budget cannot send even immediately writable bytes");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        receiver.set_nonblocking(true)?;
+        assert_eq!(
+            receiver
+                .read(&mut [0; 1])
+                .expect_err("no bytes sent")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        Ok(())
+    }
+
+    #[test]
     fn nonreading_peer_cannot_hold_a_writer_indefinitely() -> io::Result<()> {
-        const SOCKET_BUFFER_BYTES: usize = 4 * 1024;
+        #[cfg(windows)]
+        const RECEIVE_BUFFER_BYTES: usize = 0;
+        #[cfg(not(windows))]
+        const RECEIVE_BUFFER_BYTES: usize = 4 * 1024;
+        const SEND_BUFFER_BYTES: usize = 4 * 1024;
         const MAX_PREFILL_BYTES: usize = 1024 * 1024;
         let listener_socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-        listener_socket.set_recv_buffer_size(SOCKET_BUFFER_BYTES)?;
+        listener_socket.set_recv_buffer_size(RECEIVE_BUFFER_BYTES)?;
         listener_socket.bind(&SockAddr::from(SocketAddr::from(([127, 0, 0, 1], 0))))?;
         listener_socket.listen(1)?;
         let listener: TcpListener = listener_socket.into();
         let mut peer = TcpStream::connect_timeout(&listener.local_addr()?, IO_TIMEOUT)?;
-        #[cfg(windows)]
-        let (nonreading, _) = listener.accept()?;
-        #[cfg(windows)]
+        listener.set_nonblocking(true)?;
+        let accept_deadline = Instant::now() + IO_TIMEOUT;
+        let (nonreading, _) = loop {
+            remaining(accept_deadline)?;
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(remaining(accept_deadline)?.min(Duration::from_millis(1)));
+                }
+                Err(error) => return Err(error),
+            }
+        };
         {
-            // Winsock's zero receive buffer advertises a zero window until a
-            // receive is posted. This fixture deliberately never posts one.
-            // A small nonzero SO_RCVBUF is not a portable TCP-window bound.
             let socket = SockRef::from(&nonreading);
-            socket.set_recv_buffer_size(0)?;
-            assert_eq!(socket.recv_buffer_size()?, 0);
+            socket.set_recv_buffer_size(RECEIVE_BUFFER_BYTES)?;
         }
         let send_buffer_bytes = {
             let socket = SockRef::from(&peer);
-            socket.set_send_buffer_size(SOCKET_BUFFER_BYTES)?;
+            socket.set_send_buffer_size(SEND_BUFFER_BYTES)?;
             socket.send_buffer_size()?
         };
         let receive_buffer_bytes = {
-            let socket = SockRef::from(&listener);
+            let socket = SockRef::from(&nonreading);
             socket.recv_buffer_size()?
         };
-        // Never read from the peer (on Unix, leave it unaccepted). Observe real
-        // backpressure before testing the deadline; small nonzero socket buffer
-        // settings alone do not prove effective capacity on every platform.
+        // Never read from the accepted peer. Observe real backpressure before
+        // testing the deadline; socket buffer settings alone do not prove the
+        // effective capacity on every platform.
         let effective_buffer_bytes = send_buffer_bytes.saturating_add(receive_buffer_bytes);
         assert!(effective_buffer_bytes <= MAX_PREFILL_BYTES / 4);
-        let chunk = vec![0; SOCKET_BUFFER_BYTES];
+        let chunk = vec![0; 1024];
         peer.set_nonblocking(true)?;
         let mut prefilled_bytes = 0;
         let mut backpressure_observed = false;

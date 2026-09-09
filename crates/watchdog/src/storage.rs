@@ -1883,9 +1883,10 @@ impl Store {
             .query_row(
                 "SELECT identity_json FROM components WHERE id=?",
                 params![component_id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
         encoded
             .map(|value| serde_json::from_str(&value))
             .transpose()
