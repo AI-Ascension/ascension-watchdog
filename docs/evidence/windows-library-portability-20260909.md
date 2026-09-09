@@ -75,3 +75,28 @@ all six tests. The corrected Windows test compiled and ran natively with
 one passed, four filtered out, 0.34 seconds, exit 0. SHA-256:
 `5aeea566e01ea9ac48e8c707f1bcecfe6ac83fe670f082c965b98c2646d08fc6`.
 This focused native result does not establish a full Windows workspace pass.
+
+## Direct-job authorization fixture
+
+CI run `34303730127` at `9afd10f4c48ed3da1beec8655fda2ab5632809ef` passed
+the Windows library and preflight suites, then failed
+`storage_queries::production_cli_rejects_direct_job_writes_before_opening_state`.
+The test's config file did not have the protected owner-only DACL required by
+the Windows configuration reader. Source inspection shows configuration loading
+precedes the direct-job authorization rejection; the old assertion did not
+distinguish that earlier read failure.
+
+The fixture now applies the same explicit PowerShell security-module import
+and owner-only protected DACL used by the other Windows configuration tests.
+Its existing `Unauthorized` assertions for submit, claim, complete and fail,
+and its assertion that no state database was created, are unchanged. No
+production authorization, configuration-reader or ACL policy changes were made.
+
+Root cross-built the integrated `storage_queries` test executable, verified its
+source/copy SHA-256, and ran all three tests natively using
+`--test-threads=1 --nocapture` under a 55-second outer deadline: three passed,
+zero failed, 0.58 seconds, exit 0. Artifact SHA-256:
+`3f82a267a875188c6671cb8962104266c1ceea318b965cf831e005d64c091744`.
+The isolated author also passed Linux's three tests, Windows-target all-target
+check and strict Clippy, formatting and diff checks. A fresh hosted Windows
+workspace run remains required; this result is native synthetic evidence only.
