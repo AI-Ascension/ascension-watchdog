@@ -6,8 +6,14 @@ pub(crate) mod runtime_admin;
 pub(crate) mod runtime_process;
 #[path = "runtime_worker.rs"]
 pub(crate) mod runtime_worker;
+#[cfg(any(windows, test))]
+#[path = "runtime_worker_admission.rs"]
+mod runtime_worker_admission;
 #[path = "runtime_worker_bootstrap.rs"]
 mod runtime_worker_bootstrap;
+#[cfg(all(test, windows))]
+#[path = "runtime_worker_windows_tests.rs"]
+mod runtime_worker_windows_tests;
 
 use self::runtime_process::{
     RuntimeChild, RuntimeLaunchError, RuntimeObservation, RuntimeProcessManager,
@@ -96,6 +102,10 @@ pub struct Supervisor {
     /// One fresh watchdog worker-session identity per Supervisor instance.
     /// It is never restored from durable state or regenerated per request.
     worker_boot_id: String,
+    /// Keep the controller image and release directory immutable while any
+    /// worker may authenticate this supervisor's bootstrap identity.
+    #[cfg(windows)]
+    windows_controller_identity: Option<ascension_platform_windows::CurrentControllerIdentity>,
     /// Worker availability diagnostics are edge-triggered per phase so a
     /// persistent endpoint outage cannot fill the audit log on every loop.
     pub(crate) worker_deferred_phases: BTreeSet<String>,
@@ -188,6 +198,8 @@ impl Supervisor {
             lock: None,
             worker_id: format!("watchdog-{}", Uuid::new_v4()),
             worker_boot_id: Uuid::new_v4().to_string(),
+            #[cfg(windows)]
+            windows_controller_identity: None,
             worker_deferred_phases: BTreeSet::new(),
             worker_phase_pre_failed: false,
             initialized_runtime: false,

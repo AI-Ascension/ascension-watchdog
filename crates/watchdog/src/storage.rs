@@ -740,6 +740,28 @@ impl Store {
         Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY, false)
     }
 
+    /// Hold SQLite's writer reservation while a native worker is authorized
+    /// and resumed. No rows are changed. Dropping this dedicated connection
+    /// rolls back the transaction and releases the reservation, so an operator
+    /// Stop either commits before admission is checked or after resumption.
+    #[cfg(any(windows, test))]
+    pub(crate) fn reserve_worker_admission(self) -> Result<Self> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(self)
+    }
+
+    /// Admission needs at most two rows: one exact intent, or evidence of a
+    /// conflicting unsettled launch. Never collect an unbounded history here.
+    #[cfg(any(windows, test))]
+    pub(crate) fn worker_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE component_id=? AND state <> 'cleaned' LIMIT 2",
+        )?;
+        let rows = statement.query_map([component], launch_intent_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<LaunchIntent>>>()
+            .map_err(Into::into)
+    }
+
     /// Open existing state for a controller that already holds the matching
     /// singleton lock.  No migration, schema creation, or second lock attempt
     /// occurs in this method.

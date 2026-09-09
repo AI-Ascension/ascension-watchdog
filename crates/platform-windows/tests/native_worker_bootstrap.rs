@@ -113,7 +113,7 @@ mod native {
             arguments: Vec::new(),
             environment: BTreeMap::new(),
             working_directory: Some(working_directory.to_owned()),
-            session: SessionSelector::Explicit(0),
+            session: SessionSelector::CurrentService,
             launch_nonce: nonce.to_owned(),
             graceful_timeout_ms: 500,
             force_timeout_ms: 5_000,
@@ -133,6 +133,20 @@ mod native {
         }
     }
 
+    struct ResumeWitness {
+        marker: PathBuf,
+        observed: Arc<AtomicBool>,
+    }
+
+    impl Drop for ResumeWitness {
+        fn drop(&mut self) {
+            // A guard dropped before ResumeThread cannot observe this
+            // child marker. Bound the regression even on that failure.
+            self.observed
+                .store(wait_for_marker(&self.marker).is_ok(), Ordering::Release);
+        }
+    }
+
     #[test]
     fn native_worker_frame_reaches_exclusive_child_stdin() -> Result<(), Box<dyn Error>> {
         let directory = TestDirectory::create()?;
@@ -148,6 +162,11 @@ mod native {
         let worker = WorkerBootstrapLaunch::new(bytes.clone())?;
         let barrier_called = Arc::new(AtomicBool::new(false));
         let barrier_called_by_callback = Arc::clone(&barrier_called);
+        let guard_observed_resumed_child = Arc::new(AtomicBool::new(false));
+        let guard = ResumeWitness {
+            marker: marker.clone(),
+            observed: Arc::clone(&guard_observed_resumed_child),
+        };
         let mut specification = specification;
         specification.arguments = vec![
             "--read-worker-bootstrap".to_owned(),
@@ -158,12 +177,13 @@ mod native {
             &worker,
             move || {
                 barrier_called_by_callback.store(true, Ordering::Release);
-                Ok(())
+                Ok(guard)
             },
         )?;
         assert!(barrier_called.load(Ordering::Acquire));
         assert_eq!(wait_for_marker(&marker)?, bytes);
         assert_eq!(owner.force_stop()?, StopOutcome::Exited);
+        assert!(guard_observed_resumed_child.load(Ordering::Acquire));
         Ok(())
     }
 
@@ -185,7 +205,7 @@ mod native {
         let worker = WorkerBootstrapLaunch::new(frame(br#"{"version":1}"#))?;
         let error = launcher
             .launch_with_worker_bootstrap_and_barrier(&specification, &worker, || {
-                Err(PlatformError::Unavailable(
+                Err::<(), _>(PlatformError::Unavailable(
                     "durable launch authorization denied".to_owned(),
                 ))
             })

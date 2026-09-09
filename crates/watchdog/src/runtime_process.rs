@@ -228,7 +228,7 @@ impl RuntimeProcessManager {
         let native = self
             .ensure_native(config)
             .map_err(RuntimeLaunchError::Ordinary)?
-            .launch(specification, planned_containment, worker)?;
+            .launch(config, specification, planned_containment, worker)?;
         let mut child = self.finish_native_launch(native, |native| {
             native.identity(intent_id, specification, planned_containment, now_ms)
         })?;
@@ -588,10 +588,13 @@ impl NativeBackend {
 
     fn launch(
         &mut self,
+        config: &WatchdogConfig,
         specification: &LaunchSpec,
         planned_containment: &str,
         worker: Option<&crate::worker_bootstrap::WorkerBootstrapLaunch>,
     ) -> std::result::Result<NativeChild, RuntimeLaunchError> {
+        #[cfg(not(windows))]
+        let _ = config;
         match self {
             #[cfg(target_os = "linux")]
             Self::Linux(adapter) => {
@@ -615,11 +618,6 @@ impl NativeBackend {
             }
             #[cfg(windows)]
             Self::Windows(backend) => {
-                if worker.is_some() {
-                    return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
-                        "Windows worker bootstrap delivery is unavailable".to_owned(),
-                    )));
-                }
                 let expected = format!("windows-job:{}", specification.launch_nonce);
                 if planned_containment != expected {
                     return Err(RuntimeLaunchError::Ordinary(
@@ -631,9 +629,33 @@ impl NativeBackend {
                 }
                 let windows_spec =
                     windows_launch_spec(specification).map_err(RuntimeLaunchError::Ordinary)?;
-                backend
-                    .launcher
-                    .launch(&windows_spec)
+                let launched = if let Some(worker) = worker {
+                    let native_frame = ascension_platform_windows::WorkerBootstrapLaunch::new(
+                        worker.frame().to_vec(),
+                    )
+                    .map_err(|error| RuntimeLaunchError::Ordinary(map_windows_error(error)))?;
+                    backend.launcher.launch_with_worker_bootstrap_and_barrier(
+                        &windows_spec,
+                        &native_frame,
+                        || {
+                            super::runtime_worker_admission::authorize(
+                                config,
+                                specification,
+                                planned_containment,
+                                worker,
+                                std::time::Instant::now() + Duration::from_secs(5),
+                            )
+                            .map_err(|error| {
+                                ascension_platform_windows::PlatformError::IdentityMismatch(
+                                    format!("worker pre-resume admission rejected: {error}"),
+                                )
+                            })
+                        },
+                    )
+                } else {
+                    backend.launcher.launch(&windows_spec)
+                };
+                launched
                     .map(NativeChild::Windows)
                     .map_err(|error| match error {
                         ascension_platform_windows::WindowsLaunchError::Ordinary(error) => {
