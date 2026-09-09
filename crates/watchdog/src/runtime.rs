@@ -6,6 +6,8 @@ pub(crate) mod runtime_admin;
 pub(crate) mod runtime_process;
 #[path = "runtime_worker.rs"]
 pub(crate) mod runtime_worker;
+#[path = "runtime_worker_bootstrap.rs"]
+mod runtime_worker_bootstrap;
 
 use self::runtime_process::{
     RuntimeChild, RuntimeLaunchError, RuntimeObservation, RuntimeProcessManager,
@@ -551,6 +553,15 @@ impl Supervisor {
                 )?;
                 continue;
             };
+            if self
+                .config
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.component_id == component.id)
+            {
+                self.retire_recovered_worker(&component, &intent, child, now_ms)?;
+                continue;
+            }
             let observation = match self.process_manager.inspect(&mut child) {
                 Ok(observation) => observation,
                 Err(error) => {
@@ -1271,6 +1282,7 @@ impl Supervisor {
         let status = self.store.status()?;
         let incarnation = runtime_incarnation(status.restart_generation)?;
         let launch_nonce = Uuid::new_v4().to_string();
+        let worker_bootstrap = self.prepare_worker_bootstrap(component, &launch_nonce)?;
         let specification =
             launch_spec_for(&self.config, component, launch_nonce.clone(), incarnation)?;
         // Native capability is established before the durable intent.  This
@@ -1289,6 +1301,9 @@ impl Supervisor {
             Some(&planned_containment),
             now_ms,
         )?;
+        if let Some(worker) = worker_bootstrap.as_ref() {
+            self.bind_prepared_worker_bootstrap(component, &intent, worker, now_ms)?;
+        }
         // Stop/pause may have committed while capability probing and intent
         // preparation were in flight.  The fresh durable read is the final
         // admission barrier.
@@ -1327,6 +1342,7 @@ impl Supervisor {
             &planned_containment,
             &intent.id,
             now_ms,
+            worker_bootstrap.as_ref(),
         ) {
             Ok(child) => child,
             Err(RuntimeLaunchError::CleanupUncertain(error)) => {

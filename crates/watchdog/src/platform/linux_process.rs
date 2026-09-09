@@ -1103,7 +1103,7 @@ fn read_live_process_for_executable(
     })?;
     let start_ticks = parse_start_ticks(&stat)
         .ok_or_else(|| AdapterError::Io(format!("process {pid} has malformed /proc stat data")))?;
-    let executable = fs::canonicalize(format!("/proc/{pid}/exe")).map_err(|error| {
+    let executable = fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             AdapterError::Unavailable(format!("process {pid} executable is gone"))
         } else {
@@ -1314,7 +1314,7 @@ fn read_live_process(boot_id: &str, pid: u32) -> Result<LiveProcess, AdapterErro
     })?;
     let start_ticks = parse_start_ticks(&stat)
         .ok_or_else(|| AdapterError::Io(format!("process {pid} has malformed /proc stat data")))?;
-    let executable = fs::canonicalize(format!("/proc/{pid}/exe")).map_err(|error| {
+    let executable = fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             AdapterError::Unavailable(format!("process {pid} executable is gone"))
         } else {
@@ -1543,6 +1543,43 @@ mod tests {
     use std::fs;
     use std::process::{Child, Command};
     use tempfile::tempdir;
+
+    #[test]
+    fn sealed_memfd_process_is_observed_without_canonicalizing_deleted_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use rustix::fs::{MemfdFlags, fcntl_add_seals, memfd_create};
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        let source = fs::canonicalize("/bin/sleep")?;
+        let mut image = fs::File::from(memfd_create(
+            "ascension-sealed-observation-test",
+            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+        )?);
+        std::io::copy(&mut fs::File::open(&source)?, &mut image)?;
+        fcntl_add_seals(
+            &image,
+            SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL,
+        )?;
+        let mut child = ChildGuard(Some(
+            Command::new(format!("/proc/self/fd/{}", image.as_raw_fd()))
+                .arg0("sleep")
+                .arg("30")
+                .spawn()?,
+        ));
+        let pid = child.as_mut().id();
+        let digest = hash_live_executable(pid)?;
+        let observed = read_live_process("test-boot", pid)?;
+        assert!(observed.executable_sealed);
+        assert!(is_sealed_memfd(&observed.executable));
+        assert!(live_process_matches_executable(&observed, &source, &digest));
+        let normalized = read_live_process_for_executable("test-boot", pid, &source)?
+            .expect("sealed image observation");
+        assert_eq!(normalized.executable, source);
+        assert_eq!(normalized.executable_sha256, digest);
+        assert!(normalized.executable_sealed);
+        child.reap()?;
+        Ok(())
+    }
 
     struct ChildGuard(Option<Child>);
 

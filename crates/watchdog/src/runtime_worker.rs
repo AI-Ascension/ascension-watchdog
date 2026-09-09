@@ -388,6 +388,18 @@ impl Supervisor {
         let Some(child) = self.children.get_mut(&worker.component_id) else {
             return Ok(None);
         };
+        if !self.config.allow_synthetic_children {
+            let binding = self.store.worker_bootstrap_binding(child.intent_id())?;
+            if !super::runtime_worker_bootstrap::current_binding(
+                child.worker_bootstrap_binding(),
+                binding.as_ref(),
+                &self.worker_boot_id,
+            ) {
+                return Err(WorkerPhaseError::Unavailable(WatchdogError::Conflict(
+                    "worker bootstrap is not owned by the current supervisor".to_owned(),
+                )));
+            }
+        }
         // Do not construct transport authority from a durable row or from a
         // stale in-memory identity. The platform adapter's point-in-time
         // observation must first prove that this exact owned child is live;
@@ -399,6 +411,16 @@ impl Supervisor {
             return Ok(None);
         }
         let identity = child.identity().clone();
+        #[cfg(target_os = "linux")]
+        let peer = if child.is_native() {
+            WorkerPeerIdentity::from_owned_linux_process(
+                &identity,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )?
+        } else {
+            WorkerPeerIdentity::from_process_identity(&identity)?
+        };
+        #[cfg(not(target_os = "linux"))]
         let peer = WorkerPeerIdentity::from_process_identity(&identity)?;
         #[cfg(windows)]
         let peer = {
