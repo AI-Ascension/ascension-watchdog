@@ -32,8 +32,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// A liveness witness from an authenticated worker probe.
+///
+/// This stays in memory for one reconciliation only.  The complete child
+/// identity and launch nonce are retained so a worker response cannot be
+/// reused after the supervisor's owned child has been replaced.  `observed_at`
+/// is monotonic and is intentionally not persisted as a wall-clock value.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkerHeartbeatWitness {
+    pub(crate) component_id: String,
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) worker_boot_id: String,
+    pub(crate) observed_at: Instant,
+}
 
 /// A single loop's bounded result, useful for diagnostics and tests.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -109,6 +123,9 @@ pub struct Supervisor {
     /// Worker availability diagnostics are edge-triggered per phase so a
     /// persistent endpoint outage cannot fill the audit log on every loop.
     pub(crate) worker_deferred_phases: BTreeSet<String>,
+    /// One authenticated worker liveness witness for the current
+    /// reconciliation.  Process liveness alone never populates this field.
+    pub(crate) worker_heartbeat: Option<WorkerHeartbeatWitness>,
     /// A soft failure in the pre-scheduling worker phase gates fresh claims
     /// for the rest of this reconciliation.  The post phase may still retry
     /// control/recovery, but it cannot turn a later healthy probe into a
@@ -201,6 +218,7 @@ impl Supervisor {
             #[cfg(windows)]
             windows_controller_identity: None,
             worker_deferred_phases: BTreeSet::new(),
+            worker_heartbeat: None,
             worker_phase_pre_failed: false,
             initialized_runtime: false,
         }
@@ -278,6 +296,10 @@ impl Supervisor {
     /// corresponding intent/audit and restart-budget records commit.
     pub fn reconcile_once(&mut self, now_ms: u64) -> Result<ReconcileReport> {
         self.acquire_lock()?;
+        // Worker liveness is a same-pass proof.  Never let an authenticated
+        // response from an earlier loop survive a child replacement or a
+        // failed probe/control exchange.
+        self.worker_heartbeat = None;
         let first_reconcile = !self.initialized_runtime;
         if first_reconcile {
             self.store.quarantine_interrupted_jobs(now_ms)?;
@@ -1166,7 +1188,7 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|record| record.started_at_ms)
                 .unwrap_or(now_ms),
-            heartbeat_age_ms: None,
+            heartbeat_age_ms: self.worker_heartbeat_age_ms(&component.id),
             progress_age_ms: None,
             consecutive_misses: 0,
             restart_attempts: prior.as_ref().map_or(0, |record| record.restart_attempts),
@@ -1280,6 +1302,21 @@ impl Supervisor {
             }
         }
         Ok(decision)
+    }
+
+    /// Return the monotonic age of the authenticated worker proof for this
+    /// exact currently-owned child.  A missing or mismatched proof remains
+    /// `None`, preserving the policy's missing-heartbeat quarantine behavior.
+    fn worker_heartbeat_age_ms(&self, component_id: &str) -> Option<u64> {
+        let witness = self.worker_heartbeat.as_ref()?;
+        let child = self.children.get(component_id)?;
+        if witness.component_id != component_id
+            || witness.identity.launch_nonce != child.identity().launch_nonce
+            || witness.identity != *child.identity()
+        {
+            return None;
+        }
+        u64::try_from(witness.observed_at.elapsed().as_millis()).ok()
     }
 
     fn start_component(

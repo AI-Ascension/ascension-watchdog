@@ -21,6 +21,10 @@ use crate::worker_protocol::{
 };
 use std::time::{Duration, Instant};
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "runtime_worker_heartbeat_tests.rs"]
+mod heartbeat_tests;
+
 /// The worker phase is bounded to one historical recovery and one fresh claim
 /// per reconciliation.  The store itself is the second line of defense and
 /// refuses claims while any unresolved handoff remains.
@@ -139,10 +143,12 @@ impl Supervisor {
         let client = match self.worker_client(&worker_config, budget) {
             Ok(client) => client,
             Err(error) => {
+                self.clear_worker_heartbeat();
                 return self.defer_worker_error("client", error, now_ms, pre_phase, report);
             }
         };
         let Some(client) = client else {
+            self.clear_worker_heartbeat();
             // A paused/stopped controller does not start a missing worker. A
             // running controller will get another attempt after component
             // scheduling, where a newly launched child can be adopted only
@@ -154,13 +160,22 @@ impl Supervisor {
         let probe = match client.probe_phase() {
             Ok(probe) => probe,
             Err(error) => {
+                self.clear_worker_heartbeat();
                 return self.defer_worker_error("probe", error, now_ms, pre_phase, report);
             }
         };
         self.worker_phase_succeeded("probe");
-        let worker_boot_id = probe.header.worker_boot_id.clone().ok_or_else(|| {
-            WatchdogError::IdentityMismatch("worker probe omitted its live boot".to_owned())
-        })?;
+        let Some(worker_boot_id) = probe.header.worker_boot_id.clone() else {
+            self.clear_worker_heartbeat();
+            return Err(WatchdogError::IdentityMismatch(
+                "worker probe omitted its live boot".to_owned(),
+            ));
+        };
+        self.capture_worker_heartbeat(
+            &worker_config.component_id,
+            &worker_boot_id,
+            Instant::now(),
+        )?;
         let control =
             match self.ensure_worker_control(&client, &worker_boot_id, desired_mode, now_ms) {
                 Ok(control) => control,
@@ -270,6 +285,13 @@ impl Supervisor {
         if component.state != ComponentState::Running {
             return Ok(());
         }
+        if !self.worker_heartbeat_matches_current(&worker_config.component_id, &worker_boot_id) {
+            // The response was authenticated, but it no longer describes the
+            // exact child retained by this supervisor.  A stale/sibling proof
+            // cannot promote a queue claim.
+            self.clear_worker_heartbeat();
+            return Ok(());
+        }
         // This read is deliberately after control/recovery and is the only
         // path that can supply the exact worker binding/control witness to the
         // client claim API. The client performs its own fresh ready probe and
@@ -305,10 +327,16 @@ impl Supervisor {
             );
         }
         if claim_probe.header.worker_boot_id.as_deref() != Some(worker_boot_id.as_str()) {
+            self.clear_worker_heartbeat();
             return Err(WatchdogError::IdentityMismatch(
                 "worker claim probe boot differs from the control witness".to_owned(),
             ));
         }
+        self.capture_worker_heartbeat(
+            &worker_config.component_id,
+            &worker_boot_id,
+            Instant::now(),
+        )?;
         let Some(claim) = self.store.claim_next_worker_handoff(&witness, now_ms)? else {
             return Ok(());
         };
@@ -452,6 +480,47 @@ impl Supervisor {
             .map_err(WorkerPhaseError::from_client_error)
     }
 
+    /// Retain a fresh authenticated probe only alongside the exact child that
+    /// supplied the transport peer identity.  The witness is deliberately
+    /// in-memory and monotonic; it is never restored from durable state.
+    fn capture_worker_heartbeat(
+        &mut self,
+        component_id: &str,
+        worker_boot_id: &str,
+        observed_at: Instant,
+    ) -> Result<()> {
+        let Some(child) = self.children.get(component_id) else {
+            self.clear_worker_heartbeat();
+            return Err(WatchdogError::IdentityMismatch(
+                "authenticated worker probe has no currently-owned child".to_owned(),
+            ));
+        };
+        self.worker_heartbeat = Some(super::WorkerHeartbeatWitness {
+            component_id: component_id.to_owned(),
+            identity: child.identity().clone(),
+            worker_boot_id: worker_boot_id.to_owned(),
+            observed_at,
+        });
+        Ok(())
+    }
+
+    fn worker_heartbeat_matches_current(&self, component_id: &str, worker_boot_id: &str) -> bool {
+        let Some(witness) = self.worker_heartbeat.as_ref() else {
+            return false;
+        };
+        let Some(child) = self.children.get(component_id) else {
+            return false;
+        };
+        witness.component_id == component_id
+            && witness.worker_boot_id == worker_boot_id
+            && witness.identity == *child.identity()
+            && witness.identity.launch_nonce == child.identity().launch_nonce
+    }
+
+    fn clear_worker_heartbeat(&mut self) {
+        self.worker_heartbeat = None;
+    }
+
     fn ensure_worker_control(
         &mut self,
         client: &WorkerClient,
@@ -516,6 +585,9 @@ impl Supervisor {
         pre_phase: bool,
         report: &mut super::ReconcileReport,
     ) -> Result<()> {
+        // A failed exchange invalidates any probe proof retained for this
+        // pass, regardless of whether the transport error is soft or fatal.
+        self.clear_worker_heartbeat();
         match error {
             WorkerPhaseError::Unavailable(error) => {
                 if pre_phase {
