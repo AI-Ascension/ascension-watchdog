@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-checkpoint-not-a-release",
+  "observed_at_utc": "2026-09-09T07:44:02Z",
+  "remote_candidates": {
+    "ascension-watchdog": {
+      "commit": "280906818eacca46b48998ffbe452194b851cba5",
+      "pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/5",
+      "state": "OPEN",
+      "draft": true,
+      "ci_run": 34320515164,
+      "ci": "Linux synthetic, Windows synthetic, and dependency/license checks passed"
+    },
+    "sts2-harness": {
+      "commit": "baabf9767264de11e09cd65cc7262ba36664ec2d",
+      "pr": "https://github.com/AI-Ascension/sts2-harness/pull/40",
+      "state": "OPEN",
+      "draft": true,
+      "ci_runs": [34322600518, 34322600468],
+      "ci": "Rust quality and repository policy passed",
+      "qualification": "Earlier run 34321689326 failed an image-peer test; diagnostics were added, but its intermittent cause is not established."
+    }
+  },
+  "native_evidence": {
+    "windows_watchdog_owner_lifecycle": "Seven focused native tests passed; not service installation or Session 0 evidence.",
+    "windows_fault_fixture": "Nine native tests passed, including a non-reading-peer write deadline.",
+    "linux_real_harness": "Authenticated Running control reached, but queued job handoff failed. Failed fixtures were retained with durable Stopped intent; this is not an integration pass.",
+    "windows_real_harness": "Native transport implementation remains isolated under independent review. Root reran ten package tests on Windows: nine pure contract tests and one native overlapped-read timeout passed in 0.29 seconds. Authentication, ACL, peer-identity and full worker exchange remain unverified."
+  },
+  "harness_build": {
+    "source_commit": "baabf9767264de11e09cd65cc7262ba36664ec2d",
+    "command": "cargo build --locked --release -p sts2-harness --bin sts2-harness-runtime -j 2",
+    "exit_code": 0,
+    "artifact_sha256": "77d90b453f5d075bd035e5773e1182014fc303797da65eef1208d159df4ebcf2",
+    "qualification": "Incremental exact-source release build in a clean worktree; not a clean-room cross-repository release build."
+  },
+  "pending_work": [
+    {
+      "owner": "worker_image_review",
+      "subject": "Same-pass authenticated worker heartbeat",
+      "status": "locally integrated; root full Linux workspace, strict clippy and formatting passed; independent review and real second-reconciliation claim remain pending",
+      "reviewer": "linux_pipe_review",
+      "review_qualification": "Prior sealed_peer_review turn failed at the account usage limit before returning a verdict."
+    },
+    {
+      "owner": "harness_conflict_audit",
+      "subject": "Systemd-bounded real-worker smoke cleanup",
+      "status": "root repaired helper bounds and removed name-based scope stop; six focused checks passed; not integrated or natively verified",
+      "reviewer": "worker_image_review"
+    },
+    {
+      "owner": "windows_admission_review",
+      "subject": "Native Windows worker IPC",
+      "status": "repair required: asynchronous memory ownership, deadline enforcement, identity parsing, secret cleanup, and protected-path policy; native fault matrix outstanding"
+    },
+    {
+      "owner": "release_activation_lead",
+      "subject": "Protected staged release capability and selection storage",
+      "status": "isolated candidate under repair; no selector, CLI activation, or runtime integration yet"
+    }
+  ],
+  "agent_reservations": {
+    "descendant_ceiling": 12,
+    "existing_descendants": 7,
+    "reserved_nested_slots": 0,
+    "required_model": "gpt-5.6-luna",
+    "required_effort": "max",
+    "three_descendant_levels_verified": false,
+    "qualification": "Windows author reported its actual schema has no spawn_agent, send_message, followup_task, or collaboration capability. The two nested reservations were released; no alternate client was used. One additional root-level independent Windows reviewer was requested with explicit Luna/max arguments. Neither requested settings nor this shallow task proves the required depth-three execution."
+  },
+  "windows_ipc_package_test": {
+    "artifact_sha256": "5d74f8a91c983a6f4f82aeceeff0bef9888fba421d03f5f37ed32d4944816ca8",
+    "native_tests_passed": 10,
+    "native_tests_failed": 0,
+    "test_elapsed_seconds": 0.29,
+    "outer_process_deadline_seconds": 20,
+    "outer_kill_reap_seconds": 5,
+    "outer_kill_required": false,
+    "source_status": "isolated uncommitted Windows transport candidate, not integrated harness"
+  },
+  "implementation_complete": false,
+  "synthetic_integration_verified": false,
+  "windows_service_verified": false,
+  "live_host_recovery_verified": false,
+  "cold_boot_recovery_verified": false,
+  "soak_verified": false,
+  "merged_this_checkpoint": false,
+  "installed_services_this_checkpoint": false,
+  "launched_games_or_providers_this_checkpoint": false,
+  "rebooted_hosts_this_checkpoint": false,
+  "activated_releases_this_checkpoint": false
+}
