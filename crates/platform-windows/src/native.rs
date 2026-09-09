@@ -2765,7 +2765,14 @@ impl SecurityDescriptor {
     }
 
     fn owner_only() -> Result<Self, PlatformError> {
-        let descriptor = wide("D:P(A;;GA;;;OW)")?;
+        // `OW` in the protected DACL grants access to the security descriptor
+        // owner, but omitting the descriptor's owner lets Windows choose the
+        // token's default-owner SID. An elevated service token may default to
+        // the Administrators group even though `TokenUser` is the service
+        // account, which would make a reopened named object fail the strict
+        // owner check. Bind the owner explicitly to the current token user.
+        let owner_sid = crate::admin_pipe::process_user_sid(unsafe { GetCurrentProcess() })?;
+        let descriptor = wide(&format!("O:{owner_sid}D:P(A;;GA;;;OW)"))?;
         let mut raw = null_mut();
         let mut size = 0_u32;
         let ok = unsafe {
@@ -3547,9 +3554,14 @@ mod tests {
             &std::env::current_exe()
                 .map_err(|error| PlatformError::Io(format!("test executable: {error}")))?,
         )?;
+        // Installation canonicalizes the config before handing it to SCM;
+        // build both fixtures from that same representation so this test
+        // exercises binding rather than a platform-specific path spelling.
+        let expected_canonical = canonicalize_service_config_path(&expected_config)?;
+        let other_canonical = canonicalize_service_config_path(&other_config)?;
         let command_line = crate::service_command::render_service_command_line(
             executable.to_string_lossy().as_ref(),
-            other_config.to_string_lossy().as_ref(),
+            other_canonical.to_string_lossy().as_ref(),
         );
         let service_config = ServiceConfig {
             service_type: ServiceType::OWN_PROCESS,
@@ -3562,29 +3574,37 @@ mod tests {
             account_name: None,
             display_name: "test".into(),
         };
-        let expected_canonical = canonicalize_service_config_path(&expected_config)?;
         let result =
             validate_installed_service_config(&service_config, &executable, &expected_canonical);
         assert!(matches!(result, Err(PlatformError::IdentityMismatch(_))));
         let mut service_config = service_config;
         service_config.executable_path = crate::service_command::render_service_command_line(
             executable.to_string_lossy().as_ref(),
-            expected_config.to_string_lossy().as_ref(),
+            expected_canonical.to_string_lossy().as_ref(),
         )
         .into();
         for start_type in [ServiceStartType::OnDemand, ServiceStartType::Disabled] {
             service_config.start_type = start_type;
-            assert!(
-                validate_installed_service_config(
-                    &service_config,
-                    &executable,
-                    &expected_canonical,
-                )
-                .is_ok()
-            );
+            validate_installed_service_config(&service_config, &executable, &expected_canonical)?;
         }
         let _ = std::fs::remove_dir_all(directory);
         Ok(())
+    }
+
+    #[test]
+    fn newly_created_job_owner_matches_current_token_user() -> Result<(), PlatformError> {
+        let nonce = format!(
+            "owner-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        );
+        let job = create_job(&job_name(&nonce)?, 1)?;
+        // create_job performs the same check before returning. Keep the
+        // explicit assertion here so the regression directly covers a fresh
+        // descriptor and the current TokenUser SID used by reopen recovery.
+        verify_job_owner(&job)
     }
 
     #[test]
