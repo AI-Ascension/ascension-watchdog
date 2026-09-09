@@ -1567,6 +1567,21 @@ mod tests {
                 .spawn()?,
         ));
         let pid = child.as_mut().id();
+        let expected_image = rustix::fs::fstat(&image)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let current = fs::File::open(format!("/proc/{pid}/exe"))?;
+            let observed = rustix::fs::fstat(&current)?;
+            if observed.st_dev == expected_image.st_dev && observed.st_ino == expected_image.st_ino
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sealed fixture did not exec its held image"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let digest = hash_live_executable(pid)?;
         let observed = read_live_process("test-boot", pid)?;
         assert!(observed.executable_sealed);

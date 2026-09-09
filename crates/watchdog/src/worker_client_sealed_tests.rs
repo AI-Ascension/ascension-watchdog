@@ -176,6 +176,21 @@ fn native_peer_capture_rejects_unsealed_and_incomplete_images()
             .spawn()?,
     );
     let deadline = Instant::now() + Duration::from_secs(5);
+    let expected_image = linux_file_identity(&image)?;
+    // Some Linux spawn paths return before procfs switches from the parent
+    // image to the requested child image. Wait for this exact held inode;
+    // elapsed time or an arbitrary memfd name is not a readiness witness.
+    loop {
+        let current = File::open(format!("/proc/{}/exe", child.0.id()))?;
+        if linux_file_identity(&current)? == expected_image {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "unsealed fixture did not exec its held image"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let ticks = process_start_token(child.0.id(), deadline)?;
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
     let identity = crate::ProcessIdentity {
