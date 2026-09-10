@@ -11,47 +11,47 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "38252ddfc5eb4f47233bad80f153739728a43742",
-      "last_observed_pr_head": "acd4976c88eab958f4b6dcae657ab83ffe2baa91",
+      "revision": "fbe3aed82c6500c373a5a5169e410792caf54d38",
+      "last_observed_pr_head": "fbe3aed82c6500c373a5a5169e410792caf54d38",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; source-tested-at-38252; documentation-followups-after-captured-head; hosted-checks-pass-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; source-tested-at-fbe3aed; hosted-checks-running-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
-      "revision": "7272c17f07e1d7e79c82f498eac0855794d476f5",
+      "revision": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",
       "ref": "codex/gateway-allocation-cleanup-integration",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 35,
-      "state": "open-draft; current-main-merged; hosted-checks-pass; not-merged"
+      "state": "merged; merge-commit-2cf9127; hosted-checks-pass; current-main"
     },
     "sts2-harness": {
-      "revision": "427176512eac67257a1b065f8508f37d2ed2255c",
+      "revision": "e5029f1023f8a4df676e537298b1efc19ef00e6c",
       "ref": "codex/harness-integrated-pr54-pr55-20260910",
       "remote": "AI-Ascension/sts2-harness",
       "pull_request": 56,
-      "state": "open-draft; current-main-based; hosted-checks-pass; not-merged"
+      "state": "merged; merge-commit-e5029f1; hosted-checks-pass; current-main"
     },
     "sts2-mcp-server": {
-      "revision": "16ca0cb06dc93564c14963bc544bef282b38d26d",
+      "revision": "a6b9215db1ddeeddabe4c111ed3b49476fb86e54",
       "ref": "codex/workflow-authority-mapping",
       "remote": "AI-Ascension/sts2-mcp-server",
       "pull_request": 37,
       "state": "merged; hosted-checks-pass; merge-commit-a6b9215"
     },
     "sts2-game-mod": {
-      "revision": "152c555633672bddcfa8280b290f6bd67afd564c",
+      "revision": "e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5",
       "ref": "codex/game-mod-rest-current-main-20260910",
       "remote": "AI-Ascension/sts2-game-mod",
       "pull_request": 70,
-      "state": "open-draft; current-main-based; hosted-checks-pass; mergeable; not-merged"
+      "state": "merged; merge-commit-e532f4d; hosted-checks-pass; current-main"
     },
     "sts2-protocol": {
       "revision": "5e43193cb5da17a5b772caa0f0fff49180cf716d",
       "ref": "recovery/coop-native-admitted-20260910",
       "remote": "AI-Ascension/sts2-protocol",
       "pull_request": 31,
-      "state": "open-draft; current-main-based; hosted-checks-pass; mergeable; not-merged"
+      "state": "open-draft; conflicting-after-protocol-24-merge; hosted-checks-pass-at-old-head; rebase-required; not-merged"
     },
     "sts2-game-core": {
       "revision": "9a27a80c32dcadd8030cf42c861e9e5da4daed1c",
@@ -69,7 +69,7 @@
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-pr-heads-2026-09-10",
+    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10",
     "cross_consumer_build": "not-run",
     "live_host": "not-run",
     "cold_boot": "not-run",
