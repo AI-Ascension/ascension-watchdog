@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-10",
+  "classification": "component-build-and-artifact-audit-not-release-admission",
+  "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
+  "source_set": {
+    "ascension-watchdog": {
+      "tested_source": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "remote_pr": 9,
+      "remote_pr_head_at_capture": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "ref": "codex/watchdog-integrated-20260910"
+    },
+    "sts2-gateway": {
+      "tested_source": "0524b67ec28791c007d2ea025e26860672358247",
+      "selected_remote_revision": "5f3eadabede9954bc834a62e3c4c1003444826ca",
+      "remote_pr": 37,
+      "ref": "main"
+    },
+    "sts2-harness": {
+      "tested_source": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "selected_remote_revision": "5cc486a66b6f11930675af06f7426cd91c609983",
+      "remote_pr": 59,
+      "ref": "main"
+    },
+    "sts2-mcp-server": {
+      "selected_remote_revision": "8b6b73862494488fdd16fa5423fdf90a953260f4",
+      "remote_pr": 37,
+      "ref": "main"
+    },
+    "sts2-game-mod": {
+      "tested_source": "152c555633672bddcfa8280b290f6bd67afd564c",
+      "selected_remote_revision": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
+      "remote_pr": 70,
+      "ref": "main"
+    },
+    "sts2-protocol": {
+      "tested_source": "09819e2216354136ab5a799413dcd98499f56580",
+      "selected_remote_revision": "09819e2216354136ab5a799413dcd98499f56580",
+      "remote_pr": 33,
+      "ref": "codex/coop-native-current-main-20260910",
+      "state": "open-draft"
+    },
+    "sts2-game-core": {
+      "selected_remote_revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
+      "remote_pr": 9,
+      "ref": "main"
+    },
+    "ai-agent-observability": {
+      "selected_remote_revision": "d7e79e1a9663601013e513048caea7063b0de9ae",
+      "remote_pr": 16,
+      "ref": "main"
+    }
+  },
+  "component_gates": {
+    "watchdog": {
+      "commands": [
+        "cargo +1.97.1 fmt --all -- --check",
+        "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .",
+        "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features",
+        "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings",
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
+      ],
+      "result": "pass-local; hosted-run-pending"
+    },
+    "sts2-gateway": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "pass-local-on-tested-source; hosted-checks-pass"
+    },
+    "sts2-harness": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "pass-local-on-tested-source; hosted-checks-pass"
+    },
+    "sts2-game-mod": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "pass-local-on-tested-source; hosted-checks-pass"
+    },
+    "sts2-protocol": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "pass-local-on-tested-source; hosted-checks-pass"
+    }
+  },
+  "artifact_byte_comparison": {
+    "compared_worktrees": [
+      "sts2-gateway",
+      "sts2-harness",
+      "sts2-game-mod",
+      "sts2-protocol"
+    ],
+    "comparison_method": "sha256sum of each artifact manifest.json and schema.json",
+    "artifacts": {
+      "runtime-v3-gameplay": {
+        "manifest_sha256": "92e5167a53000da7bcd068821ef7a7287b293640cd926b4100b9c725c86c8ab8",
+        "schema_sha256": "8e99cea36b7ede97532348fd8efe302ca79260895265a7bf14ddf7e006d8ff63"
+      },
+      "runtime-v4-expert-action": {
+        "manifest_sha256": "d0d8c8be38787fc3b8c11657bca6e627a56be31aa858a8cd9cfab8253a4e97f5",
+        "schema_sha256": "393318bda8c3522c0ecbacc78b95471a9f4dc3f825169d2048f4c74a7b7f2929"
+      },
+      "runtime-v4-expert-rest-action": {
+        "manifest_sha256": "a552ce46256513fa8bc9b4dbd24cd05540c01dbd8e48f68dbe579a975ecf296d",
+        "schema_sha256": "bb3555fae28eb1f79d08a15e9884696a579e4c20836f5016509f17e0f4c36fbd"
+      },
+      "runtime-v4-expert": {
+        "manifest_sha256": "20465efcafbc5aa6245c8e37024ce64c25a2dec04d0df7424d6aa2d9aa9a3275",
+        "schema_sha256": "0ee034d5da83f34e9fa0ba23038738d56ef8cfccb1c6e752af3ab63d212c8e42"
+      },
+      "seeded-run-v1": {
+        "manifest_sha256": "1b504a25c1f1f0cd8bf4a61d07b8457c32e3f481c0810f407d750510c692fc09",
+        "schema_sha256": "5c659f344be78f84e8d783986925d462714f933cac95d18943358992f7d3e2b8"
+      },
+      "runtime-v2": {
+        "manifest_sha256": "3aa96568f6b810170862b95e262b65201f5568723cba410139f1c1cf1d154152",
+        "schema_sha256": "f7963b19c8ed5bbdc02c08e83c7a2e16c4771ed5eb798b29a8208d7a917a86c2"
+      }
+    },
+    "result": "byte-identical-across-compared-worktrees"
+  },
+  "release_boundary": {
+    "cross_repository_clean_build": "not-run",
+    "cross_consumer_conformance": "not-run",
+    "native_windows_service": "not-run; hosted watchdog validation pending",
+    "native_linux_service": "not-run",
+    "live_host": "not-run",
+    "cold_boot": "not-run",
+    "activation_rollback": "not-run",
+    "soak": "not-run",
+    "admission": "blocked-until-cross-consumer-and-native-gates"
+  }
+}

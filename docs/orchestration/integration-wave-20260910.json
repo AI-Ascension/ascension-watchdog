@@ -5,12 +5,12 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "fa0787620e768266c683da178c81b5af7198bc39",
-    "watchdog_source_tested_commit": "fa0787620e768266c683da178c81b5af7198bc39",
+    "watchdog_commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+    "watchdog_source_tested_commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "fa0787620e768266c683da178c81b5af7198bc39",
-    "hosted_runs": [34501110421, 34501117723],
-    "hosted_run_status_at_capture": "in-progress; exact PR head fa07876; standards jobs passed; Ubuntu, Windows, and dependency jobs pending"
+    "watchdog_last_observed_pr_head": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+    "hosted_runs": [34504169316, 34504170328],
+    "hosted_run_status_at_capture": "in-progress; exact PR head 0b1199c; component fixes locally pass; Ubuntu, Windows, and dependency jobs pending"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -29,8 +29,8 @@
   },
   "results": {
     "watchdog": {
-      "commit": "fa0787620e768266c683da178c81b5af7198bc39",
-      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, and Linux install/uninstall idempotence coverage",
+      "commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, bounded Windows publication retry, protected config fixtures, and Linux install/uninstall idempotence coverage",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
         "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .: pass",
@@ -39,27 +39,27 @@
         "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (200 watchdog library tests; all workspace integration suites; 4 ignored)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
-        "Windows hosted predecessor failed only on restore-handle publication; fa07876 closes the source handle before rename and its hosted rerun was in progress at capture"
+        "Windows hosted run 34503841064 failed at lint for a test-only raw-string style issue; 0b1199c corrects it and starts fresh runs 34504169316/34504170328"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is in progress for exact source head fa07876"
+      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is in progress for exact source head 0b1199c"
     },
     "gateway": {
-      "commit": "0524b67ec28791c007d2ea025e26860672358247",
-      "branch": "codex/gateway-host-lease-consumer-current-main",
+      "commit": "5f3eadabede9954bc834a62e3c4c1003444826ca",
+      "branch": "main",
       "pr": 37,
-      "remote_head": "0524b67ec28791c007d2ea025e26860672358247",
+      "remote_head": "5f3eadabede9954bc834a62e3c4c1003444826ca",
       "change": "durable Runtime-v3 UNKNOWN for malformed SETTLED receipts and replay without redispatch or catalog consultation",
       "verification": "175 runtime tests, 11 control-plane tests, 7 recovery tests, and all workspace suites passed locally; hosted Rust-quality and repository-policy checks passed",
-      "delivery": "pushed as draft PR #37; mergeable; not merged; based on current main 2cf9127"
+      "delivery": "PR #37 merged; current main is 5f3eadab"
     },
     "harness": {
-      "commit": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
-      "branch": "codex/harness-pr58-regression-20260910",
+      "commit": "5cc486a66b6f11930675af06f7426cd91c609983",
+      "branch": "main",
       "pr": 59,
-      "remote_head": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "remote_head": "5cc486a66b6f11930675af06f7426cd91c609983",
       "change": "provider completion retries bind result reference, digest metadata, and payload; conflicting reuse is rejected",
       "verification": "strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
-      "delivery": "pushed as draft PR #59; mergeable; not merged; follows merged PR #58"
+      "delivery": "PR #59 merged; current main is 5cc486a6"
     },
     "protocol": {
       "commit": "09819e2216354136ab5a799413dcd98499f56580",
@@ -72,8 +72,8 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to tested watchdog commit fa0787620e768266c683da178c81b5af7198bc39 and exact open follow-up heads 0524b67 and fcd1f68.",
-    "Rebuild the exact companion release set from watchdog fa07876, gateway PR37 0524b67, harness PR59 fcd1f68, MCP a6b9215, game-mod e532f4d, game-core f9db577, observability a126715, and protocol PR33 09819e2; run cross-consumer conformance before any runtime claim.",
+    "Keep candidate manifest source-pinned to tested watchdog commit 0b1199c8580088e9b1779e118289a4e1ea5df64f and protocol PR33 head 09819e2.",
+    "Use docs/evidence/release-set-verification-20260910.json for the exact merged companion revisions, isolated component gates, and artifact-byte comparison; run cross-consumer conformance before any runtime claim.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

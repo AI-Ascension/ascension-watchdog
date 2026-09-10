@@ -5,8 +5,45 @@ use super::*;
 use crate::config::{GatewayHealthConfig, WatchdogConfig};
 use crate::platform::gateway_health::GatewayHealthFrameBinding;
 use std::collections::BTreeMap;
+#[cfg(windows)]
+use std::process::Command;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+#[cfg(windows)]
+fn protect_test_directory(path: &std::path::Path) -> TestResult {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', $inheritance, 'None', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_DIRECTORY -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_DIRECTORY", path)
+        .status()?;
+    if !status.success() {
+        return Err("PowerShell failed to apply test directory ACL".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)]
+fn protect_test_directory(_path: &std::path::Path) -> TestResult {
+    Ok(())
+}
 
 fn configured(root: &std::path::Path) -> WatchdogConfig {
     let health = GatewayHealthConfig {
@@ -320,6 +357,7 @@ fn failed_binding_cleans_unlaunched_intent_and_synthetic_health_is_rejected() ->
 #[test]
 fn health_backup_restore_requires_fresh_consistent_identity_and_same_approval() -> TestResult {
     let directory = tempfile::tempdir()?;
+    protect_test_directory(directory.path())?;
     let config = configured(directory.path());
     let store = crate::storage::Store::initialize(&config.database, &config)?;
     let backup = directory.path().join("backup.sqlite");

@@ -39,9 +39,43 @@ Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
 #[cfg(not(windows))]
 fn protect_config(_path: &Path) {}
 
+#[cfg(windows)]
+fn protect_test_directory(path: &Path) {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', $inheritance, 'None', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_DIRECTORY -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_DIRECTORY", path)
+        .status()
+        .expect("apply protected test directory ACL");
+    assert!(
+        status.success(),
+        "PowerShell failed to apply test directory ACL"
+    );
+}
+
+#[cfg(not(windows))]
+fn protect_test_directory(_path: &Path) {}
+
 #[test]
 fn restore_cli_requires_explicit_rekey_without_creating_destination() {
     let directory = tempdir().expect("temporary directory");
+    protect_test_directory(directory.path());
     let config = WatchdogConfig {
         database: directory.path().join("source.sqlite3"),
         deployment_id: "source-deployment".to_owned(),
@@ -80,6 +114,7 @@ fn restore_cli_requires_explicit_rekey_without_creating_destination() {
 #[test]
 fn restore_cli_rekeys_and_keeps_restored_work_blocked() {
     let directory = tempdir().expect("temporary directory");
+    protect_test_directory(directory.path());
     let source_config = WatchdogConfig {
         database: directory.path().join("source.sqlite3"),
         deployment_id: "source-deployment".to_owned(),

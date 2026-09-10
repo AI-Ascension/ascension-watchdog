@@ -11,40 +11,40 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "fa0787620e768266c683da178c81b5af7198bc39",
-      "last_observed_pr_head": "fa0787620e768266c683da178c81b5af7198bc39",
+      "revision": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "last_observed_pr_head": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; atomic restore publication, explicit offline restore/rekey, and Linux install/uninstall idempotence test; source-tested-local-at-fa07876; hosted-checks-in-progress-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; bounded Windows restore publication retry and protected config fixtures; source-tested-local-at-0b1199c; hosted-checks-in-progress-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
-      "revision": "0524b67ec28791c007d2ea025e26860672358247",
-      "ref": "codex/gateway-host-lease-consumer-current-main",
+      "revision": "5f3eadabede9954bc834a62e3c4c1003444826ca",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 37,
-      "state": "open-draft; malformed SETTLED receipt is durable UNKNOWN and exact retries replay without redispatch; source-tested-local; hosted-checks-pass; mergeable; not-merged; base-current-main-2cf9127"
+      "state": "merged; PR #37 head 0524b67; malformed SETTLED receipt is durable UNKNOWN and exact retries replay without redispatch; hosted-checks-pass; current-main"
     },
     "sts2-harness": {
-      "revision": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
-      "ref": "codex/harness-pr58-regression-20260910",
+      "revision": "5cc486a66b6f11930675af06f7426cd91c609983",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-harness",
       "pull_request": 59,
-      "state": "open-draft; provider completion retries bind result metadata and payload and conflicting reuse is rejected; source-tested-local; hosted-checks-pass; mergeable; not-merged; follows-merged-pr58-4342789"
+      "state": "merged; PR #59 head fcd1f68; provider completion retries bind result metadata and payload and conflicting reuse is rejected; hosted-checks-pass; current-main"
     },
     "sts2-mcp-server": {
-      "revision": "a6b9215db1ddeeddabe4c111ed3b49476fb86e54",
-      "ref": "codex/workflow-authority-mapping",
+      "revision": "8b6b73862494488fdd16fa5423fdf90a953260f4",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-mcp-server",
       "pull_request": 37,
-      "state": "merged; hosted-checks-pass; merge-commit-a6b9215"
+      "state": "merged; PR #37 merge a6b9215; hosted-checks-pass; current-main"
     },
     "sts2-game-mod": {
-      "revision": "e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5",
-      "ref": "codex/game-mod-rest-current-main-20260910",
+      "revision": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-game-mod",
       "pull_request": 70,
-      "state": "merged; merge-commit-e532f4d; hosted-checks-pass; current-main"
+      "state": "merged; PR #70 merge e532f4d; hosted-checks-pass; current-main"
     },
     "sts2-protocol": {
       "revision": "09819e2216354136ab5a799413dcd98499f56580",
@@ -55,22 +55,26 @@
     },
     "sts2-game-core": {
       "revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
-      "ref": "work/w04-presentation",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-game-core",
       "pull_request": 9,
-      "state": "merged; merge-commit-f9db577; hosted-checks-pass"
+      "state": "merged; PR #9 merge f9db577; hosted-checks-pass; current-main"
     },
     "ai-agent-observability": {
-      "revision": "a126715501d65a2d25f9d6ecf9c6bd142cc5f590",
-      "ref": "codex/otel-native-health-probe",
+      "revision": "d7e79e1a9663601013e513048caea7063b0de9ae",
+      "ref": "main",
       "remote": "AI-Ascension/ai-agent-observability",
       "pull_request": 16,
-      "state": "merged; hosted-checks-pass"
+      "state": "merged; PR #16 merge a126715; hosted-checks-pass; current-main"
     }
   },
   "evidence_boundary": {
     "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10",
+    "component_locked_builds": "verified-in-isolated-source-worktrees",
+    "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
+    "hosted_watchdog_runs": [34504169316, 34504170328],
+    "hosted_watchdog_status_at_capture": "in-progress-at-0b1199c",
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"

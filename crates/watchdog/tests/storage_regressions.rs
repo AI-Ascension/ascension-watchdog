@@ -3,7 +3,43 @@ use ascension_watchdog::error::WatchdogError;
 use ascension_watchdog::policy::ComponentState;
 use ascension_watchdog::storage::{ComponentRecord, LaunchIntentState, SingletonLock, Store};
 use serde_json::json;
+use std::path::Path;
+#[cfg(windows)]
+use std::process::Command;
 use tempfile::TempDir;
+
+#[cfg(windows)]
+fn protect_test_directory(path: &Path) {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', $inheritance, 'None', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_DIRECTORY -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_DIRECTORY", path)
+        .status()
+        .expect("apply protected test directory ACL");
+    assert!(
+        status.success(),
+        "PowerShell failed to apply test directory ACL"
+    );
+}
+
+#[cfg(not(windows))]
+fn protect_test_directory(_path: &Path) {}
 
 fn config(temp: &TempDir, deployment_id: &str) -> WatchdogConfig {
     WatchdogConfig {
@@ -136,6 +172,7 @@ fn malformed_metadata_is_reported_instead_of_defaulted() {
 #[test]
 fn restore_requires_fresh_identity_and_quarantines_old_work() {
     let temp = tempfile::tempdir().expect("tempdir");
+    protect_test_directory(temp.path());
     let source_config = config(&temp, "source-deployment");
     let mut source = Store::initialize(&source_config.database, &source_config).expect("source");
     source
