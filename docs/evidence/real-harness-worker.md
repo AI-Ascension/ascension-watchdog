@@ -166,3 +166,31 @@ Post-run read-only checks found no watchdog process or matching temporary user
 scope. No service was installed and no game, model provider, host reboot or
 release activation occurred. The downstream HTTP 503 and MCP `/usr/bin/true`
 fixtures remain deliberately synthetic and cannot prove episode completion.
+
+## Current exact endpoint image run, 2026-09-10
+
+The endpoint producer is now the clean harness PR #66 source
+`ef8c45e853d5f86c2653159a449826ffc20b5950`, rebased onto current harness main
+`63dc563690c93c575e75228f54672c1689d8a879`. Root rebuilt the locked release
+image at `/home/timot/sts2-harness-runtime-endpoint-image-wave48`; its mode is
+owner-executable and non-writable (`0500`) and its SHA-256 is
+`4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`.
+
+With watchdog PR #9 source `f5eaf5e35be025015a28da931aa973a0ade8f0ef`, root ran:
+
+```text
+ASCENSION_WATCHDOG_REAL_HARNESS_SMOKE=1 \
+STS2_HARNESS_RUNTIME_BINARY=/home/timot/sts2-harness-runtime-endpoint-image-wave48 \
+STS2_HARNESS_RUNTIME_SHA256=4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2 \
+CARGO_TARGET_DIR=/dev/shm/watchdog-integrated-smoke-target \
+cargo test --offline --locked -p ascension-watchdog --test real_harness_worker -- \
+  --ignored --exact real_watchdog_native_launch_reaches_built_harness_worker --nocapture
+```
+
+Result: **1 passed, 0 failed, 0 ignored**, **23.21 seconds**. The test crossed
+the actual watchdog process manager, Linux bootstrap frame, authenticated peer
+proof, worker control probe, one durable dispatch admission, stop intent, and
+owned descendant cleanup. It does not establish a native Windows endpoint,
+systemd/SCM service installation, game or provider execution, host settlement,
+reboot recovery, release activation, or soak. The HTTP 503 gateway and
+`/usr/bin/true` MCP remain downstream synthetic faults by design.

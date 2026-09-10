@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "audit_id": "V32",
+  "audit_id": "V32-wave48",
   "classification": "partial-unverified-source-and-test-audit",
   "current_activation_evidence": "docs/evidence/release-activation.md; source-tested durable selector and runtime launch fence; not a sealed cross-repository or native release admission",
-  "base_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-  "root_tested_source_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+  "base_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+  "root_tested_source_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
   "base_source_equivalence": {
-    "command": "git diff b0b685484bbe6830275c98617be3823a2f21e7fb..0542ab87f58d7aa38be35ccd407d202e224e2789 --name-only",
-    "result": "durable release selector, authenticated activation/rollback, runtime launch fence, tests, and admin schemas",
+    "command": "git diff b0b685484bbe6830275c98617be3823a2f21e7fb..f5eaf5e35be025015a28da931aa973a0ade8f0ef --name-only",
+    "result": "durable release selector, authenticated activation/rollback, runtime launch fence, collision-safe Windows fixture tests, and native worker smoke evidence",
     "source_matches_root_tested_source": true
   },
   "evidence_axes": {
@@ -18,14 +18,14 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "unverified-not-completed"
+    "remote_delivery_status": "open-prs-not-merged"
   },
   "root_checks": [
     {
       "id": "root-full-workspace",
       "command": "cargo +1.97.1 test --locked --offline --workspace --all-targets",
       "exit": 0,
-      "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; two Linux cgroup tests and two sealed/native worker tests remain explicitly ignored",
+    "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; explicit native worker smoke separately passed 1/1; two Linux cgroup tests remain ignored",
       "classification": "confirmed-linux-synthetic-source-at-root-tested-commit"
     },
     {
@@ -50,18 +50,32 @@
     "effect": "matrix remains conservative until exact gateway/harness/mod/protocol integration and native/live gates run"
   },
   "companion_update": {
-    "harness_commit": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",
-    "reported_tests": "171 runtime tests passed with one ignored; lifecycle and recovery evidence suites passed",
+    "harness_commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+    "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
+    "reported_tests": "PR #66 locked format/check/Clippy/policy/all-target/all-feature tests passed; native watchdog smoke passed 1/1 in 23.21s",
     "integrated": false,
-    "pull_request": 54,
+    "pull_request": 66,
     "counted_in_current_audit": false,
-    "effect": "does not promote any matrix row; source/component checks remain distinct from cross-repository proof"
+    "effect": "promotes only the Linux worker process-boundary evidence; source/component checks remain distinct from cross-repository proof"
+  },
+  "latest_source_set": {
+    "captured_at": "2026-09-10T23:00:00Z",
+    "watchdog": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "gateway": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+    "harness_worker_endpoint": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+    "harness_main_base": "63dc563690c93c575e75228f54672c1689d8a879",
+    "mcp": "037d10def1cbcb1c807e136d31b294355a92c010",
+    "game_mod": "888b06702021cd2bbd22773b0267733766c3b04a",
+    "protocol": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
+    "game_core": "f9db577530a4d159b066d3facbd780d61c044eb0",
+    "observability": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
+    "release_set": "docs/evidence/release-set-verification-20260910.json"
   },
   "companion_heads": [
-    {"repository": "sts2-harness", "commit": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929", "integrated": false, "evidence": "PR #54 source/component and synthetic recovery tests", "gap": "not rebuilt with gateway/mod/protocol in one release"},
-    {"repository": "sts2-game-mod", "commit": "ad9278512563d4a319177d4c10654ceec696c78c", "integrated": false, "evidence": "PR #63 hosted source-boundary checks pass", "gap": "live game-host and cross-consumer recovery campaign pending"},
-    {"repository": "sts2-gateway", "commit": "8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711", "integrated": false, "evidence": "PR #35 hosted checks pass", "gap": "actual recovery-dispatch and exact release-set review open"},
-    {"repository": "sts2-mcp-server", "commit": "16ca0cb06dc93564c14963bc544bef282b38d26d", "integrated": false, "evidence": "PR #37 merged as a6b9215db1ddeeddabe4c111ed3b49476fb86e54", "gap": "dependent release-set rebuild pending"}
+    {"repository": "sts2-harness", "commit": "ef8c45e853d5f86c2653159a449826ffc20b5950", "integrated": false, "evidence": "PR #66 authenticated native Linux worker endpoint; locked component gates and watchdog smoke pass", "gap": "endpoint PR remains open and exact cross-repository release is not built"},
+    {"repository": "sts2-game-mod", "commit": "888b06702021cd2bbd22773b0267733766c3b04a", "integrated": false, "evidence": "current main operation-aware Runtime-v3 admission and dependency refresh", "gap": "live game-host and cross-consumer recovery campaign pending"},
+    {"repository": "sts2-gateway", "commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21", "integrated": false, "evidence": "current main host-lease/co-op consumer and recovery echo-response fencing", "gap": "restart guard, managed host and exact release-set review remain open"},
+    {"repository": "sts2-mcp-server", "commit": "037d10def1cbcb1c807e136d31b294355a92c010", "integrated": false, "evidence": "current main native co-op adapter and pending-rejoin response fencing", "gap": "dependent release-set rebuild pending"}
   ],
   "requirements": [
     {"id":"S01","section":"1","status":"partial","source":["crates/watchdog/src/runtime.rs","crates/watchdog/src/storage.rs","crates/watchdog/src/service.rs","crates/watchdog/src/cli.rs","crates/fault-fixture/src/lib.rs"],"tests":["tests/core.rs","crates/watchdog/tests/service_loop.rs","crates/watchdog/tests/job_submission_process.rs","crates/fault-fixture/tests/recovery.rs","crates/fault-fixture/tests/runtime.rs"],"evidence":["README.md","docs/evidence/service-loop.md","docs/evidence/fault-fixture.md","docs/orchestration/consolidated-integration-checkpoint.json"],"gap":"watchdog and synthetic fixture are concrete, but companion consumers, host-lease consumers and restricted broker are not integrated","next_action":"build one exact gateway/harness/mod/protocol release set and run integrated recovery, then native Windows/Linux service gates","subrequirements":["S01-a deterministic Rust watchdog","S01-b integrated crash-resilient watchdog/gateway/harness/MCP/mod runtime","S01-c Windows-primary topology, Linux synthetic adapter and one-instance isolation"]},
@@ -73,7 +87,7 @@
     {"id":"S07","section":"7","status":"partial","source":["crates/watchdog/src/storage.rs","crates/watchdog/src/storage_admin.rs","crates/watchdog/src/storage_backup_admin.rs","crates/fault-fixture/src/lib.rs"],"tests":["tests/core.rs","crates/watchdog/tests/storage_*.rs","crates/watchdog/tests/admin_backup.rs","crates/watchdog/tests/job_submission.rs"],"evidence":["docs/evidence/storage-review.md","docs/evidence/storage-admin.md","docs/evidence/fault-fixture.md"],"gap":"watchdog and synthetic stores are tested, but gateway/harness owner stores, full identity namespaces, archival and fixture tombstones are not integrated","next_action":"add owner-specific migration/identity tests, explicit archival/tombstone protocol and cross-owner release tests","subrequirements":["S07-a owner-local WAL/FULL, lock, migrations, integrity, backup and restore","S07-b watchdog jobs, attempts, budgets and operator records","S07-c gateway/harness stores and stable identity namespaces","S07-d bounded archival without silent reset"]},
     {"id":"S08","section":"8","status":"partial","source":["crates/fault-fixture/src/lib.rs","crates/fault-fixture/tests/recovery.rs","crates/fault-fixture/tests/runtime.rs","crates/watchdog/src/storage.rs"],"tests":["lease_policy_and_epoch_history_survive_restart","stale_queued_fence_is_rejected_without_an_effect","fresh_authority_recovers_historical_session_without_rewriting_old_identity","watchdog restore/rekey tests"],"evidence":["docs/evidence/fault-fixture.md","docs/evidence/recovery-baseline.md","docs/evidence/open-review-findings.md"],"gap":"fixture protocol semantics and watchdog restore do not prove a production gateway lease consumer or host handshake","next_action":"implement gateway-issued authority and managed host-fence consumers and test restart/rollback/rekey","subrequirements":["S08-a fresh durable boot, fence, lease and invalidation","S08-b historical read/reconcile without old authority","S08-c restore/rekey and rollback protection","S08-d real gateway/host consumer"]},
     {"id":"S09","section":"9","status":"partial","source":["crates/fault-fixture/src/lib.rs","crates/fault-fixture/tests/recovery.rs","crates/fault-fixture/tests/runtime.rs"],"tests":["response_loss_keeps_effect_witness_and_client_uncertainty","crash_after_mutation_retains_witness_without_receipt_or_second_effect","stale_queued_fence_is_rejected_without_an_effect","receipt_capacity_backpressures_the_sixty_fifth_operation"],"evidence":["docs/evidence/fault-fixture.md","docs/evidence/fixture-instance-guard.md","docs/evidence/recovery-baseline.md","docs/evidence/open-review-findings.md"],"gap":"synthetic fixture is not actual v3/gateway/host broker; 64 is backpressure, not archival","next_action":"wire and run the real harness to MCP to gateway to mod to host path and exceed receipt capacity with tombstones","subrequirements":["S09-a actual v3 persist-before-send journal and uncertainty","S09-b host execution-time fence and witness","S09-c restricted broker and beyond-64 archival"]},
-    {"id":"S10","section":"10","status":"unverified","source":["companion harness follow-up PR #54 at 5798e3d; outside the integrated watchdog root"],"tests":["companion harness 171 runtime tests plus lifecycle/recovery evidence reported but unintegrated"],"evidence":["docs/orchestration/consolidated-integration-checkpoint.json","docs/evidence/review-repair-wave.md"],"gap":"harness durable resume/context, provider accounting, recovery-sideband wiring, reconstruction and divergence policy are not verified in the exact cross-repository release","next_action":"rebuild and independently verify the harness recovery-sideband source with named resume/reconstruction/divergence/provider fault tests and cross-repo gates","subrequirements":["S10-a explicit harness resume","S10-b MCP sole-owner bounded reconnect","S10-c provider identity and accounting","S10-d continuation, reconstruction, interrupted-unknown and replay divergence"]},
+    {"id":"S10","section":"10","status":"partial","source":["sts2-harness PR #66 at ef8c45e native worker endpoint; current main 63dc563 runtime recovery"],"tests":["PR #66 locked component suite and integrated watchdog native worker smoke: 1 passed in 23.21s"],"evidence":["docs/evidence/real-harness-worker.md","docs/worker-endpoint-v1.md","docs/evidence/release-set-verification-20260910.json"],"gap":"the native Linux worker boundary is verified, but provider/reconstruction/replay and full cross-repository gameplay recovery are not verified in one release","next_action":"build the exact endpoint-plus-gateway/MCP/mod/protocol release and run provider, reconstruction, divergence and host settlement gates","subrequirements":["S10-a explicit harness resume","S10-b MCP sole-owner bounded reconnect","S10-c provider identity and accounting","S10-d continuation, reconstruction, interrupted-unknown and replay divergence"]},
     {"id":"S11","section":"11","status":"partial","source":["crates/watchdog/src/policy.rs","crates/watchdog/src/runtime.rs","crates/watchdog/src/service.rs","crates/watchdog/src/cli.rs","crates/watchdog/src/admin"],"tests":["crates/watchdog/tests/core.rs","health_policy.rs","service_loop.rs","admin_control.rs","job_submission_process.rs"],"evidence":["docs/evidence/service-loop.md","docs/evidence/storage-admin.md","docs/admin-control.md"],"gap":"synthetic daemon/IPC/health passes, but unsupported dispatcher operations, scheduler-to-harness handoff and installed systemd/SCM recovery remain","next_action":"complete unsupported operations and run native service and scheduler handoff tests","subrequirements":["S11-a persisted desired-state reconciler and separate states","S11-b phase health, timers and budgets","S11-c full authenticated operator CLI/API","S11-d restart ownership and native service recovery"]},
     {"id":"S12","section":"12","status":"partial","source":["crates/platform-windows/src/native.rs","crates/platform-windows/src/admin_pipe.rs","crates/watchdog/src/platform/linux.rs","crates/watchdog/src/platform/linux_launcher.rs","crates/watchdog/src/platform/linux_process.rs","crates/watchdog/src/platform/wsl.rs","deploy/linux/ascension-watchdog.service"],"tests":["crates/watchdog/tests/linux_boundary.rs","crates/platform-windows/tests/native_synthetic.rs","crates/platform-windows/tests/windows_safety_regressions.rs"],"evidence":["docs/platform.md","docs/evidence/platform-backup-integration.md","docs/evidence/native-integration-review.md","docs/evidence/windows-p9-integration.md","docs/evidence/windows-integration-20260910.md"],"gap":"Linux cgroup tests are ignored, Windows native tests have not executed in the Linux workspace, and no service/WSL failure campaign was executed","next_action":"run approved native Windows/Linux/WSL service gates and preserve skipped status until execution","subrequirements":["S12-a Windows SCM, health checker, Job Object, named pipe and session","S12-b WSL exact distro/direct invocation and termination","S12-c Linux systemd notify/cgroup/protected state","S12-d native synthetic execution"]},
     {"id":"S13","section":"13","status":"partial","source":["crates/watchdog/src/release.rs","crates/watchdog/src/release_staged.rs","crates/watchdog/src/storage_release.rs","crates/watchdog/src/storage_backup_admin.rs","crates/watchdog/src/cli.rs","deploy/linux/install.sh","deploy/linux/uninstall.sh"],"tests":["crates/watchdog/tests/release.rs","crates/watchdog/tests/release_staged.rs","crates/watchdog/src/storage_release.rs::tests","crates/watchdog/tests/admin_backup.rs","crates/watchdog/tests/cli_restore.rs","external collector synthetic test"],"evidence":["docs/evidence/release-inspection.md","docs/evidence/release-activation.md","docs/evidence/release-staging.md","docs/evidence/collector-recovery.md","docs/evidence/platform-backup-integration.md","docs/operations-backup.md"],"gap":"durable watchdog activation/rollback is source-tested, but sealed cross-repository handoff, collector backend durability, uninstall persistence and native install remain open","next_action":"integrate the sealed release handoff with all consumers and execute native activation/rollback, observability and install tests","subrequirements":["S13-a persistent telemetry queues and backends","S13-b immutable release activation and rollback","S13-c idempotent install/uninstall/log/disk operations","S13-d authenticated backup/restore/rekey"]},
@@ -105,7 +119,7 @@
     {"id":"FAULT-05","section":"15","status":"partial","source":["fixture operation identity","watchdog job idempotency ledger"],"tests":["conflicting_expected_boundary_reuse_is_rejected","job submission replay/conflict tests","runtime replay tests"],"evidence":["docs/evidence/fault-fixture.md","docs/evidence/storage-admin.md"],"gap":"gateway/harness operation identity not integrated","next_action":"test same/conflicting operation across reconnect/restart in real consumers"},
     {"id":"FAULT-06","section":"15","status":"partial","source":["fixture boot/lease/fence/session state","runtime old-lease handling"],"tests":["stale_queued_fence_is_rejected_without_an_effect","http_runtime_rejects_queued_old_lease_after_authority_rotation","lease_policy_and_epoch_history_survive_restart"],"evidence":["docs/evidence/fault-fixture.md"],"gap":"real gateway/managed-host stale-proof path absent","next_action":"execute old boot/lease/session/incarnation proofs including queued pre-crash work"},
     {"id":"FAULT-07","section":"15","status":"partial","source":["fixture historical lookup/reconcile authorization"],"tests":["lookup_rejects_a_reference_with_the_wrong_original_context","reconcile_rejects_a_reference_with_the_wrong_original_context"],"evidence":["docs/evidence/fault-fixture.md"],"gap":"real gateway recovery credentials and authority not integrated","next_action":"wire recovery_read/recovery_reconcile and prove no mutation or identity rewrite"},
-    {"id":"FAULT-08","section":"15","status":"unverified","source":["companion harness/provider source/tests at PR #54 head 5798e3d; host malformed-response fixture is local"],"tests":["companion harness fault/component tests reported but unintegrated"],"evidence":["docs/evidence/review-repair-wave.md"],"gap":"MCP death, inference stall, auth/quota/outage/timeout and billing ambiguity are not verified in the exact integrated release","next_action":"rebuild and execute the harness/provider fault boundary tests with conservative accounting"},
+    {"id":"FAULT-08","section":"15","status":"partial","source":["sts2-harness PR #66 endpoint and current-main provider/recovery source; host malformed-response fixture is local"],"tests":["PR #66 native worker smoke covers authenticated boundary and downstream synthetic fault; provider fault matrix remains unintegrated"],"evidence":["docs/evidence/real-harness-worker.md","docs/evidence/release-set-verification-20260910.json"],"gap":"MCP death, inference stall, auth/quota/outage/timeout and billing ambiguity are not verified in the exact integrated release","next_action":"rebuild and execute the harness/provider fault boundary tests with conservative accounting"},
     {"id":"FAULT-09","section":"15","status":"partial","source":["watchdog job ledger","companion harness provider/episode owner source"],"tests":["job_submission* completion/replay tests"],"evidence":["docs/evidence/job-process-integration-review.md"],"gap":"provider/episode completion requires integrated evidence from the companion harness","next_action":"integrate and execute companion harness crash-after-provider-result and crash-after-completed-episode tests with durable result fingerprint and no duplicate inference/job completion"},
     {"id":"FAULT-10","section":"15","status":"unverified","source":["fixture crash/restart authority model only"],"tests":["fixture crash-after-admission/mutation tests"],"evidence":["docs/evidence/fault-fixture.md"],"gap":"the production gateway restart path is not integrated at this endpoint while host/broker survives","next_action":"kill/restart the real gateway, require fresh boot/fence, retain UNKNOWN, and verify no mutation before reconciliation"},
     {"id":"FAULT-11","section":"15","status":"partial","source":["watchdog process/platform adapters","WSL invocation validator"],"tests":["real_subprocess_crash_restarts_and_durable_stop_survives_reopen","Linux boundary tests"],"evidence":["docs/evidence/native-integration-review.md","docs/platform.md"],"gap":"no native service, game/broker or WSL failure campaign","next_action":"run approved service-manager/WSL/game/broker failure campaign with exact ownership"},
@@ -127,12 +141,12 @@
     "section_requirements": 17,
     "invariants": 15,
     "faults": 24,
-    "status_counts": {"partial": 49, "unverified": 7},
+    "status_counts": {"partial": 51, "unverified": 5},
     "release_ready": false,
     "production_host_lease_consumer": "open",
     "linux_restricted_broker": "open",
     "native_windows": "unverified",
     "live_cold_boot_soak": "unverified",
-    "next_gate": "rebuild exact gateway/harness/MCP/mod/protocol release set from candidate pins, then run independent native/live/reboot/soak matrix"
+    "next_gate": "build the exact watchdog plus harness endpoint and current gateway/MCP/mod/protocol source set, then run independent native/live/reboot/soak matrix"
   }
 }

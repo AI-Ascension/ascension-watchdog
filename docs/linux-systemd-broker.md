@@ -214,7 +214,9 @@ These cases remain conflicts rather than being silently forgotten.
 Portable pathname-replacement fixtures exercise retained file identity but are
 not evidence of native cgroup enforcement or installed-service recovery.
 
-`deploy/linux/install-systemd-broker.sh` installs the binary, root-owned policy,
+`deploy/linux/install-systemd-broker.sh` defaults to the standard
+`/opt/ascension-watchdog/current` approved-release symlink (or accepts an
+explicit `--release-root`), then installs the binary, root-owned policy,
 unit and peer-group-compatible socket setup after checking that the policy's
 peer GID matches an existing group. It reloads systemd but does not enable or
 start the service.

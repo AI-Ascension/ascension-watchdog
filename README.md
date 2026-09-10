@@ -46,6 +46,16 @@ integration remain separate delivery gates. The watchdog now source-tests a
 durable protected release selector and authenticated activation/rollback, but
 that is not evidence of a sealed cross-repository or native release handoff.
 
+An explicitly gated native Linux process-boundary smoke is recorded in
+[`docs/evidence/real-harness-worker.md`](docs/evidence/real-harness-worker.md).
+It launched harness PR #66 image `ef8c45e` from the watchdog process manager,
+authenticated the worker endpoint, admitted one bounded dispatch, and persisted
+stop/cleanup (`1 passed`, 23.21s; image SHA-256
+`4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`). Its
+gateway/MCP children were synthetic HTTP-503 and `/usr/bin/true` faults, so it
+does not establish gameplay, provider, service, reboot, release, or soak
+evidence.
+
 The moving companion PR heads captured for the next integration review are
 listed in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json)
 with their non-activation evidence in

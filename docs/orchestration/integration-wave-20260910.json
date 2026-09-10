@@ -5,13 +5,14 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-    "watchdog_source_tested_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-    "watchdog_implementation_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+    "watchdog_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "watchdog_source_tested_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "watchdog_implementation_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "f72aeab586816be71b264bae83db192a1e8f8103",
-    "hosted_runs": [34524471744, 34524473975, 34524471775, 34524473943],
-    "hosted_run_status_at_capture": "Rust/synthetic runs 34524471744 and 34524473975 passed on Ubuntu and Windows; standards runs 34524471775 and 34524473943 passed; native Windows service-session remains UNVERIFIED on runner session 2"
+    "watchdog_last_observed_pr_head": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "hosted_runs": [34525217061, 34525218190, 34525217025, 34525218179],
+    "hosted_run_status_at_capture": "Rust/synthetic runs 34525217061 and 34525218190 passed on Ubuntu and Windows; standards runs 34525217025 and 34525218179 passed; native Windows service-session remains UNVERIFIED on runner session 2",
+    "native_worker_smoke": "harness PR66 ef8c45e image 4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2; 1 passed in 23.21s; Linux process-boundary only"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -30,8 +31,8 @@
   },
   "results": {
     "watchdog": {
-      "commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-      "implementation_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "implementation_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "change": "durable retry/scoped reconciliation, protected release inspection, offline restore/rekey publication, plus exact-digest release activation/rollback with interrupted prepared-marker recovery, selector/receipt binding, and configured launch fencing",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
@@ -42,41 +43,68 @@
         "Windows hosted unit test storage::restore_publication_tests::sharing_error_fails_closed_without_streaming_copy: pass (run 34514320447)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
-        "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Current source commit 0542ab8 adds release activation/rollback and strict selector/receipt binding; hosted validation runs 34522351534 and 34522353025 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
+        "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Source commits 053d32c and 0542ab8 add release activation/rollback and strict selector/receipt binding; current head f5eaf5e adds collision-safe fixture allocation and records the native worker smoke. Hosted validation runs 34525217061 and 34525218190 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; substantive source head 0542ab8; current PR head f72aeab adds collision-safe concurrent Windows fixture allocation; hosted validation runs 34524471744 and 34524473975 plus standards runs 34524471775 and 34524473943 passed"
+      "remote": "pushed to codex/watchdog-integrated-20260910; current PR head f5eaf5e includes collision-safe Windows fixture allocation and native worker smoke evidence; hosted validation runs 34525217061 and 34525218190 plus standards runs 34525217025 and 34525218179 passed"
     },
     "gateway": {
-      "commit": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "branch": "main",
-      "pr": 38,
-      "remote_head": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "pr": 39,
+      "remote_head": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "change": "merged co-op host-lease consumer on top of durable Runtime-v3 UNKNOWN handling and exact replay",
       "verification": "current-main locked format, Clippy, workspace tests, and serial runtime suite passed in an isolated checkout; hosted Rust-quality and repository-policy checks passed (34510597219, 34510597283); a broader parallel attempt exposed timing-sensitive fixture failures and was not used as a gate",
-      "delivery": "PR #38 merged (PR #37 included); current main is de1fe723"
+      "delivery": "PR #39 merged (PRs #37 and #38 included); current main is c8be3a72"
     },
     "harness": {
-      "commit": "5cc486a66b6f11930675af06f7426cd91c609983",
-      "branch": "main",
-      "pr": 59,
-      "remote_head": "5cc486a66b6f11930675af06f7426cd91c609983",
-      "change": "provider completion retries bind result reference, digest metadata, and payload; conflicting reuse is rejected",
-      "verification": "current-main strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
-      "delivery": "PR #59 merged; current main is 5cc486a6"
+      "commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "branch": "codex/harness-worker-endpoint-20260910",
+      "pr": 66,
+      "remote_head": "63dc563690c93c575e75228f54672c1689d8a879",
+      "change": "authenticated native Linux worker endpoint, peer/image proof, durable admission and unknown/quarantine handling",
+      "verification": "PR #66 locked policy/format/check/Clippy/all-target/all-feature gates and integrated watchdog native worker smoke passed; current main base 63dc563",
+      "delivery": "PR #66 open and unmerged; current main remains 63dc563"
     },
     "protocol": {
-      "commit": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "commit": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
       "branch": "main",
-      "pr": 33,
-      "remote_head": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "pr": 38,
+      "remote_head": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
       "change": "merged coop-native-v1 artifact and producer/consumer evidence",
       "verification": "current-main strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
-      "delivery": "PR #33 merged; current main is 6788856"
+      "delivery": "PR #38 merged; current main is f22dd72"
+    },
+    "mcp": {
+      "commit": "037d10def1cbcb1c807e136d31b294355a92c010",
+      "branch": "main",
+      "pr": 40,
+      "remote_head": "037d10def1cbcb1c807e136d31b294355a92c010",
+      "change": "native co-op adapter and canonical pending-rejoin response fencing",
+      "verification": "current-main component gates and hosted checks pass; native gateway runtime remains explicitly ignored",
+      "delivery": "PR #40 merged; current main is 037d10d"
+    },
+    "game_mod": {
+      "commit": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "branch": "main",
+      "pr": 65,
+      "remote_head": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "change": "operation-aware Runtime-v3 admission and dependency refresh",
+      "verification": "current-main source/policy component gates remain separate from live managed execution",
+      "delivery": "current main is 888b067"
+    },
+    "observability": {
+      "commit": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
+      "branch": "main",
+      "pr": 19,
+      "remote_head": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
+      "change": "OTLP bind/inode durability repair",
+      "verification": "merged source update; collector-backed watchdog release remains unactivated",
+      "delivery": "PR #19 merged; current main is 89539a6"
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to watchdog source head 0542ab8 and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
-    "The current component set has no unified cross-consumer build: protocol/gateway and MCP expose source-level coop-native-v1 adapters, while harness and game-mod do not expose a native coop consumer. Treat artifact-byte equality and component adapter tests as component evidence only.",
+    "Keep candidate manifest source-pinned to watchdog f5eaf5e, harness endpoint PR66 ef8c45e, and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
+    "The current protocol artifact binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 as serialized component consumers; the harness endpoint is a separate Linux process-boundary contract. Treat artifact-byte equality, component adapters, and the native worker smoke as bounded evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

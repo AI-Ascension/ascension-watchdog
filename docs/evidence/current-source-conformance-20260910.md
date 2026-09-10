@@ -1,4 +1,4 @@
-# Current source and artifact conformance audit — 2026-09-10
+# Current source and artifact conformance audit — 2026-09-10 (refreshed)
 
 Classification: `confirmed component evidence; cross-consumer admission not
 verified`. This record refreshes the moving companion references captured by
@@ -9,21 +9,22 @@ cold-boot, or soak claim.
 
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
-| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `0542ab87f58d7aa38be35ccd407d202e224e2789` | open draft; substantive source commit plus f72aeab collision-safe Windows fixture tests; durable release activation/rollback and runtime launch fence source-tested; hosted Ubuntu/Windows and standards validation passed |
-| sts2-gateway | `main` / PR #38 | `de1fe72345ea972d56c05d30837da5327e5f1655` | merged; PR #37 included |
-| sts2-harness | `main` / PR #59 | `5cc486a66b6f11930675af06f7426cd91c609983` | merged |
-| sts2-mcp-server | `main` / PR #38 | `9fa09faed351a27bfeaebc2344af7ffd12ac784d` | merged; native coop adapter |
-| sts2-game-mod | `main` / PR #70 | `a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b` | merged |
-| sts2-protocol | `main` / PR #33 | `678885687e46a43f53b9eec108dfb160fc9a13bd` | merged |
+| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `f5eaf5e35be025015a28da931aa973a0ade8f0ef` | open draft; activation/rollback, launch fencing, collision-safe Windows fixtures, and native worker smoke evidence; hosted Ubuntu/Windows and standards validation passed |
+| sts2-gateway | `main` / PR #39 | `c8be3a72ba9e304392575a1b2bdbc262e392be21` | merged; host-lease/co-op consumer and recovery echo-response fencing |
+| sts2-harness | `codex/harness-worker-endpoint-20260910` / PR #66 (base main) | `ef8c45e853d5f86c2653159a449826ffc20b5950` | open; authenticated native Linux worker endpoint; current main base `63dc563` |
+| sts2-mcp-server | `main` / PR #40 | `037d10def1cbcb1c807e136d31b294355a92c010` | merged; native co-op adapter and pending-rejoin response fencing |
+| sts2-game-mod | `main` / PR #65 | `888b06702021cd2bbd22773b0267733766c3b04a` | merged; operation-aware Runtime-v3 admission and dependency refresh |
+| sts2-protocol | `main` / PR #38 | `f22dd7216f65de91a0ffa27f50bc2036be6c8b24` | merged; refreshed serialized co-op artifact and consumer pins |
 | sts2-game-core | `main` / PR #9 | `f9db577530a4d159b066d3facbd780d61c044eb0` | merged |
-| ai-agent-observability | `main` / PR #16 | `d7e79e1a9663601013e513048caea7063b0de9ae` | merged |
+| ai-agent-observability | `main` / PR #19 | `89539a6e7754b389f8eac148ba8a49c3892cddd8` | merged; OTLP bind/inode durability repair |
 
-The revisions were checked against the remote `main` refs and the listed PR
-metadata before this record was written. Open PR #9 is intentionally still
-separate from the merged companion revisions. The selected watchdog source
-commit `0542ab8` adds the durable release selector, strict selector/receipt
-binding, request-collision rejection, and authenticated activation boundary
-described in [`release-activation.md`](release-activation.md).
+The revisions were checked against authoritative remote refs and PR metadata
+at the refresh timestamp. Open PR #9 and open harness PR #66 are intentionally
+separate from merged companion revisions. The selected watchdog source
+`f5eaf5e` includes the durable release selector, strict selector/receipt
+binding, request-collision rejection, authenticated activation boundary, and
+the native worker smoke integration. The endpoint image used by that smoke is
+SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`.
 
 ## Component gates
 
@@ -34,20 +35,25 @@ components with pinned locked dependencies:
   protocol, and game-core.
 * Warnings-denied locked workspace Clippy passed for those repositories.
 * Locked all-target/all-feature tests passed for those repositories.
-* The watchdog checkout at `0542ab8` passed
+* The watchdog checkout at `f5eaf5e` passed
   `cargo +1.97.1 test --locked --offline --workspace --all-targets
   --all-features --no-fail-fast`: 206 watchdog library tests passed and 4
   explicitly ignored, with all workspace integration suites passing. The
   five selector tests, restore CLI (2 tests), and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 hosted validation runs `34524471744` and `34524473975` passed
+* Watchdog PR #9 hosted validation runs `34525217061` and `34525218190` passed
   on both Ubuntu and Windows; standards runs `34524471775` and `34524473943`
   passed. Native service-session remains separately `UNVERIFIED`.
-* Gateway PR #38 hosted quality and policy runs `34510597219` and
-  `34510597283` passed. A broader parallel local attempt exposed timing-sensitive
-  fixture failures; the serial runtime/workspace results above are the accepted
-  local gate and no production change was made for the flaky attempt.
-* MCP current `main` `9fa09fa` passed `cargo fmt --all -- --check`, locked
+  (The standards runs for the latest head are `34525217025` and `34525218179`.)
+* Gateway current `main` `c8be3a7`, MCP current `main` `037d10d`, game-mod
+  current `main` `888b067`, protocol current `main` `f22dd72`, and observability
+  current `main` `89539a6` are source-pinned. Their prior clean component gates
+  remain evidence for the corresponding source families; no new unified build is
+  claimed by this refresh.
+* Harness PR #66 passed locked format, check, Clippy, repository policy, and
+  all-target/all-feature tests; its hosted Rust-quality run `34538444783` and
+  policy run `34538444761` passed. The native smoke is recorded separately.
+* MCP current `main` `037d10d` passed `cargo fmt --all -- --check`, locked
   warnings-denied workspace Clippy, and locked all-target/all-feature workspace
   tests in a clean detached worktree. Its native coop adapter tests cover the
   seven-tool catalog, exact request/response relations, schema/checksum
@@ -68,16 +74,14 @@ The worker schema digest is
 `bb13d15f6c0e4b8d0f58f7391fe4ba319ebc57a0a09effc06d73ea718bbff4cf`.
 Protocol and gateway now carry matching `coop-native-v1` producer artifacts.
 
-The artifact comparison is not consumer conformance. MCP `main` now exposes a
-source-level `coop-native-v1` adapter and its current-main component suite
-passed (17 library tests, 29 binary tests, and all listed integration suites;
-one native gateway runtime case remains explicitly ignored). The shared artifact's
-`consumer-conformance.json` still records the gateway/MCP/harness set as
-component-pending, and harness/game-mod do not expose a native coop consumer.
-Therefore no exact cross-consumer build or coop-native host conformance run can
-be truthfully reported from this source set. Existing REST/runtime-v3 component
-paths remain separately tested; their actual watchdog-to-harness-to-MCP-to-
-gateway-to-mod host execution is still unverified.
+The artifact comparison is not live consumer conformance. Protocol main's
+`consumer-conformance.json` now binds gateway `c8be3a7`, MCP `037d10d`, and
+harness main `63dc563` as serialized component consumers; the worker endpoint
+PR is a separate process-boundary artifact. Game-mod has no native worker
+consumer. Therefore no exact cross-consumer build or coop-native host settlement
+run can be truthfully reported from this source set. Existing REST/runtime-v3
+component paths remain separately tested; the actual watchdog-to-harness-to-
+MCP-to-gateway-to-mod host execution is still unverified.
 
 ## Boundary decision
 
@@ -85,7 +89,6 @@ The candidate remains `not activated`. Keep
 `cross_repository_clean_build`, `cross_consumer_conformance`, native Windows and
 Linux service execution, live host recovery, cold boot, activation/rollback,
 and soak as `not-run` or `unverified`. The smallest next executable gate is to
-publish/accept the missing consumer adapters (or explicitly scope the release
-to the existing REST contract), build every selected binary from one clean
-release directory, and run the operation, receipt, stale-authority, and
-provider-recovery matrix before any runtime admission claim.
+build every selected binary from one clean release directory, run the operation,
+receipt, stale-authority, and provider-recovery matrix, and obtain the approved
+native service/host environment before any release or gameplay admission claim.

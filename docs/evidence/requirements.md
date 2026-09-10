@@ -1,16 +1,38 @@
 # V32 requirements and evidence audit
 
-Classification: `partial` / `unverified` source-and-test audit. The historical
-entries below are retained for traceability; the current activation addendum at
-the end records the latest integrated watchdog source and test evidence. This
-audit does not declare an implementation or release complete.
+Classification: `partial` / `unverified` source-and-test audit. Historical
+entries below are retained for traceability; the Wave 48 addendum and the
+machine-readable release-set record carry the current source pins. This audit
+does not declare an implementation or release complete.
+
+## Wave 48 current refresh — 2026-09-10
+
+The authoritative watchdog source is PR #9 head `f5eaf5e35be025015a28da931aa973a0ade8f0ef`
+(open draft, hosted Ubuntu/Windows and standards checks passed). The exact
+Linux worker producer is harness PR #66 head
+`ef8c45e853d5f86c2653159a449826ffc20b5950`, based on harness main
+`63dc563690c93c575e75228f54672c1689d8a879`; its hosted Rust quality/policy
+checks passed. Current companion main pins are gateway `c8be3a7`, MCP `037d10d`,
+game-mod `888b067`, protocol `f22dd72`, game-core `f9db577`, and observability
+`89539a6`. See [`release-set-verification-20260910.json`](release-set-verification-20260910.json)
+and [`candidate-source-set-20260910.md`](candidate-source-set-20260910.md) for
+the full revisions and states.
+
+The explicitly gated native Linux watchdog-to-harness smoke passed **1/1 in
+23.21s** with harness image SHA-256
+`4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`. This is
+confirmed process-boundary evidence only: downstream HTTP-503 gateway and
+`/usr/bin/true` MCP fixtures do not establish gameplay/provider settlement,
+service installation, release activation, reboot, or soak. The nested
+depth-2/depth-3 Luna-Max delegation smoke remains unobserved, and all native
+Windows, live-host, cold-boot, and soak axes remain unverified.
 
 ## Scope and evidence boundary
 
-The audited worktree is an isolated branch from
-`codex/watchdog-implementation@dda3a915f7ea25bc291727f0e151b421344cc007`.
-The current PR tip is `10eac29` (draft PR #8), a documentation-only commit after
-the source-tested `e91714c`. The root record reports:
+The historical audit snapshot below began from an isolated implementation
+branch. Its original commit and PR references are retained in the matrix for
+traceability; the current PR/source status is the Wave 48 refresh above and in
+`requirement-evidence.json`. The current root record reports:
 
 - `cargo test --workspace --all-targets --all-features --locked --no-fail-fast
   -- --test-threads=1` exit 0;
@@ -21,15 +43,15 @@ the source-tested `e91714c`. The root record reports:
   A Windows GNU all-target check and strict Clippy cross-build also passed;
   that is compile evidence, not native Windows execution evidence. Two Linux
   cgroup tests remain ignored.
-- Draft watchdog PR #8 re-ran standards, Ubuntu, Windows, and dependency jobs
-  after a Windows-only API repair; hosted checks were still running at this
-  record's capture time.
+- Draft watchdog PR #9 at `f5eaf5e` re-ran standards, Ubuntu, Windows, and
+  dependency jobs; all current hosted checks passed.
 - No service installation, release activation, game/provider launch, host
   reboot, live recovery, or soak was performed.
 - The fault fixture is a synthetic host/test tool. The watchdog branch now has
-  authenticated worker and Gateway-health consumers plus release staging, but
-  the companion harness/gateway/MCP/mod PRs are still separate source pins;
-  this is not a cross-repository runtime or live-host claim.
+  authenticated worker and Gateway-health consumers plus release staging, and
+  the harness endpoint PR has a native Linux process-boundary smoke. Companion
+  source pins remain a separate candidate set; this is not a cross-repository
+  runtime or live-host claim.
 
 Historical review context: the earlier host-lease and gateway catalog findings
 remain open at the production-consumer boundary. The current watchdog branch

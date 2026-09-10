@@ -10,7 +10,11 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-release_root=/opt/ascension-watchdog/release
+# The standard installer publishes the approved release through this
+# root-owned, immutable symlink.  Keep the broker's default aligned with that
+# layout; callers may still provide an explicit release directory for an
+# offline staged install.
+release_root=/opt/ascension-watchdog/current
 policy_source=
 peer_group=
 while [ "$#" -gt 0 ]; do

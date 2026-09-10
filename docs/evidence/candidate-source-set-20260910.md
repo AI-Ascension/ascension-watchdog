@@ -5,34 +5,33 @@ review. It is deliberately a candidate source set, not an activated release:
 the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
-The pins were refreshed from remote PR and branch metadata on 2026-09-10. The
-watchdog integration branch is draft PR #9; its substantive source head is
-`0542ab87f58d7aa38be35ccd407d202e224e2789`, which adds the durable exact-
-digest release selector, strict selector/receipt binding, request-collision
-rejection, and authenticated activation/rollback boundary. PR head `f72aeab`
-also hardens concurrent Windows native fixture allocation; the
-root reran the locked workspace, selector, restore, Linux installer, and
-adversarial checks at that source commit. Hosted validation runs
-`34524471744` and `34524473975` passed on both Ubuntu and Windows; standards
-runs `34524471775` and `34524473943` passed. Native service-session remains
-explicitly `UNVERIFIED` and is not native service proof.
+The pins were refreshed from authoritative remote PR and branch metadata on
+2026-09-10T23:00Z. The watchdog integration branch is draft PR #9 at
+`f5eaf5e35be025015a28da931aa973a0ade8f0ef`; its durable exact-digest release
+selector, strict selector/receipt binding, request-collision rejection,
+authenticated activation/rollback boundary, and collision-safe Windows fixture
+allocation are source-tested. Hosted validation runs `34525217061` and
+`34525218190` passed on Ubuntu and Windows; standards runs `34525217025` and
+`34525218179` passed. Native service-session remains explicitly `UNVERIFIED`
+and is not native service proof.
 
-The selected current-main companion revisions are gateway
-`de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including PR #37), harness
-`5cc486a66b6f11930675af06f7426cd91c609983` (PR #59), MCP
-`9fa09faed351a27bfeaebc2344af7ffd12ac784d`, game-mod
-`a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b`, protocol
-`678885687e46a43f53b9eec108dfb160fc9a13bd` (PR #33), game-core
+The selected revisions are gateway `c8be3a72ba9e304392575a1b2bdbc262e392be21`,
+MCP `037d10def1cbcb1c807e136d31b294355a92c010`, game-mod
+`888b06702021cd2bbd22773b0267733766c3b04a`, protocol
+`f22dd7216f65de91a0ffa27f50bc2036be6c8b24`, game-core
 `f9db577530a4d159b066d3facbd780d61c044eb0`, and observability
-`d7e79e1a9663601013e513048caea7063b0de9ae`. PR #33 is now merged. Locked
-component gates and runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
+`89539a6e7754b389f8eac148ba8a49c3892cddd8`. The harness entry is the open
+worker-endpoint PR #66 at `ef8c45e853d5f86c2653159a449826ffc20b5950`, based on
+current harness main `63dc563690c93c575e75228f54672c1689d8a879`; it is the exact
+image used by the native worker smoke. Locked component gates and
+runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
 [`release-set-verification-20260910.json`](release-set-verification-20260910.json).
-These revisions remain independently built source components: protocol and
-gateway and MCP now carry a source-level coop-native-v1 producer/consumer
-surface; the shared artifact's consumer-conformance record remains
-component-pending for the gateway/MCP/harness set, and harness/game-mod do not
-expose a native coop consumer. No claim is made that the full set composes,
-installs, activates, or runs on a live host.
+The current protocol artifact records serialized component conformance for the
+gateway/MCP/harness heads, while the worker endpoint is a separate Linux
+process-boundary contract. The exact watchdog-to-harness smoke passed with
+image SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`,
+but the downstream gateway/MCP inputs were synthetic faults. No claim is made
+that the full set composes, installs, activates, or runs a live game host.
 
 Required next gate: rebuild and test this exact set together, verify immutable
 artifact digests, then run the separately authorized native Windows/Linux/WSL,

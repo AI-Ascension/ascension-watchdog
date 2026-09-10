@@ -1,7 +1,11 @@
 # Worker endpoint namespace v1
 
-Owner: watchdog launch boundary. Implementation in progress; companion integration
-and native producer-to-consumer acceptance remain unverified.
+Owner: watchdog launch boundary. The Linux producer is implemented in harness PR
+#66 (`ef8c45e853d5f86c2653159a449826ffc20b5950`) and is consumed by the
+watchdog's configured worker client. The source/component gates and one native
+Linux process-boundary smoke pass; Windows producer implementation, service
+installation, live gameplay, and native producer-to-consumer release acceptance
+remain unverified.
 
 Approved configuration contains a static `endpoint_namespace`, not a fixed worker
 endpoint. The legacy `worker.endpoint` field is rejected by the closed config
@@ -44,4 +48,18 @@ Conformance example for nonce `12345678-1234-4234-8234-123456789abc`:
 Acceptance requires matching independent consumer vectors, wrong-nonce rejection,
 unchanged approved launch bytes, current/prior socket fault tests, and actual native
 bootstrap-to-authenticated-exchange tests. Pure derivation tests are not that final
-integration evidence.
+integration evidence. The current native Linux evidence is recorded in
+[`docs/evidence/real-harness-worker.md`](evidence/real-harness-worker.md): the
+watchdog launched the exact PR #66 harness image, authenticated the bootstrap and
+control exchange, admitted one dispatch, and persisted stop/cleanup. The downstream
+gateway and MCP processes were intentionally bounded synthetic fault fixtures, so
+the run does not establish a settled game action or provider result.
+
+## Current component gate
+
+Harness PR #66 was rebased onto current harness `main` (`63dc563690c93c575e75228f54672c1689d8a879`).
+Its locked format, check, Clippy, policy, and all-target/all-feature tests pass. The
+release image used by the native smoke is retained outside the repository with
+SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`.
+The image and endpoint namespace are immutable, owner-local test inputs; no
+credential or local path is part of the committed contract.

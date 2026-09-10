@@ -1,30 +1,37 @@
 {
   "schema_version": 1,
   "date": "2026-09-10",
-  "classification": "confirmed-local-evidence-not-a-release",
+  "classification": "confirmed-local-evidence-not-a-release-wave48",
   "supersedes_checkpoint": "transport-review-checkpoint.json",
   "watchdog": {
-    "tested_commit": "fa0787620e768266c683da178c81b5af7198bc39",
-    "integrated_platform_commit": "fa07876",
+    "tested_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "integrated_platform_commit": "f5eaf5e",
     "pull_request": 9,
-    "root_test_command": "cargo test --workspace --all-targets --all-features --locked --no-fail-fast -- --test-threads=1",
+    "root_test_command": "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast",
     "root_test_exit": 0,
-    "watchdog_library_tests_passed": 200,
+    "watchdog_library_tests_passed": 206,
     "watchdog_library_tests_ignored": 4,
-    "workspace_test_note": "serial all-feature run passed; 204 watchdog library cases were scheduled (200 passed, 4 ignored); all workspace integration suites passed, including restore CLI and Linux installer tests",
+    "workspace_test_note": "serial all-feature run passed; 210 watchdog library cases were scheduled (206 passed, 4 ignored); all workspace integration suites passed, including release activation, restore CLI and Linux installer tests",
     "native_linux_tests_ignored": 2,
-    "windows_cross_build": "hosted Windows rerun for fa07876 in progress; predecessor failure was an Access denied rename while a restore staging handle remained open, fixed by closing that handle before publication",
+    "windows_cross_build": "hosted Windows validation for f5eaf5e passed; the service-session lane explicitly reported UNVERIFIED because the runner was session 2",
     "windows_native_execution": "unverified",
     "scope": "watchdog, authenticated worker handoff, Gateway health binding, Linux broker lifecycle, release staging, backup, launch authority, full synthetic fault fixture",
     "source_matches_tested_platform_commit": true,
-    "hosted_runs": [34501110421, 34501117723],
-    "hosted_status_at_capture": "standards passed; Ubuntu, Windows, and dependency jobs in progress"
+    "hosted_runs": [34525217061, 34525218190, 34525217025, 34525218179],
+    "hosted_status_at_capture": "Rust/synthetic and standards runs passed on Ubuntu and Windows; Windows service-session is explicitly UNVERIFIED on runner session 2",
+    "native_worker_smoke": {
+      "harness_pr": 66,
+      "harness_commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "image_sha256": "4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2",
+      "result": "1 passed, 0 failed, 0 ignored; 23.21s; authenticated Linux process-boundary dispatch admission and durable stop/cleanup",
+      "limits": "synthetic HTTP503 gateway and /usr/bin/true MCP; not gameplay/provider/service/reboot/release/soak"
+    }
   },
   "companions": [
     {
       "repository": "sts2-game-mod",
-      "integration_commit": "e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5",
-      "pull_request": 70,
+      "integration_commit": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "pull_request": 65,
       "root_results": [
         "source-linked RecoveryTransportProbe build: zero warnings and errors",
         "RuntimeV3ValidationProbe execution passed",
@@ -35,22 +42,22 @@
     },
     {
       "repository": "sts2-harness",
-      "integration_commit": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
-      "pull_request": 59,
+      "integration_commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "pull_request": 66,
       "root_results": [
         "lifecycle suite: 28 passed",
         "recovery evidence suite: 3 passed",
         "full locked workspace report: 171 runtime passed, 1 ignored"
       ],
-      "scope": "durable runtime-v3 recovery, raw catalog identity, provider accounting and synthetic subprocess tests",
-      "pending": "cross-repository release-set rebuild and native/live gateway-MCP-host recovery; follows merged PR #58"
+      "scope": "authenticated native Linux worker endpoint, durable runtime-v3 recovery, provider accounting and synthetic subprocess tests",
+      "pending": "PR #66 remains unmerged; cross-repository release-set rebuild and native/live gateway-MCP-host recovery"
     },
     {
       "repository": "sts2-gateway",
-      "candidate_commit": "0524b67ec28791c007d2ea025e26860672358247",
+      "candidate_commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "integrated": false,
-      "pull_request": 37,
-      "pending": "actual recovery-dispatch catalog review and cross-repository rebuild; follows merged PR #35"
+      "pull_request": 39,
+      "pending": "restart guard in open PR #34, managed host settlement, and cross-repository rebuild"
     }
   ],
   "remaining_production_work": [
@@ -66,9 +73,9 @@
   "remote_delivery_completed": false,
   "remote_delivery": {
     "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/9",
-    "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/59",
-    "game_mod_pr": "https://github.com/AI-Ascension/sts2-game-mod/pull/70",
-    "status": "follow-up draft PRs #9/#37/#59/#33 published; earlier gateway, harness, MCP, game-mod, game-core, and observability changes merged; protocol and follow-ups not merged"
+    "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/66",
+    "game_mod_pr": "https://github.com/AI-Ascension/sts2-game-mod/pull/72",
+    "status": "watchdog PR #9 and harness endpoint PR #66 are open; gateway #39, MCP #40, game-mod dependency/main updates, protocol #38, game-core and observability updates are merged; no merge authorization was exercised"
   },
   "service_install_or_release_activation_this_checkpoint": false
 }
