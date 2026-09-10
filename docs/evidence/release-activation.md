@@ -40,6 +40,13 @@ watchdog release rollback --config PATH --release-id ID \
   --expected-release-digest DIGEST --idempotency-key KEY
 ```
 
+The activation-focused validation was first executed at source commit `0542ab8`
+and is retained as an ancestry record. The current PR head `f5eaf5e` contains
+that source and the collision-safe Windows fixture repair; its hosted Ubuntu/
+Windows and standards gates pass. The current integrated worktree records the
+same activation behavior plus the separate native Linux worker smoke described
+in [`real-harness-worker.md`](real-harness-worker.md).
+
 Validation executed at watchdog source commit `0542ab8` in the integrated
 worktree:
 

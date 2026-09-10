@@ -11,47 +11,52 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-      "last_observed_pr_head": "f72aeab586816be71b264bae83db192a1e8f8103",
+      "revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "last_observed_pr_head": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; substantive source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing; current PR head f72aeab adds collision-safe concurrent Windows fixture allocation; hosted Ubuntu/Windows validation and standards checks pass; mergeable; not-merged"
+      "state": "open-draft; current PR head f5eaf5e adds collision-safe Windows fixture allocation and records the native Linux watchdog-to-harness worker smoke; hosted Ubuntu/Windows validation and standards checks pass; clean; not-merged"
     },
     "sts2-gateway": {
-      "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "revision": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
-      "pull_request": 37,
-      "state": "merged; PR #38 head 9fc8eeb (PR #37 included); co-op host-lease consumer is on current main de1fe723; hosted-checks-pass (runs 34510597219, 34510597283)"
+      "pull_request": 39,
+      "feature_pull_requests": [37, 38, 39],
+      "state": "merged; current main c8be3a7 includes the durable host-lease/co-op consumer and recovery echo-response fencing; hosted checks and current-main component gates are recorded separately"
     },
     "sts2-harness": {
-      "revision": "5cc486a66b6f11930675af06f7426cd91c609983",
-      "ref": "main",
+      "revision": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
+      "ref": "codex/harness-worker-endpoint-20260910",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 59,
-      "state": "merged; PR #59 head fcd1f68; provider completion retries bind result metadata and payload and conflicting reuse is rejected; hosted-checks-pass; current-main"
+      "pull_request": 66,
+      "state": "open; PR #66 adds the authenticated native Linux worker endpoint, durable admission/unknown handling, and bootstrap peer proof; hosted Rust quality and policy checks pass; integrated watchdog smoke passes; not-merged; current main remains 63dc563"
     },
     "sts2-mcp-server": {
-      "revision": "9fa09faed351a27bfeaebc2344af7ffd12ac784d",
+      "revision": "037d10def1cbcb1c807e136d31b294355a92c010",
       "ref": "main",
       "remote": "AI-Ascension/sts2-mcp-server",
-      "pull_request": 38,
-      "state": "merged; PR #38 merge 9fa09fa; native coop component adapter and seven-tool catalog; hosted-checks-pass; current-main"
+      "pull_request": 40,
+      "feature_pull_requests": [38, 40],
+      "state": "merged; current main 037d10d includes native co-op adapter and canonical pending-rejoin response fencing; hosted checks and component gates are recorded separately"
     },
     "sts2-game-mod": {
-      "revision": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
+      "revision": "888b06702021cd2bbd22773b0267733766c3b04a",
       "ref": "main",
       "remote": "AI-Ascension/sts2-game-mod",
-      "pull_request": 70,
-      "state": "merged; PR #70 merge e532f4d; hosted-checks-pass; current-main"
+      "pull_request": 65,
+      "feature_pull_requests": [70, 72],
+      "state": "merged; current main 888b067 includes operation-aware Runtime-v3 admission and dependency refresh; hosted checks and component gates are recorded separately"
     },
     "sts2-protocol": {
-      "revision": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "revision": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
       "ref": "main",
       "remote": "AI-Ascension/sts2-protocol",
-      "pull_request": 33,
-      "state": "merged; PR #33 head 09819e2; coop-native-v1 producer artifact is on current main 6788856; hosted-checks-pass (runs 34497116746, 34497116947)"
+      "pull_request": 38,
+      "feature_pull_requests": [33, 38],
+      "state": "merged; current main f22dd72 refreshes coop-native-v1 producer captures and binds gateway/MCP/harness consumer heads; component serialized conformance remains distinct from live host evidence"
     },
     "sts2-game-core": {
       "revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
@@ -61,20 +66,28 @@
       "state": "merged; PR #9 merge f9db577; hosted-checks-pass; current-main"
     },
     "ai-agent-observability": {
-      "revision": "d7e79e1a9663601013e513048caea7063b0de9ae",
+      "revision": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
       "ref": "main",
       "remote": "AI-Ascension/ai-agent-observability",
-      "pull_request": 16,
-      "state": "merged; PR #16 merge a126715; hosted-checks-pass; current-main"
+      "pull_request": 19,
+      "state": "merged; current main 89539a6 contains OTLP bind/inode durability repair; no collector-backed watchdog release is activated"
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10",
+    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10T23:00Z",
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34524471744, 34524473975],
-    "hosted_watchdog_status_at_capture": "passed-at-f72aeab on Ubuntu and Windows; standards runs 34524471775 and 34524473943 passed; native service-session remains separately unverified",
+    "hosted_watchdog_runs": [34525217061, 34525218190],
+    "hosted_watchdog_status_at_capture": "passed-at-f5eaf5e on Ubuntu and Windows; standards runs 34525217025 and 34525218179 passed; native service-session remains separately unverified",
+    "native_worker_smoke": {
+      "watchdog_pr": 9,
+      "harness_pr": 66,
+      "harness_revision": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "harness_image_sha256": "4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2",
+      "result": "1 passed, 0 failed, 0 ignored; 23.21s; authenticated bootstrap/control/dispatch admission and durable stop/cleanup",
+      "classification": "confirmed native Linux process-boundary evidence with synthetic HTTP503 gateway and /usr/bin/true MCP downstream; not gameplay/provider/deployment/reboot/soak"
+    },
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"
