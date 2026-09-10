@@ -1800,8 +1800,24 @@ mod tests {
                 .spawn()?,
         ));
         let pid = child.as_mut().id();
-        let digest = hash_live_executable(pid)?;
-        let observed = read_live_process("test-boot", pid)?;
+        // `Child::spawn` returns as soon as the forked child exists, while an
+        // exec-from-memfd can still be settling. Poll the bounded identity
+        // observation until the sealed image and source digest agree instead
+        // of making the test depend on that scheduler race.
+        let digest = hash_file(&source)?;
+        let mut observed = None;
+        for _ in 0..100 {
+            if let Ok(candidate) = read_live_process("test-boot", pid)
+                && candidate.executable_sealed
+                && is_sealed_memfd(&candidate.executable)
+                && live_process_matches_executable(&candidate, &source, &digest)
+            {
+                observed = Some(candidate);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let observed = observed.ok_or("sealed memfd identity did not settle")?;
         assert!(observed.executable_sealed);
         assert!(is_sealed_memfd(&observed.executable));
         assert!(live_process_matches_executable(&observed, &source, &digest));
