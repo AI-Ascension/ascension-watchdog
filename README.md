@@ -36,3 +36,9 @@ tampering or malformed input; inspection alone grants no launch authority.
 Core tests include synthetic subprocess restart and persisted stop, not native
 service recovery. Administrative IPC, platform containment, exact companion
 integration and protected release activation remain separate delivery gates.
+
+The moving companion PR heads captured for the next integration review are
+listed in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json)
+with their non-activation evidence in
+[`docs/evidence/candidate-source-set-20260910.md`](docs/evidence/candidate-source-set-20260910.md).
+That candidate manifest must not be treated as an installed release.
