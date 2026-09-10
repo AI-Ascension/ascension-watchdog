@@ -160,6 +160,24 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | FAULT-23 | No live campaign; `CP` explicitly says no host launch/reboot and `README` disclaims live recovery | unverified | Execute the approved disposable-host crash and cold-reboot campaign with session availability and versioned evidence; do not substitute synthetic subprocesses. |
 | FAULT-24 | Accelerated 4,106 paused-loop reconciliations and Collector process replacement exist, but neither is a 24-hour end-to-end soak; `CP` says soak false | unverified | Run configurable 24-hour cross-repo soak across restart, archive, budget, and telemetry outage; record elapsed duration, bounds, and duplicate-effect evidence. |
 
+## Current-wave addendum — 2026-09-10
+
+The historical matrix above remains intentionally conservative. The current
+watchdog source tip `0935c66ddf4befe7fe7c17f3ba785af02057b3aa` includes the
+missing-planned-containment uncertainty repair `156917b` and passed hosted run
+`34480654731` (Ubuntu/Windows format, strict Clippy, locked workspace tests,
+release builds, standards, and dependency checks). Gateway commit `4c4d465`
+and harness commit `e1e33ec` were published to their companion draft branches;
+both PRs are still dirty/conflicting against current main and have no fresh
+green checks at this wave. The nested delegation requirement remains unmet:
+the descendant contexts exposed no native spawn surface, so only depth 1 was
+observed and no depth-4 bypass was attempted. No cross-repository build,
+service installation, live host, cold boot, activation, rollback, or soak
+evidence is promoted by these source/component results.
+
+See `docs/orchestration/integration-wave-20260910.json` for the resumable task
+record and exact changed commits.
+
 ## Delivery decision
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
