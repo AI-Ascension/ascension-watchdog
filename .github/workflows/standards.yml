@@ -1,0 +1,42 @@
+name: Standards baseline
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [bootstrap]
+
+permissions:
+  contents: read
+
+jobs:
+  standards:
+    name: Standards baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check working tree and committed patch whitespace
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          git diff --check
+          if [[ "$BASE_REVISION" =~ ^[0-9a-f]{40}$ && "$BASE_REVISION" != 0000000000000000000000000000000000000000 ]]; then
+            git diff --check "$BASE_REVISION" HEAD
+          else
+            git show --format= --check HEAD
+          fi
+      - name: Install pinned policy toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+      - name: Validate local pinned standards
+        run: cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .
+      - name: Check bootstrap documentation and configuration
+        run: |
+          if [[ -f Cargo.toml ]]; then
+            echo "active product workspace detected; bootstrap-only inventory check is not applicable"
+          else
+            cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- check-bootstrap --root .
+          fi
