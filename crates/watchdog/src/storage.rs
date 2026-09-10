@@ -1300,7 +1300,14 @@ impl Store {
             now,
         )?;
         tx.commit()?;
-        drop(conn);
+        // Explicitly close the SQLite connection before publishing the staged
+        // file.  `Drop` normally closes the connection, but on Windows the
+        // SQLite WAL/shared-memory handles can outlive that destructor boundary
+        // long enough for MoveFile/rename to report `ERROR_ACCESS_DENIED`.
+        // `Connection::close` finalizes every statement and surfaces a busy
+        // close as an error while the staging guard still removes only the
+        // newly-created temporary object.
+        conn.close().map_err(|(_, error)| error)?;
         staging.commit(&destination)?;
         Self::open(destination, &effective_config)
     }
