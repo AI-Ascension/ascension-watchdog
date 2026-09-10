@@ -5,11 +5,11 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "dfaef8d498eef4cbd866f06eb5ae6c430517d72d",
-    "watchdog_source_tested_commit": "0935c66ddf4befe7fe7c17f3ba785af02057b3aa",
-    "watchdog_pr": 8,
-    "hosted_run": 34482882591,
-    "hosted_run_status_at_capture": "completed-success; standards run 34482882911 also completed-success"
+    "watchdog_commit": "0d4983c41156e55b722e5fa03a07b1de5c7ed666",
+    "watchdog_source_tested_commit": "0d4983c41156e55b722e5fa03a07b1de5c7ed666",
+    "watchdog_pr": 9,
+    "hosted_run": 34488892883,
+    "hosted_run_status_at_capture": "in-progress; standards run 34488892750 completed-success"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -28,15 +28,15 @@
   },
   "results": {
     "watchdog": {
-      "commit": "156917bd52adb302ba0d51d008f0ae44f8c896fb",
-      "change": "missing planned Linux containment is uncertain rather than AlreadyExited",
+      "commit": "0d4983c41156e55b722e5fa03a07b1de5c7ed666",
+      "change": "durable known-failure retry admission with idempotent receipts and worker-handoff exclusion",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
-        "strict Linux watchdog Clippy: pass",
-        "locked/offline serialized workspace tests: pass",
-        "hosted run 34479326456 at prior source tip: all four jobs pass"
+        "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
+        "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (197 watchdog library tests, 4 ignored)"
       ],
-      "remote": "included in hosted run 34480654731; current branch tip dfaef8d passed hosted run 34482882591 and standards run 34482882911"
+      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation run 34488892883 in progress at capture"
     },
     "gateway": {
       "commit": "7272c17f07e1d7e79c82f498eac0855794d476f5",
@@ -58,8 +58,8 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest pinned to tested watchdog source 0935c66 and record current branch tip dfaef8d/run 34482882591 separately.",
-    "Merge current main into gateway and harness branches without rewriting history, resolve conflicts, run fresh checks, and retain separate PR states.",
+    "Keep candidate manifest pinned to tested watchdog source 0d4983c41156e55b722e5fa03a07b1de5c7ed666 and record the exact hosted run before advancing the candidate.",
+    "Rebuild the exact current-main companion release set from gateway PR35, harness PR56, MCP PR37, game-mod PR70, and protocol PR31; run cross-consumer conformance before any runtime claim.",
     "Do not claim cross-repository runtime integration until gateway, harness, MCP, mod, and protocol revisions build together.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

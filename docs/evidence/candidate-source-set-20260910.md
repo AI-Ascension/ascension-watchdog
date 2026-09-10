@@ -5,24 +5,23 @@ review. It is deliberately a candidate source set, not an activated release:
 the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
-The pins were read from remote PR metadata on 2026-09-10. The watchdog
-integration is draft PR #8 at
-`0935c66ddf4befe7fe7c17f3ba785af02057b3aa`, based on
-`codex/watchdog-integrated-20260910`. The serial all-feature workspace gate and
-hosted run `34480654731` (Ubuntu, Windows, standards, dependency audit, and
-locked release builds) passed at this exact tip. Gateway draft PR #35 is now
-current-main-based at `7272c17f07e1d7e79c82f498eac0855794d476f5` with fresh
-Rust-quality and repository-policy checks green. It remains open and unmerged.
-The harness integration is draft PR #56 at
+The pins were refreshed from remote PR metadata on 2026-09-10. The watchdog
+integration is draft PR #9 at
+`0d4983c41156e55b722e5fa03a07b1de5c7ed666`, based on the `bootstrap` default
+branch; its fresh Ubuntu, Windows, standards, and dependency workflows were
+queued or running after the retry-admission update. Gateway draft PR #35 is current-main-based at
+`7272c17f07e1d7e79c82f498eac0855794d476f5` with Rust-quality and policy checks
+green. The harness integration is draft PR #56 at
 `427176512eac67257a1b065f8508f37d2ed2255c`, combining the recovery and worker
 admission repairs on current main; Rust-quality and policy checks are green.
-PRs #54 and #55 remain open drafts with unchanged heads. MCP PR #37 at
-`16ca0cb06dc93564c14963bc544bef282b38d26d` is now merged as
-`a6b9215db1ddeeddabe4c111ed3b49476fb86e54`. The game-mod, protocol,
-game-core, and observability entries remain exact PR heads; protocol #24 is
-conflicting against its recorded/current main and is not an integrated
-release. No claim is made that these moving heads compose, install, activate,
-or run on a live host.
+MCP PR #37 at `16ca0cb06dc93564c14963bc544bef282b38d26d` is merged as
+`a6b9215db1ddeeddabe4c111ed3b49476fb86e54`. Game-mod draft PR #70 is
+current-main-based at `152c555633672bddcfa8280b290f6bd67afd564c` with all
+three hosted checks green. Protocol draft PR #31 is current-main-based at
+`5e43193cb5da17a5b772caa0f0fff49180cf716d` with hosted checks green; stale
+conflicting PR #24 is not selected. These heads are still independent source
+components: no claim is made that they compose, install, activate, or run on a
+live host.
 
 Required next gate: rebuild and test this exact set together, verify immutable
 artifact digests, then run the separately authorized native Windows/Linux/WSL,
