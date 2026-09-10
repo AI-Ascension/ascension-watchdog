@@ -29,6 +29,9 @@ pub(super) struct FakeBackend {
     orphan_stops: usize,
     retirement_error: Option<BrokerError>,
     inspect_error: Option<BrokerError>,
+    queued_job: Option<ledger::JobBinding>,
+    queued_resolution: QueuedJobResolution,
+    queued_cancellations: usize,
 }
 
 impl FakeBackend {
@@ -52,6 +55,9 @@ impl FakeBackend {
             orphan_stops: 0,
             retirement_error: None,
             inspect_error: None,
+            queued_job: None,
+            queued_resolution: QueuedJobResolution::Gone,
+            queued_cancellations: 0,
         }
     }
 }
@@ -265,6 +271,39 @@ impl SystemdBackend for FakeBackend {
             ));
         }
         Ok(())
+    }
+}
+
+impl QueuedJobBackend for FakeBackend {
+    fn queued_job_binding(&self, unit: &str) -> Option<&ledger::JobBinding> {
+        self.queued_job.as_ref().filter(|job| job.unit() == unit)
+    }
+
+    fn resolve_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobResolution> {
+        if self.queued_job.as_ref() != Some(binding) {
+            return Err(BrokerError::Conflict(
+                "fake queued job binding changed".to_owned(),
+            ));
+        }
+        Ok(self.queued_resolution)
+    }
+
+    fn cancel_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobCancellation> {
+        if self.queued_job.as_ref() != Some(binding) {
+            return Err(BrokerError::Conflict(
+                "fake queued job binding changed".to_owned(),
+            ));
+        }
+        self.queued_cancellations += 1;
+        Ok(QueuedJobCancellation::Submitted)
     }
 }
 
@@ -748,6 +787,52 @@ fn durable_pending_record_never_relaunches_an_inactive_unit() {
     let _ = child.wait();
     assert!(matches!(error, BrokerError::Conflict(_)));
     assert_eq!(broker.backend.starts, 0);
+}
+
+#[test]
+fn stop_of_pending_launch_cancels_only_the_durable_queued_job_and_stays_uncertain() {
+    let policy = policy();
+    let request = request("pending-cancel");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let mut ledger = BrokerLedger::memory();
+    assert!(
+        ledger
+            .reserve(&request, &unit, launch_policy)
+            .expect("reserve pending launch")
+    );
+    let binding = ledger::JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/91")
+        .expect("canonical queued job binding");
+    ledger
+        .bind_job(&request, launch_policy, &binding)
+        .expect("persist queued job binding");
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding);
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, ledger);
+    let (peer, mut child) = credentials(&policy);
+
+    let error = broker
+        .stop(peer, request.clone())
+        .expect_err("pending cancellation cannot claim terminal execution");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    assert_eq!(
+        broker.ledger.state(&request),
+        Some(ledger::LedgerState::Pending)
+    );
+    assert_eq!(
+        broker
+            .ledger
+            .pending_job_binding(&request, launch_policy)
+            .expect("pending job binding"),
+        broker.backend.queued_job.clone()
+    );
 }
 
 #[test]

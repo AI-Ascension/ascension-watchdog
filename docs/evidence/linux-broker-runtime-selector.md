@@ -1,8 +1,8 @@
 # Linux broker runtime selector
 
-Status: source implementation and synthetic unit evidence only. The broker
-service, its protected policy, and a native host have not been installed or
-validated by this change.
+Status: explicit source selection, broker job-binding, and synthetic unit
+evidence only. The broker service, its protected policy, and a native host have
+not been installed or validated by this change.
 
 ## Selection contract
 
@@ -45,7 +45,9 @@ Inspect, stop, and reopen use the same request identity. Reopen requires an
 active broker lifecycle receipt whose process binding still matches the
 persisted proof. Stop verifies the returned receipt before accepting the
 terminal state; no PID, executable name, or reconstructed unit path is used
-as authority.
+as authority. A pending Stop is forwarded to the broker's exact queued-job
+resolution/cancellation seam when a durable job binding exists, then remains
+uncertain until the unit effect is reconciled.
 
 An unknown legacy launch result is retained as cleanup uncertainty because
 the legacy client cannot distinguish a pre-dispatch error from a response
@@ -64,13 +66,17 @@ cargo test --locked --offline -p ascension-watchdog --lib runtime_process::tests
 cargo clippy --locked --offline -p ascension-watchdog --lib --all-targets -- -D warnings
 ```
 
-These checks prove selector bounds, direct-backend defaulting, request
-round-tripping, and receipt-correlation rejection. They do not prove a
-root-owned socket, systemd/D-Bus effects, cross-UID execution, reboot
-recovery, or live service behavior.
+The current integrated broker focused gate passes 114 tests with one explicitly
+gated native-systemd test ignored; the workspace gate must still be rerun after
+this source change. These checks prove selector bounds, direct-backend
+defaulting, request round-tripping, receipt correlation, exact job identity,
+and pending cancellation uncertainty. They do not prove a root-owned socket,
+systemd/D-Bus effects, cross-UID execution, reboot recovery, or live service
+behavior.
 
-The current broker API is a synchronous launch/lifecycle boundary. It does
-not expose an asynchronous pending-job or cancellation protocol for queued
-work. Callers requiring those semantics must keep the operation in their
-own durable journal and use an operation-specific effect witness; this
-selector does not claim to provide that protocol.
+The broker API remains synchronous at the wire boundary. It exposes bounded
+job identity resolution/cancellation but does not yet persist a separate
+cancellation intent or replay `JobRemoved` events across broker restarts.
+Callers must retain the operation in their own durable journal and use an
+operation-specific effect witness; this selector does not claim terminal
+success from a cancellation reply.

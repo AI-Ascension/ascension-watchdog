@@ -11,7 +11,7 @@ const SYSTEMD_JOB_PATH_PREFIX: &str = "/org/freedesktop/systemd1/job/";
 /// and non-secret so a pending record can retain this value durably.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct JobBinding {
+pub struct JobBinding {
     unit: String,
     job_id: u32,
     job_path: String,
@@ -19,7 +19,7 @@ pub(super) struct JobBinding {
 
 impl JobBinding {
     /// Construct a binding from the object path returned by PID 1.
-    pub(super) fn from_object_path(unit: &str, job_path: &str) -> BrokerResult<Self> {
+    pub fn from_object_path(unit: &str, job_path: &str) -> BrokerResult<Self> {
         let job_id = parse_job_path(job_path)?;
         let binding = Self {
             unit: unit.to_owned(),
@@ -630,6 +630,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: previous.unit.clone(),
             identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
             job: Some(job.clone()),
             state: previous.state,
             receipt: previous.receipt.clone(),
@@ -1401,6 +1402,7 @@ mod tests {
             request: request.clone(),
             unit: unit.clone(),
             identity: identity(),
+            bootstrap: None,
             job: Some(binding.clone()),
             state: LedgerState::Committed,
             receipt: Some(LaunchReceipt {

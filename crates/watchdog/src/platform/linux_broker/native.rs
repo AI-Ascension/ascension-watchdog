@@ -40,7 +40,7 @@ const MAX_JOB_RESULT_BYTES: usize = 64;
 /// caller must reconcile the exact unit and, when available, its
 /// `JobRemoved` event before deciding whether the effect happened.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum QueuedJobResolution {
+pub enum QueuedJobResolution {
     Queued,
     Gone,
 }
@@ -49,7 +49,7 @@ pub(super) enum QueuedJobResolution {
 /// reported separately from a submitted cancellation and never interpreted as
 /// proof that the unit was not started.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum QueuedJobCancellation {
+pub enum QueuedJobCancellation {
     Submitted,
     AlreadyGone,
 }
@@ -58,23 +58,20 @@ pub(super) enum QueuedJobCancellation {
 /// The object path and unit are checked against the immutable job binding
 /// before its result can influence reconciliation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct JobRemovedEvent {
+pub struct JobRemovedEvent {
     binding: ledger::JobBinding,
     result: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum JobRemovalOutcome {
+pub enum JobRemovalOutcome {
     Done,
     Canceled,
     Failed,
 }
 
 impl JobRemovedEvent {
-    pub(super) fn new(
-        binding: ledger::JobBinding,
-        result: impl Into<String>,
-    ) -> BrokerResult<Self> {
+    pub fn new(binding: ledger::JobBinding, result: impl Into<String>) -> BrokerResult<Self> {
         binding.validate_syntax_for_backend()?;
         let result = result.into();
         if result.is_empty()
@@ -90,16 +87,16 @@ impl JobRemovedEvent {
         Ok(Self { binding, result })
     }
 
-    pub(super) fn binding(&self) -> &ledger::JobBinding {
+    pub fn binding(&self) -> &ledger::JobBinding {
         &self.binding
     }
 
-    pub(super) fn result(&self) -> &str {
+    pub fn result(&self) -> &str {
         &self.result
     }
 
     fn outcome(&self) -> JobRemovalOutcome {
-        match self.result.as_str() {
+        match self.result() {
             "done" => JobRemovalOutcome::Done,
             "canceled" => JobRemovalOutcome::Canceled,
             _ => JobRemovalOutcome::Failed,
@@ -112,7 +109,7 @@ impl JobRemovedEvent {
 /// conservative `Unavailable` defaults; the native systemd backend overrides
 /// each method with exact object-path validation.  This keeps cancellation an
 /// explicit opt-in rather than making a unit pathname a fallback identity.
-pub(super) trait QueuedJobBackend {
+pub trait QueuedJobBackend {
     fn queued_job_binding(&self, _unit: &str) -> Option<&ledger::JobBinding> {
         None
     }
@@ -207,7 +204,6 @@ impl NativeSystemdBackend {
     /// from a unit name.  The returned object path, numeric ID, and Job.Unit
     /// property must all agree with the durable binding.
     fn resolve_queued_job_native(
-        &mut self,
         binding: &ledger::JobBinding,
         deadline: Instant,
     ) -> BrokerResult<QueuedJobResolution> {
@@ -270,11 +266,10 @@ impl NativeSystemdBackend {
     }
 
     fn cancel_queued_job_native(
-        &mut self,
         binding: &ledger::JobBinding,
         deadline: Instant,
     ) -> BrokerResult<QueuedJobCancellation> {
-        match self.resolve_queued_job_native(binding, deadline)? {
+        match Self::resolve_queued_job_native(binding, deadline)? {
             QueuedJobResolution::Gone => return Ok(QueuedJobCancellation::AlreadyGone),
             QueuedJobResolution::Queued => {}
         }
@@ -993,7 +988,7 @@ impl QueuedJobBackend for NativeSystemdBackend {
         binding: &ledger::JobBinding,
         deadline: Instant,
     ) -> BrokerResult<QueuedJobResolution> {
-        self.resolve_queued_job_native(binding, deadline)
+        Self::resolve_queued_job_native(binding, deadline)
     }
 
     fn cancel_queued_job(
@@ -1001,7 +996,7 @@ impl QueuedJobBackend for NativeSystemdBackend {
         binding: &ledger::JobBinding,
         deadline: Instant,
     ) -> BrokerResult<QueuedJobCancellation> {
-        self.cancel_queued_job_native(binding, deadline)
+        Self::cancel_queued_job_native(binding, deadline)
     }
 
     fn observe_job_removed(
@@ -1038,13 +1033,14 @@ fn validate_job_removed(
 /// Decode a manager `JobRemoved` signal without treating arbitrary signals as
 /// lifecycle evidence. The caller must still pass the result through
 /// `QueuedJobBackend::observe_job_removed` with the durable binding.
-pub(super) fn decode_job_removed(message: &zbus::Message) -> BrokerResult<JobRemovedEvent> {
+pub fn decode_job_removed(message: &zbus::Message) -> BrokerResult<JobRemovedEvent> {
     let header = message.header();
     if message.message_type() != zbus::message::Type::Signal
-        || header.path().map(|path| path.as_str()) != Some("/org/freedesktop/systemd1")
-        || header.interface().map(|interface| interface.as_str())
+        || header.path().map(zbus::zvariant::ObjectPath::as_str)
+            != Some("/org/freedesktop/systemd1")
+        || header.interface().map(zbus::names::InterfaceName::as_str)
             != Some("org.freedesktop.systemd1.Manager")
-        || header.member().map(|member| member.as_str()) != Some("JobRemoved")
+        || header.member().map(zbus::names::MemberName::as_str) != Some("JobRemoved")
     {
         return Err(BrokerError::Invalid(
             "systemd message is not a Manager.JobRemoved signal".to_owned(),
@@ -1379,15 +1375,14 @@ mod queued_job_tests {
 
     #[test]
     fn native_queued_job_resolution_and_cancellation_honor_deadline() {
-        let mut backend = NativeSystemdBackend::connect();
         let job = binding("synthetic.service", 8);
         let expired = Instant::now();
         assert!(matches!(
-            backend.resolve_queued_job_native(&job, expired),
+            NativeSystemdBackend::resolve_queued_job_native(&job, expired),
             Err(BrokerError::Unavailable(_))
         ));
         assert!(matches!(
-            backend.cancel_queued_job_native(&job, expired),
+            NativeSystemdBackend::cancel_queued_job_native(&job, expired),
             Err(BrokerError::Unavailable(_))
         ));
     }

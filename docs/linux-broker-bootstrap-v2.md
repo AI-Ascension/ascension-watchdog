@@ -96,18 +96,28 @@ nonce and prepared intent; use exact Inspect/Stop reconciliation, never a new
 nonce or a blind launch retry. A committed launch whose response was lost is
 inspectable and stoppable without delivering its frame again.
 
-## Runtime selection remains blocked in source
+## Runtime selection and remaining lifecycle boundary
 
-The runtime still selects the direct Linux adapter. The broker-side typed path
-does not yet solve asynchronous systemd job cancellation, Pending ownership
-recovery, or the final watchdog Stop/exec barrier. In particular, dropping a
-parent SQLite reservation on timeout does not cancel a queued PID 1 launch.
-Pending records without retained original containment cannot authorize pathname
-adoption or termination. These cases remain uncertain, not successful cleanup.
+`RuntimeProcessManager` now has an explicit `linux_broker` configuration
+selector. Omitting it keeps the direct Linux adapter; selecting it routes
+launch, inspect, recovery and stop through `BrokerClient` and the exact receipt
+identity. This source wiring and its synthetic tests do not prove an installed
+root-owned broker, a systemd/D-Bus effect, or a native service run.
 
-Before runtime selection, implement job-correlated prepare/resolve/cancel,
-durable cancellation intent and exact retained-containment retirement (or an
-equivalently verified watchdog-owned admission guardian). Add parent/broker
-death, late job execution, lost response, concurrent Stop, missing original
-capability and same-name replacement regressions. Then validate the real
-systemd stdin/bootstrap/containment path on an authorized disposable host.
+The broker retains the exact `StartTransientUnit` job object identity in the
+pending journal, resolves it by its immutable job ID/object path, and exposes a
+bounded `CancelJob` path. A Stop request for a still-pending launch invokes that
+exact cancellation when the job is queued, but keeps the reservation pending:
+neither a `CancelJob` reply nor a raced `JobRemoved` event proves whether the
+unit executed. Matching `JobRemoved` decoding is available only with the
+durable binding; unrelated or malformed signals fail closed.
+
+Durable cancellation intent across broker death, asynchronous `JobRemoved`
+subscription/replay, and the final watchdog Stop/exec admission barrier remain
+open. Pending records without retained original containment still cannot
+authorize pathname adoption or termination. These cases remain uncertain, not
+successful cleanup. Add parent/broker death, late job execution, lost response,
+concurrent Stop, missing original capability and same-name replacement
+regressions before claiming the asynchronous lifecycle complete. Then validate
+the real systemd stdin/bootstrap/containment path on an authorized disposable
+host.

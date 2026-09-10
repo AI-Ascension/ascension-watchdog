@@ -869,24 +869,27 @@ impl NativeBackend {
             #[cfg(target_os = "linux")]
             Self::LinuxBroker(client) => {
                 let request = broker_request_from_planned_containment(planned_containment)?;
-                let inspected = client.inspect(&request).map_err(map_broker_error)?;
-                match inspected.state {
-                    crate::platform::linux_broker::BrokerLifecycleState::Stopped => {
-                        Ok(RuntimeStopOutcome::AlreadyExited)
-                    }
-                    crate::platform::linux_broker::BrokerLifecycleState::Active => client
-                        .stop(&request)
-                        .map(|receipt| {
-                            if receipt.state
-                                == crate::platform::linux_broker::BrokerLifecycleState::Stopped
-                            {
-                                RuntimeStopOutcome::Exited(None)
+                // Stop is idempotent for a committed or terminal receipt and
+                // also gives the broker a chance to cancel an exact queued
+                // job for a still-pending reservation. An Inspect-first
+                // branch would turn that pending cancellation into a
+                // read-only conflict and leave the manager job untouched.
+                client
+                    .stop(&request)
+                    .map(|receipt| {
+                        if receipt.state
+                            == crate::platform::linux_broker::BrokerLifecycleState::Stopped
+                        {
+                            if receipt.duplicate {
+                                RuntimeStopOutcome::AlreadyExited
                             } else {
-                                RuntimeStopOutcome::TimedOut
+                                RuntimeStopOutcome::Exited(None)
                             }
-                        })
-                        .map_err(map_broker_error),
-                }
+                        } else {
+                            RuntimeStopOutcome::TimedOut
+                        }
+                    })
+                    .map_err(map_broker_error)
             }
             #[cfg(windows)]
             Self::Windows(backend) => backend

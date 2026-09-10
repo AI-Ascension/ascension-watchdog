@@ -909,8 +909,10 @@ pub struct BrokerLifecycleReceipt {
 mod ledger;
 #[cfg(target_os = "linux")]
 pub use ledger::BrokerLedger;
+#[cfg(target_os = "linux")]
+pub use ledger::JobBinding;
 pub mod descriptor_store;
-pub trait SystemdBackend {
+pub trait SystemdBackend: QueuedJobBackend {
     fn start(
         &mut self,
         unit: &str,
@@ -1128,9 +1130,29 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         // durable pending reservation and leave cleanup to a later exact-unit
         // reconciliation instead of stopping an orphan that may have raced
         // this request.
-        let observation = self
+        let started = self
             .backend
-            .start(&unit, request, policy, bootstrap, deadline)?;
+            .start(&unit, request, policy, bootstrap, deadline);
+        // Native systemd returns a unique job object before the unit reaches
+        // its active postcondition. Bind that exact object into the pending
+        // journal before acknowledging either success or failure. A backend
+        // without a queued-job authority (the in-memory test backend and the
+        // delegated adapter) conservatively leaves the reservation unbound.
+        if let Some(job) = self.backend.queued_job_binding(&unit).cloned() {
+            // Append the durable binding before consuming the backend's local
+            // copy. If the journal is poisoned, the exact job remains
+            // available to this broker incarnation for later reconciliation.
+            self.ledger.bind_job(request, policy, &job)?;
+            let consumed = self
+                .backend
+                .take_queued_job_binding(&unit, Instant::now() + MAX_CLEANUP_TIMEOUT)?;
+            if consumed != job {
+                return Err(BrokerError::Conflict(
+                    "backend queued job changed while binding its durable identity".to_owned(),
+                ));
+            }
+        }
+        let observation = started?;
         // A failed postcondition cannot supply cleanup authority. In
         // particular, do not follow its cgroup or executable identity:
         // they may describe a different process. Preserve the pending
@@ -1222,9 +1244,27 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         };
         let record_is_stop_pending = matches!(&record, ledger::LifecycleRecord::StopPending(_));
         match record {
-            ledger::LifecycleRecord::Pending => Err(BrokerError::Conflict(
-                "lifecycle request has an unresolved launch reservation".to_owned(),
-            )),
+            ledger::LifecycleRecord::Pending => {
+                if operation == BrokerLifecycleOperation::Stop {
+                    if let Some(job) = self.ledger.pending_job_binding(request, policy)? {
+                        // A queued-job cancellation is an effect, but neither
+                        // a successful CancelJob call nor a raced JobRemoved
+                        // event proves whether the transient unit executed.
+                        // Keep the pending reservation and force exact unit
+                        // reconciliation before any terminal transition.
+                        match self.backend.resolve_queued_job(&job, deadline)? {
+                            native::QueuedJobResolution::Queued => {
+                                let _ = self.backend.cancel_queued_job(&job, deadline)?;
+                            }
+                            native::QueuedJobResolution::Gone => {}
+                        }
+                    }
+                }
+                Err(BrokerError::Conflict(
+                    "lifecycle request has an unresolved launch reservation; exact execution remains uncertain"
+                        .to_owned(),
+                ))
+            }
             ledger::LifecycleRecord::Stopped(persisted) => {
                 verify_receipt_identity(&persisted, request, &unit, policy)?;
                 match self.backend.inspect(&unit, policy, deadline)? {
@@ -2028,6 +2068,11 @@ pub(crate) use native::require_no_supplementary_groups;
 pub use native::run_native_broker;
 #[cfg(all(target_os = "linux", test))]
 pub(crate) use native::verify_process_executable;
+#[cfg(target_os = "linux")]
+pub use native::{
+    JobRemovalOutcome, JobRemovedEvent, QueuedJobBackend, QueuedJobCancellation,
+    QueuedJobResolution, decode_job_removed,
+};
 
 #[cfg(test)]
 mod tests;
