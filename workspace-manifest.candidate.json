@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "fbe3aed82c6500c373a5a5169e410792caf54d38",
-      "last_observed_pr_head": "fbe3aed82c6500c373a5a5169e410792caf54d38",
+      "revision": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
+      "last_observed_pr_head": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; source-tested-at-fbe3aed; hosted-checks-running-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; protected read-only release inspection plus durable retry and scoped reconciliation; source-tested-at-b27a6c4; hosted-checks-queued-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",
@@ -26,11 +26,11 @@
       "state": "merged; merge-commit-2cf9127; hosted-checks-pass; current-main"
     },
     "sts2-harness": {
-      "revision": "e5029f1023f8a4df676e537298b1efc19ef00e6c",
-      "ref": "codex/harness-integrated-pr54-pr55-20260910",
+      "revision": "ed033f2681f8e0e01926e641524c7427af2cc2fd",
+      "ref": "codex/harness-worker-module-wiring-20260910",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 56,
-      "state": "merged; merge-commit-e5029f1; hosted-checks-pass; current-main"
+      "pull_request": 58,
+      "state": "open-draft; durable worker handoff/runtime wiring; source-tested-local; hosted-checks-queued; mergeable; not-merged; base-e5029f1"
     },
     "sts2-mcp-server": {
       "revision": "a6b9215db1ddeeddabe4c111ed3b49476fb86e54",
@@ -47,11 +47,11 @@
       "state": "merged; merge-commit-e532f4d; hosted-checks-pass; current-main"
     },
     "sts2-protocol": {
-      "revision": "5e43193cb5da17a5b772caa0f0fff49180cf716d",
-      "ref": "recovery/coop-native-admitted-20260910",
+      "revision": "09819e2216354136ab5a799413dcd98499f56580",
+      "ref": "codex/coop-native-current-main-20260910",
       "remote": "AI-Ascension/sts2-protocol",
-      "pull_request": 31,
-      "state": "open-draft; conflicting-after-protocol-24-merge; hosted-checks-pass-at-old-head; rebase-required; not-merged"
+      "pull_request": 33,
+      "state": "open-draft; rebased-on-current-main-997de2a; source-tested-local; hosted-checks-pending; mergeable; not-merged"
     },
     "sts2-game-core": {
       "revision": "9a27a80c32dcadd8030cf42c861e9e5da4daed1c",

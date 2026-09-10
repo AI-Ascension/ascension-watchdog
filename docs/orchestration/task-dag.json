@@ -52,12 +52,12 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"fbe3aed82c6500c373a5a5169e410792caf54d38","pull_request":9,"status":"draft; durable retry plus authenticated scoped reconciliation; local full Linux/synthetic gates pass; hosted checks running against exact PR head"},
-    "harness": {"commit":"e5029f1023f8a4df676e537298b1efc19ef00e6c","pull_request":56,"status":"merged current main; recovery plus worker identity repairs; hosted Rust-quality and policy checks green"},
+    "watchdog": {"commit":"b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed","pull_request":9,"status":"draft; durable retry, authenticated scoped reconciliation, and protected read-only release inspection; local full Linux/synthetic gates pass; hosted checks queued against exact PR head"},
+    "harness": {"commit":"ed033f2681f8e0e01926e641524c7427af2cc2fd","pull_request":58,"status":"draft; durable worker handoff/runtime wiring and watchdog-worker-v1 artifacts; local gates pass; hosted checks queued"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
     "gateway": {"commit":"2cf9127bfe5b7f1f271dd1b2889d92a09f042f83","pull_request":35,"status":"merged current main; malformed post-write response repair; hosted Rust-quality and policy checks green"},
     "game_mod": {"commit":"e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5","pull_request":70,"status":"merged current main; REST integration; hosted checks green; cross-repository rebuild pending"},
-    "protocol": {"commit":"5e43193cb5da17a5b772caa0f0fff49180cf716d","pull_request":31,"status":"open draft; conflicting after protocol-24 merge; hosted checks only at old head; rebase required"},
+    "protocol": {"commit":"09819e2216354136ab5a799413dcd98499f56580","pull_request":33,"status":"draft; coop-native-v1 rebased onto current main 997de2a; local gates pass; hosted checks pending; not merged"},
     "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"
   },
   "completion": "unverified"
