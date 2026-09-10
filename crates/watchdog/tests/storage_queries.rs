@@ -88,6 +88,13 @@ fn production_cli_rejects_direct_job_writes_before_opening_state() {
             "--config".to_owned(),
             path.to_string_lossy().into_owned(),
         ]);
+        #[cfg(windows)]
+        assert!(matches!(
+            result,
+            Err(ascension_watchdog::WatchdogError::InvalidInput(message))
+                if message.contains("protected configuration")
+        ));
+        #[cfg(not(windows))]
         assert!(matches!(
             result,
             Err(ascension_watchdog::WatchdogError::Unauthorized(_))
