@@ -5,18 +5,18 @@ review. It is deliberately a candidate source set, not an activated release:
 the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
-The pins were read from the remote PR metadata on 2026-09-10. The candidate
-source pin in the manifest is implementation head
-`3ae1a22f685228420074e7703b9db492cc16b861`. Its hosted dependency, Ubuntu,
-Windows, and standards checks passed in runs `34466829755` and `34466829733`;
-later documentation-only pin-alignment commits do not change that source
-candidate. The preceding source commit
-`572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c` also had green hosted checks. The
-companion set includes open draft PRs, the merged harness PR head, and the
-unmerged harness recovery-catalog PR #53 at
-`6fcd059b420a1099ec225a907ee3aea5e799f0e7`; that PR's hosted Rust and policy
-checks pass. No claim is made that these moving heads compose, install,
-activate, or run on a live host.
+The pins were read from remote PR metadata on 2026-09-10. The watchdog source
+is PR #2 at `dda3a915f7ea25bc291727f0e151b421344cc007`; its dependency,
+Ubuntu, Windows, and standards checks passed in runs `34467741617` and
+`34467741618`. The gateway is PR #35 at `8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711`,
+the harness recovery-catalog repair is PR #53 at
+`6fcd059b420a1099ec225a907ee3aea5e799f0e7`, and MCP workflow authority is
+PR #37 at `16ca0cb06dc93564c14963bc544bef282b38d26d`; their hosted checks
+passed on the recorded heads. The game-mod, protocol, game-core, and
+observability entries are likewise exact PR heads, with protocol #24 marked
+conflicting against the current main and therefore not an integrated release.
+No claim is made that these moving heads compose, install, activate, or run on
+a live host.
 
 Required next gate: rebuild and test this exact set together, verify immutable
 artifact digests, then run the separately authorized native Windows/Linux/WSL,
