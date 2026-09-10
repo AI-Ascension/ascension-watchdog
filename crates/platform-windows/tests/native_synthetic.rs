@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
@@ -18,6 +19,7 @@ use windows_sys::Win32::System::Threading::{
 
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+static TEST_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct TestDirectory {
     path: PathBuf,
@@ -26,12 +28,21 @@ struct TestDirectory {
 impl TestDirectory {
     fn create() -> Result<Self, Box<dyn Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "ascension-platform-windows-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir(&path)?;
-        Ok(Self { path })
+        let prefix = format!("ascension-platform-windows-{}-{nonce}", std::process::id());
+        // Windows runners can report a coarse clock value while several
+        // tests create fixtures concurrently.  Keep the timestamp useful for
+        // diagnostics, but make allocation collision-safe instead of treating
+        // ERROR_ALREADY_EXISTS as a fixture failure.
+        for _ in 0..128 {
+            let sequence = TEST_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("{prefix}-{sequence}"));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err("could not allocate a unique Windows test directory".into())
     }
 
     fn path(&self) -> &Path {
