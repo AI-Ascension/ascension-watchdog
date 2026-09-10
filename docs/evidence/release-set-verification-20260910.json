@@ -8,7 +8,7 @@
       "tested_source": "0542ab87f58d7aa38be35ccd407d202e224e2789",
       "implementation_source": "0542ab87f58d7aa38be35ccd407d202e224e2789",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "remote_pr_head_at_capture": "3a6318d7d16c26f7e6ee12514f8aaf140215ef55",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {

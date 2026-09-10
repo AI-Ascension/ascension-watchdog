@@ -12,11 +12,11 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-      "last_observed_pr_head": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "last_observed_pr_head": "3a6318d7d16c26f7e6ee12514f8aaf140215ef55",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing on top of the prior restore/publication and conformance work; hosted runs for this source are tracked below; mergeable; not-merged"
+      "state": "open-draft; substantive source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing; current PR head 3a6318d is a documentation refresh; hosted checks for 3a6318d pass; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
