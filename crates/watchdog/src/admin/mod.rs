@@ -28,8 +28,8 @@ pub use protocol::{
     ContractVersion, DispatchContext, EmptyParams, HealthSnapshot, JobFilter, JobStatus,
     JobSubmitRequest, JobSubmitView, JobSubmittedView, JobView, JobsRequest, JobsView,
     MainLoopHealth, MainLoopPhase, QuarantineRequest, ReconcileRequest, ReconcileTarget,
-    ReleaseActivateRequest, ReleaseInspectRequest, ReleaseInspection, ReplyStatus, RestoreRequest,
-    RestoreView, RetryPolicy, RetryRequest, StatusView,
+    ReleaseActivateRequest, ReleaseActivationView, ReleaseInspectRequest, ReleaseInspection,
+    ReplyStatus, RestoreRequest, RestoreView, RetryPolicy, RetryRequest, StatusView,
 };
 pub use queue::{AdminQueue, MAX_DRAIN_BATCH};
 pub use server::{AdminServer, AdminServerConfig};

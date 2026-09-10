@@ -283,10 +283,48 @@ fn real_service_read_credential_inspects_configured_release_without_store_writes
     assert_eq!(result.release_digest, expected_manifest_digest);
     assert!(result.compatible);
     assert!(!result.active);
+
+    // Activation is an explicit authenticated admin operation. It requires
+    // the same exact manifest digest returned by the protected read-only
+    // inspection and runs while the durable deployment is stopped.
+    let activation_client = fixture.client(Capability::Admin, &fixture.admin_token);
+    let activation_digest = expected_manifest_digest.clone();
+    let activation_request = thread::spawn(move || {
+        activation_client
+            .execute(
+                "activate-release-1",
+                AdminCommand::ReleaseActivate(ascension_watchdog::admin::ReleaseActivateRequest {
+                    release_id: "release-1".to_owned(),
+                    expected_release_digest: activation_digest,
+                    rollback: false,
+                }),
+            )
+            .unwrap()
+    });
+    wait_for_depth(&queue, 1);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    let activation_response = activation_request.join().unwrap();
+    assert_eq!(activation_response.status, ReplyStatus::Ok);
+    let Some(AdminResult::ReleaseActivation(activation)) = activation_response.result else {
+        panic!("release activation result missing");
+    };
+    assert_eq!(activation.release_id, "release-1");
+    assert_eq!(activation.release_digest, expected_manifest_digest);
+    assert!(!activation.rollback);
+    assert!(activation.previous_release_id.is_none());
     drop(service);
     drop(server);
     let inspected = Store::open_read_only(&config.database, &config).unwrap();
-    assert_eq!(inspected.operator_command_count().unwrap(), 0);
+    assert_eq!(inspected.operator_command_count().unwrap(), 1);
+    assert_eq!(
+        inspected
+            .release_selection()
+            .unwrap()
+            .active
+            .expect("active release")
+            .release_digest,
+        expected_manifest_digest
+    );
     drop(inspected);
 
     // A changed artifact remains non-authoritative and the authenticated
@@ -319,7 +357,7 @@ fn real_service_read_credential_inspects_configured_release_without_store_writes
     drop(service);
     drop(server);
     let inspected = Store::open_read_only(&config.database, &config).unwrap();
-    assert_eq!(inspected.operator_command_count().unwrap(), 0);
+    assert_eq!(inspected.operator_command_count().unwrap(), 1);
 }
 
 #[test]

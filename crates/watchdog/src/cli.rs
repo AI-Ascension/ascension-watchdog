@@ -338,9 +338,65 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
 }
 
 fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
-    if args.first().map(String::as_str) != Some("inspect") {
+    let subcommand = args.first().map(String::as_str).ok_or_else(|| {
+        WatchdogError::InvalidInput("release requires inspect, activate, or rollback".to_owned())
+    })?;
+    if matches!(subcommand, "activate" | "rollback") {
+        let rollback = subcommand == "rollback";
+        args.remove(0);
+        let release_id = take_option(args, "--release-id").ok_or_else(|| {
+            WatchdogError::InvalidInput("release activation requires --release-id".to_owned())
+        })?;
+        let expected_release_digest =
+            take_option(args, "--expected-release-digest").ok_or_else(|| {
+                WatchdogError::InvalidInput(
+                    "release activation requires --expected-release-digest".to_owned(),
+                )
+            })?;
+        let key = take_option(args, "--idempotency-key").ok_or_else(|| {
+            WatchdogError::InvalidInput(
+                "release activation requires --idempotency-key; reuse it after an uncertain response"
+                    .to_owned(),
+            )
+        })?;
+        if !args.is_empty() {
+            return Err(WatchdogError::InvalidInput(
+                "unexpected release activation argument".to_owned(),
+            ));
+        }
+        let config = WatchdogConfig::from_file(config_path)?;
+        let admin = config.admin.as_ref().ok_or_else(|| {
+            WatchdogError::Unauthorized(
+                "authenticated admin configuration is required for release activation".to_owned(),
+            )
+        })?;
+        let command =
+            crate::admin::AdminCommand::ReleaseActivate(crate::admin::ReleaseActivateRequest {
+                release_id,
+                expected_release_digest,
+                rollback,
+            });
+        command.validate().map_err(WatchdogError::InvalidInput)?;
+        let client = crate::admin::AdminClient::new(crate::admin::AdminClientConfig::new(
+            admin.endpoint.clone(),
+            admin.admin_token_path.clone(),
+            crate::admin::Capability::Admin,
+        )?)?;
+        let response = client.execute(&key, command)?;
+        if !matches!(
+            response.status,
+            crate::admin::ReplyStatus::Ok | crate::admin::ReplyStatus::Accepted
+        ) {
+            return Err(WatchdogError::Conflict(format!(
+                "release activation returned {:?}; idempotency key {key}",
+                response.status
+            )));
+        }
+        return Ok(Some(serde_json::to_string(&response)?));
+    }
+    if subcommand != "inspect" {
         return Err(WatchdogError::InvalidInput(
-            "release requires inspect".to_owned(),
+            "release requires inspect, activate, or rollback".to_owned(),
         ));
     }
     args.remove(0);
@@ -898,5 +954,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

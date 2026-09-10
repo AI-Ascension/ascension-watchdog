@@ -49,8 +49,9 @@ impl AdminDispatcher for Dispatcher<'_> {
                 OperatorCommand::Reconcile
             }
             AdminCommand::ReleaseInspect(_) => OperatorCommand::ReleaseInspect,
+            AdminCommand::ReleaseActivate(_) => OperatorCommand::ReleaseActivate,
             AdminCommand::Backup(_) => OperatorCommand::Backup,
-            _ => return Err(AdminDispatchError::Unsupported),
+            AdminCommand::Restore(_) => return Err(AdminDispatchError::Unsupported),
         };
         let durable_context = OperatorCommandContext::new(
             context.request_id().to_string(),
@@ -101,6 +102,9 @@ impl AdminDispatcher for Dispatcher<'_> {
                 config_digest: status.config_digest,
                 approved_release_digest: status.approved_release_digest,
             }));
+        }
+        if let AdminCommand::ReleaseActivate(request) = command {
+            return self.dispatch_release_activation(context, request, &durable_context);
         }
         if let AdminCommand::JobSubmit(request) = command {
             let owner = self
@@ -247,6 +251,167 @@ impl AdminDispatcher for Dispatcher<'_> {
 }
 
 impl Dispatcher<'_> {
+    fn dispatch_release_activation(
+        &mut self,
+        context: &DispatchContext,
+        request: &crate::admin::ReleaseActivateRequest,
+        durable_context: &OperatorCommandContext,
+    ) -> Result<AdminResult, AdminDispatchError> {
+        // A replay is answered from the durable receipt before reopening the
+        // catalog. This preserves idempotency even if a release directory was
+        // later retired or is temporarily unavailable.
+        if let Some(existing) = self
+            .supervisor
+            .store
+            .operator_command(context.idempotency_key())
+            .map_err(|error| AdminDispatchError::from(&error))?
+        {
+            if existing.principal != format!("{:?}", context.principal())
+                || existing.capability != OperatorCapability::Admin
+            {
+                return Err(AdminDispatchError::Unauthorized);
+            }
+            if existing.command != OperatorCommand::ReleaseActivate
+                || existing.command_fingerprint != context.command_fingerprint()
+            {
+                return Err(AdminDispatchError::Conflict);
+            }
+            return serde_json::from_value(existing.response)
+                .map_err(|_| AdminDispatchError::PersistenceUnavailable);
+        }
+
+        let selection = self.validate_release_activation(request)?;
+        let owner = self
+            .supervisor
+            .lock
+            .as_ref()
+            .ok_or(AdminDispatchError::Unauthorized)?;
+        self.supervisor
+            .store
+            .prepare_release_activation(
+                owner,
+                &context.request_id().to_string(),
+                context.idempotency_key(),
+                &request.release_id,
+                &request.expected_release_digest,
+                request.rollback,
+                now_unix_ms(),
+            )
+            .map_err(|error| AdminDispatchError::from(&error))?;
+
+        // The first inspection established admission; this second inspection
+        // is the final protected-handle check immediately before the durable
+        // selector commit. If it fails, the prepared marker remains so the
+        // exact request can retry after the approved bytes are restored.
+        self.verify_release_manifest(&request.release_id, &request.expected_release_digest)?;
+        let previous_release_id = selection
+            .active
+            .as_ref()
+            .map(|release| release.release_id.clone());
+        let previous_release_digest = selection
+            .active
+            .as_ref()
+            .map(|release| release.release_digest.clone());
+        let result = AdminResult::ReleaseActivation(crate::admin::ReleaseActivationView {
+            release_id: request.release_id.clone(),
+            release_digest: request.expected_release_digest.clone(),
+            previous_release_id,
+            previous_release_digest,
+            rollback: request.rollback,
+        });
+        let response = serde_json::to_value(&result).map_err(|_| AdminDispatchError::Internal)?;
+        let receipt = self
+            .supervisor
+            .store
+            .complete_release_activation(
+                owner,
+                durable_context,
+                &request.release_id,
+                &request.expected_release_digest,
+                request.rollback,
+                &response,
+                now_unix_ms(),
+            )
+            .map_err(|error| AdminDispatchError::from(&error))?;
+        match receipt {
+            OperatorCommandOutcome::Accepted(receipt)
+            | OperatorCommandOutcome::Replayed(receipt) => serde_json::from_value(receipt.response)
+                .map_err(|_| AdminDispatchError::PersistenceUnavailable),
+            OperatorCommandOutcome::ReadOnly => Err(AdminDispatchError::Internal),
+        }
+    }
+
+    fn validate_release_activation(
+        &self,
+        request: &crate::admin::ReleaseActivateRequest,
+    ) -> Result<crate::storage::ReleaseSelection, AdminDispatchError> {
+        let status = self
+            .supervisor
+            .store
+            .status()
+            .map_err(|error| AdminDispatchError::from(&error))?;
+        if status.desired_mode != DesiredMode::Stopped {
+            return Err(AdminDispatchError::Conflict);
+        }
+        if !self.supervisor.children.is_empty()
+            || !self
+                .supervisor
+                .store
+                .unsettled_launch_intents()
+                .map_err(|error| AdminDispatchError::from(&error))?
+                .is_empty()
+            || self
+                .supervisor
+                .store
+                .next_worker_handoff_for_reconciliation()
+                .map_err(|error| AdminDispatchError::from(&error))?
+                .is_some()
+        {
+            return Err(AdminDispatchError::Busy);
+        }
+        let selection = self
+            .supervisor
+            .store
+            .release_selection()
+            .map_err(|error| AdminDispatchError::from(&error))?;
+        if let Some(pending) = &selection.pending {
+            if pending.release.release_id != request.release_id
+                || pending.release.release_digest != request.expected_release_digest
+                || pending.rollback != request.rollback
+            {
+                return Err(AdminDispatchError::Conflict);
+            }
+        } else if request.rollback {
+            let Some(previous) = &selection.previous else {
+                return Err(AdminDispatchError::Conflict);
+            };
+            if previous.release_id != request.release_id
+                || previous.release_digest != request.expected_release_digest
+            {
+                return Err(AdminDispatchError::Conflict);
+            }
+        } else if selection.active.as_ref().is_some_and(|active| {
+            active.release_id == request.release_id
+                && active.release_digest == request.expected_release_digest
+        }) {
+            return Err(AdminDispatchError::Conflict);
+        }
+        self.verify_release_manifest(&request.release_id, &request.expected_release_digest)?;
+        Ok(selection)
+    }
+
+    fn verify_release_manifest(
+        &self,
+        release_id: &str,
+        expected_digest: &str,
+    ) -> Result<(), AdminDispatchError> {
+        let inspection = self.supervisor.inspect_release(release_id)?;
+        if inspection.manifest_digest != expected_digest || !inspection.compatible {
+            return Err(AdminDispatchError::Conflict);
+        }
+        Ok(())
+    }
+
     /// Validate a scoped reconciliation request against the current durable
     /// watchdog inventory before recording its idempotent admission.  The
     /// reconciliation loop remains the only component that performs process
@@ -344,18 +509,20 @@ impl Dispatcher<'_> {
             }
             AdminCommand::ReleaseInspect(request) => {
                 let inspection = self.supervisor.inspect_release(&request.release_id)?;
-                let status = self
+                let selection = self
                     .supervisor
                     .store
-                    .status()
+                    .release_selection()
                     .map_err(|error| AdminDispatchError::from(&error))?;
                 Ok(AdminResult::ReleaseInspection(
                     crate::admin::ReleaseInspection {
                         release_id: inspection.release_id,
                         release_digest: inspection.manifest_digest.clone(),
                         compatible: inspection.compatible,
-                        active: status.approved_release_digest.as_deref()
-                            == Some(inspection.manifest_digest.as_str()),
+                        active: selection.active.as_ref().is_some_and(|active| {
+                            active.release_id == request.release_id
+                                && active.release_digest == inspection.manifest_digest
+                        }),
                     },
                 ))
             }
@@ -369,7 +536,7 @@ impl Supervisor {
         self.config.admin.clone()
     }
 
-    fn inspect_release(
+    pub(crate) fn inspect_release(
         &self,
         release_id: &str,
     ) -> Result<crate::release_staged::ProtectedReleaseInspection, AdminDispatchError> {

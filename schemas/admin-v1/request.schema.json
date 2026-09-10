@@ -34,7 +34,7 @@
         {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "backup"}, "params": {"type": "object", "additionalProperties": false, "required": ["backup_id"], "properties": {"backup_id": {"$ref": "#/$defs/id"}}}}},
         {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "restore"}, "params": {"type": "object", "additionalProperties": false, "required": ["backup_id", "rekey"], "properties": {"backup_id": {"$ref": "#/$defs/id"}, "rekey": {"const": true}}}}},
         {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "release_inspect"}, "params": {"type": "object", "additionalProperties": false, "required": ["release_id"], "properties": {"release_id": {"$ref": "#/$defs/id"}}}}},
-        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "release_activate"}, "params": {"type": "object", "additionalProperties": false, "required": ["release_id", "expected_release_digest"], "properties": {"release_id": {"$ref": "#/$defs/id"}, "expected_release_digest": {"$ref": "#/$defs/digest"}}}}}
+        {"type": "object", "additionalProperties": false, "required": ["kind", "params"], "properties": {"kind": {"const": "release_activate"}, "params": {"type": "object", "additionalProperties": false, "required": ["release_id", "expected_release_digest"], "properties": {"release_id": {"$ref": "#/$defs/id"}, "expected_release_digest": {"$ref": "#/$defs/digest"}, "rollback": {"type": "boolean"}}}}}
       ]
     }
   }

@@ -486,6 +486,10 @@ impl ReleaseInspectRequest {
 pub struct ReleaseActivateRequest {
     pub release_id: String,
     pub expected_release_digest: String,
+    /// When true, the target must exactly match the durably recorded previous
+    /// release. Rollback never accepts an arbitrary catalog entry.
+    #[serde(default)]
+    pub rollback: bool,
 }
 
 impl ReleaseActivateRequest {
@@ -1034,6 +1038,34 @@ impl ReleaseInspection {
     }
 }
 
+/// Durable result of an atomic release activation or rollback.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseActivationView {
+    pub release_id: String,
+    pub release_digest: String,
+    pub previous_release_id: Option<String>,
+    pub previous_release_digest: Option<String>,
+    pub rollback: bool,
+}
+
+impl ReleaseActivationView {
+    fn validate(&self) -> std::result::Result<(), String> {
+        validate_identifier(&self.release_id, "release id", MAX_RELEASE_BYTES)?;
+        validate_digest(&self.release_digest)?;
+        if self.previous_release_id.is_some() != self.previous_release_digest.is_some() {
+            return Err("previous release identity is incomplete".to_owned());
+        }
+        if let Some(id) = &self.previous_release_id {
+            validate_identifier(id, "previous release id", MAX_RELEASE_BYTES)?;
+        }
+        if let Some(digest) = &self.previous_release_digest {
+            validate_digest(digest)?;
+        }
+        Ok(())
+    }
+}
+
 /// Typed result variants returned by the main-loop dispatcher.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value")]
@@ -1046,6 +1078,7 @@ pub enum AdminResult {
     Backup(BackupView),
     Restore(RestoreView),
     ReleaseInspection(ReleaseInspection),
+    ReleaseActivation(ReleaseActivationView),
 }
 
 impl AdminResult {
@@ -1060,6 +1093,7 @@ impl AdminResult {
             Self::Backup(value) => value.validate(),
             Self::Restore(value) => value.validate(),
             Self::ReleaseInspection(value) => value.validate(),
+            Self::ReleaseActivation(value) => value.validate(),
         }
     }
 }

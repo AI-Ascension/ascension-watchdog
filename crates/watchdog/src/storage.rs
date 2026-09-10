@@ -29,6 +29,8 @@ mod storage_gateway_health;
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
 mod storage_queries;
+#[path = "storage_release.rs"]
+mod storage_release;
 #[path = "storage_retry_admin.rs"]
 mod storage_retry_admin;
 #[path = "storage_worker_bootstrap.rs"]
@@ -43,6 +45,9 @@ pub use storage_admin::{
 };
 pub use storage_gateway_health::GatewayHealthBootstrapBinding;
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
+pub use storage_release::{
+    PendingReleaseActivation, ReleaseIdentity, ReleaseSelection, ReleaseSelectionState,
+};
 pub use storage_worker_bootstrap::WorkerBootstrapBinding;
 pub use storage_worker_handoff::{
     MAX_WORKER_WIRE_INTEGER, WORKER_HANDOFF_CONTRACT, WORKER_HANDOFF_OPERATION,
@@ -917,14 +922,16 @@ impl Store {
             now,
         )?;
         tx.commit()?;
-        Ok(Self {
+        let store = Self {
             conn,
             path,
             max_jobs: config.max_jobs,
             max_payload_bytes: config.max_payload_bytes,
             restart_clock_epoch: Uuid::new_v4().to_string(),
             restart_clock_started: Instant::now(),
-        })
+        };
+        store.validate_release_selection_metadata()?;
+        Ok(store)
     }
 
     /// Open an existing initialized store without creating or migrating it.
@@ -1116,14 +1123,16 @@ impl Store {
         if needs_core_migration {
             migrate_launch_intent_schema(&mut conn)?;
         }
-        Ok(Self {
+        let store = Self {
             conn,
             path,
             max_jobs: config.max_jobs,
             max_payload_bytes: config.max_payload_bytes,
             restart_clock_epoch: Uuid::new_v4().to_string(),
             restart_clock_started: Instant::now(),
-        })
+        };
+        store.validate_release_selection_metadata()?;
+        Ok(store)
     }
 
     /// Open the store's SQLite connection without changing its state.
@@ -1398,6 +1407,10 @@ impl Store {
         update_metadata_tx(&tx, "config_compat_digest", &expected_compat_digest)?;
         update_metadata_tx(&tx, "restart_generation", &next_generation.to_string())?;
         update_metadata_tx(&tx, "updated_at_ms", &now.to_string())?;
+        // A rekeyed restore never carries forward release selection or a
+        // prepared activation marker. The new namespace must explicitly
+        // inspect and activate a release after fresh authority fencing.
+        storage_release::clear_release_selection_tx(&tx)?;
         tx.execute(
             "UPDATE attempts SET status='unknown', finished_at_ms=?, outcome='restored_backup_outcome_unknown' WHERE status='running'",
             params![sqlite_timestamp(now)?],

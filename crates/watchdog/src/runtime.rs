@@ -1205,7 +1205,7 @@ impl Supervisor {
         self.probe_gateway_health(component, desired_mode, report);
         let prior = self.store.component(&component.id)?;
         let is_running = self.children.contains_key(&component.id);
-        let observation = ComponentObservation {
+        let mut observation = ComponentObservation {
             component_id: component.id.clone(),
             state: if is_running {
                 ComponentState::Running
@@ -1230,6 +1230,60 @@ impl Supervisor {
             now_ms,
             self.config.restart_budget_window_secs.saturating_mul(1_000),
         )?;
+        // A configured release catalog is an admission boundary, not merely
+        // an inspection aid.  Do not launch any component until the exact
+        // protected release identity has been durably activated.  A blocked
+        // component becomes eligible again after that selector is activated;
+        // no process or authority is reused across the boundary.
+        if desired_mode == DesiredMode::Running && !is_running {
+            if let Err(reason) = self.release_start_gate() {
+                let prior = self.store.component(&component.id)?;
+                self.store.upsert_component(
+                    &ComponentRecord {
+                        id: component.id.clone(),
+                        state: ComponentState::Blocked,
+                        launch_nonce: prior
+                            .as_ref()
+                            .and_then(|record| record.launch_nonce.clone()),
+                        pid: prior.as_ref().and_then(|record| record.pid),
+                        executable_digest: prior
+                            .as_ref()
+                            .and_then(|record| record.executable_digest.clone()),
+                        started_at_ms: prior.as_ref().and_then(|record| record.started_at_ms),
+                        restart_attempts: prior
+                            .as_ref()
+                            .map_or(0, |record| record.restart_attempts),
+                        last_restart_at_ms: prior
+                            .as_ref()
+                            .and_then(|record| record.last_restart_at_ms),
+                        last_error: Some(reason.clone()),
+                    },
+                    now_ms,
+                )?;
+                self.store.audit(
+                    "component_launch_blocked_release",
+                    &format!("{}:{reason}", component.id),
+                    now_ms,
+                )?;
+                return Ok(ReconcileDecision {
+                    component_id: component.id.clone(),
+                    action: ReconcileAction::Wait,
+                    resulting_state: ComponentState::Blocked,
+                    reason,
+                    retry_at_ms: None,
+                });
+            }
+            if prior
+                .as_ref()
+                .is_some_and(|record| record.state == ComponentState::Blocked)
+            {
+                // The only automatic release from this blocked state is a
+                // fresh protected selector check above. Treat the old marker
+                // as stopped so the normal restart budget and launch-intent
+                // admission still apply.
+                observation.state = ComponentState::Stopped;
+            }
+        }
         let mut decision = self.policy.decide(
             desired_mode,
             component.restart,
@@ -1349,6 +1403,29 @@ impl Supervisor {
             return None;
         }
         u64::try_from(witness.observed_at.elapsed().as_millis()).ok()
+    }
+
+    fn release_start_gate(&self) -> std::result::Result<(), String> {
+        if self.config.release_catalog.is_none() {
+            return Ok(());
+        }
+        let selection = self
+            .store
+            .release_selection()
+            .map_err(|error| format!("release selector unavailable: {error}"))?;
+        let active = selection
+            .active
+            .ok_or_else(|| "no release has been explicitly activated".to_owned())?;
+        let inspection = self
+            .inspect_release(&active.release_id)
+            .map_err(|error| format!("active release failed protected verification: {error:?}"))?;
+        if inspection.manifest_digest != active.release_digest {
+            return Err("active release selector digest differs from protected bytes".to_owned());
+        }
+        if !inspection.compatible {
+            return Err("active release is incompatible with current configuration".to_owned());
+        }
+        Ok(())
     }
 
     fn start_component(
@@ -2422,5 +2499,24 @@ mod tests {
             ),
             Err(WatchdogError::IdentityMismatch(_))
         ));
+    }
+
+    #[test]
+    fn configured_release_catalog_requires_explicit_activation_before_launch() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = WatchdogConfig {
+            database: directory.path().join("watchdog.sqlite3"),
+            release_catalog: Some(crate::config::ReleaseCatalogConfig {
+                root: directory.path().join("release-catalog"),
+                owner_uid: 0,
+            }),
+            ..WatchdogConfig::default()
+        };
+        let supervisor = Supervisor::initialize(config)?;
+        let error = supervisor
+            .release_start_gate()
+            .expect_err("catalog deployments must activate an exact release first");
+        assert!(error.contains("no release has been explicitly activated"));
+        Ok(())
     }
 }
