@@ -6,10 +6,10 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
 The pins were read from the remote PR metadata on 2026-09-10. The watchdog
-fault-fixture branch is at `9083ffd87bdd5f60364df83db860c3e0b6912555`; the
-preceding source commit `572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c` had green
-hosted dependency, Ubuntu, Windows, and standards checks, while the current
-documentation-only head is awaiting its replacement run. The
+fault-fixture branch is at `3ae1a22f685228420074e7703b9db492cc16b861`; its
+hosted dependency, Ubuntu, Windows, and standards checks pass in runs
+`34466829755` and `34466829733`. The preceding source commit
+`572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c` also had green hosted checks. The
 companion set includes open draft PRs, the merged harness PR head, and the
 unmerged harness recovery-catalog PR #53 at
 `6fcd059b420a1099ec225a907ee3aea5e799f0e7`; that PR's hosted Rust and policy
