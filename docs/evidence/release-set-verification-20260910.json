@@ -5,9 +5,9 @@
   "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
   "source_set": {
     "ascension-watchdog": {
-      "tested_source": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "tested_source": "5b235f9524ecbb9529392dafee2328545666f356",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "remote_pr_head_at_capture": "5b235f9524ecbb9529392dafee2328545666f356",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {
@@ -62,7 +62,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local; hosted-run-pending"
+      "result": "pass-local; hosted-runs-34510068432-and-34510068442-pass; Windows unit test sharing_error_fails_closed_without_streaming_copy passed; service-session step unverified on runner session 2"
     },
     "sts2-gateway": {
       "commands": [
@@ -136,7 +136,7 @@
   "release_boundary": {
     "cross_repository_clean_build": "not-run",
     "cross_consumer_conformance": "not-run",
-    "native_windows_service": "not-run; hosted watchdog validation pending",
+    "native_windows_service": "not-run; hosted service-session step unverified on runner session 2",
     "native_linux_service": "not-run",
     "live_host": "not-run",
     "cold_boot": "not-run",

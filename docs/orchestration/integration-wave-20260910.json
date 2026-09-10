@@ -5,12 +5,12 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
-    "watchdog_source_tested_commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+    "watchdog_commit": "5b235f9524ecbb9529392dafee2328545666f356",
+    "watchdog_source_tested_commit": "5b235f9524ecbb9529392dafee2328545666f356",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
-    "hosted_runs": [34504169316, 34504170328],
-    "hosted_run_status_at_capture": "in-progress; exact PR head 0b1199c; component fixes locally pass; Ubuntu, Windows, and dependency jobs pending"
+    "watchdog_last_observed_pr_head": "5b235f9524ecbb9529392dafee2328545666f356",
+    "hosted_runs": [34510068432, 34510068442],
+    "hosted_run_status_at_capture": "success; exact PR head 5b235f9; bounded five-second restore publication retry, atomic no-replace hardlink fallback, and operation diagnostics pass; Ubuntu, Windows, dependency, and standards jobs passed; Windows sharing_error_fails_closed_without_streaming_copy passed; Windows service-session step was UNVERIFIED on runner session 2 (copy fallback was removed before this source head)"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -29,19 +29,20 @@
   },
   "results": {
     "watchdog": {
-      "commit": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
-      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, bounded Windows publication retry, protected config fixtures, and Linux install/uninstall idempotence coverage",
+      "commit": "5b235f9524ecbb9529392dafee2328545666f356",
+      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, bounded five-second Windows publication retry with operation diagnostics, atomic no-replace hardlink fallback for transient sharing errors (streaming copy deliberately rejected), protected config fixtures, collision-safe Windows native fixture allocation, and Linux install/uninstall idempotence coverage",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
         "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .: pass",
         "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
         "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (200 watchdog library tests; all workspace integration suites; 4 ignored)",
+        "Windows hosted unit test storage::restore_publication_tests::sharing_error_fails_closed_without_streaming_copy: pass (run 34510068432)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
-        "Windows hosted run 34503841064 failed at lint for a test-only raw-string style issue; 0b1199c corrects it and starts fresh runs 34504169316/34504170328"
+        "Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression; hosted runs 34510068432/34510068442 pass, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is in progress for exact source head 0b1199c"
+      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation runs 34510068432/34510068442 pass for exact source head 5b235f9"
     },
     "gateway": {
       "commit": "5f3eadabede9954bc834a62e3c4c1003444826ca",
@@ -72,7 +73,7 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to tested watchdog commit 0b1199c8580088e9b1779e118289a4e1ea5df64f and protocol PR33 head 09819e2.",
+    "Keep candidate manifest source-pinned to tested watchdog commit 5b235f9524ecbb9529392dafee2328545666f356 and protocol PR33 head 09819e2.",
     "Use docs/evidence/release-set-verification-20260910.json for the exact merged companion revisions, isolated component gates, and artifact-byte comparison; run cross-consumer conformance before any runtime claim.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."

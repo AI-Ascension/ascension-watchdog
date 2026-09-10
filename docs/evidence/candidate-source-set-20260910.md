@@ -7,9 +7,12 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 
 The pins were refreshed from remote PR metadata on 2026-09-10. The watchdog
 integration source is draft PR #9 at
-`0b1199c8580088e9b1779e118289a4e1ea5df64f`; local locked workspace, restore,
-and Linux installer tests pass, while hosted validation runs
-`34504169316`/`34504170328` are in progress at this exact head. Gateway PR #37
+`5b235f9524ecbb9529392dafee2328545666f356`; local locked workspace, restore,
+Linux installer, and Windows cross-target checks pass. Hosted validation runs
+`34510068432`/`34510068442` passed at this exact head, including the Windows
+restore publication and fail-closed collision fixtures. The hosted
+service-session step was explicitly `UNVERIFIED` on runner session 2; it is not
+native service proof. Gateway PR #37
 and harness PR #59 have since merged; their selected current-main revisions
 are `5f3eadabede9954bc834a62e3c4c1003444826ca` and
 `5cc486a66b6f11930675af06f7426cd91c609983`, respectively. Protocol draft PR #33 remains at

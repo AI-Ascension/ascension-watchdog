@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
-      "last_observed_pr_head": "0b1199c8580088e9b1779e118289a4e1ea5df64f",
+      "revision": "5b235f9524ecbb9529392dafee2328545666f356",
+      "last_observed_pr_head": "5b235f9524ecbb9529392dafee2328545666f356",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; bounded Windows restore publication retry and protected config fixtures; source-tested-local-at-0b1199c; hosted-checks-in-progress-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, and atomic no-replace hardlink fallback for transient sharing errors (no streaming copy); source-tested-local-at-5b235f9; hosted-checks-pass-runs-34510068432-34510068442; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "5f3eadabede9954bc834a62e3c4c1003444826ca",
@@ -73,8 +73,8 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34504169316, 34504170328],
-    "hosted_watchdog_status_at_capture": "in-progress-at-0b1199c",
+    "hosted_watchdog_runs": [34510068432, 34510068442],
+    "hosted_watchdog_status_at_capture": "success-at-5b235f9; Ubuntu, Windows, dependency, and standards jobs passed; Windows service-session step reported UNVERIFIED because the hosted runner used session 2",
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"
