@@ -7,11 +7,10 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 
 The pins were read from remote PR metadata on 2026-09-10. The watchdog
 integration is draft PR #8 at
-`10eac2975c6ad482cef31ee1b3d060db3757f4d7`, based on
-`codex/watchdog-implementation`. This is a documentation-only tip after the
-source-tested `e91714c9028ebfc7012b2d5649997bb10a866233`; the serial
-all-feature workspace gate also passed at the current tip, while hosted checks
-for the current PR head are being re-run. The gateway remains draft PR #35 at
+`c472f3aab726fa2871b46aede6d1985be4e57dae`, based on
+`codex/watchdog-implementation`. The serial all-feature workspace gate and
+hosted run `34478258456` (Ubuntu, Windows, standards, dependency audit, and
+locked release builds) passed at this exact tip. The gateway remains draft PR #35 at
 `8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711`. The harness follow-up is draft PR
 #54 at `5798e3d0ecd6e64cbd1b6d354311be64a12f8929`, with its hosted checks
 green; it follows merged PR #50. MCP PR #37 at
