@@ -1,6 +1,101 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+const MAX_JOB_PATH_BYTES: usize = 128;
+const SYSTEMD_JOB_PATH_PREFIX: &str = "/org/freedesktop/systemd1/job/";
+
+/// The immutable identity returned by `StartTransientUnit` for one queued
+/// manager job.  This is deliberately separate from the generated unit name:
+/// a unit can have more than one queued job over its lifetime, and a job ID
+/// must never be reconstructed from a unit pathname.  All fields are bounded
+/// and non-secret so a pending record can retain this value durably.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct JobBinding {
+    unit: String,
+    job_id: u32,
+    job_path: String,
+}
+
+impl JobBinding {
+    /// Construct a binding from the object path returned by PID 1.
+    pub(super) fn from_object_path(unit: &str, job_path: &str) -> BrokerResult<Self> {
+        let job_id = parse_job_path(job_path)?;
+        let binding = Self {
+            unit: unit.to_owned(),
+            job_id,
+            job_path: job_path.to_owned(),
+        };
+        binding.validate_syntax_for_backend()?;
+        Ok(binding)
+    }
+
+    /// Validate the binding against the complete durable launch identity.
+    pub(super) fn validate_for_request(&self, request: &BrokerRequest) -> BrokerResult<()> {
+        request.validate()?;
+        self.validate_syntax_for_backend()?;
+        if self.unit != unit_name(request) {
+            return Err(BrokerError::Conflict(
+                "systemd job binding does not match the generated unit".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn unit(&self) -> &str {
+        &self.unit
+    }
+
+    pub(super) fn job_id(&self) -> u32 {
+        self.job_id
+    }
+
+    pub(super) fn job_path(&self) -> &str {
+        &self.job_path
+    }
+
+    pub(super) fn validate_syntax_for_backend(&self) -> BrokerResult<()> {
+        if self.unit.is_empty() || self.unit.len() > MAX_IDENTITY_BYTES {
+            return Err(BrokerError::Invalid(
+                "systemd job unit binding is out of bounds".to_owned(),
+            ));
+        }
+        let parsed = parse_job_path(&self.job_path)?;
+        if parsed != self.job_id {
+            return Err(BrokerError::Conflict(
+                "systemd job ID does not match its object path".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn parse_job_path(job_path: &str) -> BrokerResult<u32> {
+    if job_path.len() > MAX_JOB_PATH_BYTES || job_path.contains('\0') {
+        return Err(BrokerError::Invalid(
+            "systemd job object path exceeds its bound".to_owned(),
+        ));
+    }
+    let Some(id_text) = job_path.strip_prefix(SYSTEMD_JOB_PATH_PREFIX) else {
+        return Err(BrokerError::Invalid(
+            "systemd job object path is not canonical".to_owned(),
+        ));
+    };
+    if id_text.is_empty()
+        || id_text.len() > 10
+        || id_text == "0"
+        || id_text.starts_with('0')
+        || id_text.bytes().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(BrokerError::Invalid(
+            "systemd job object path has an invalid ID".to_owned(),
+        ));
+    }
+    id_text
+        .parse::<u32>()
+        .map_err(|_| BrokerError::Invalid("systemd job object path ID is out of bounds".to_owned()))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum LedgerState {
@@ -20,6 +115,10 @@ struct LedgerRecord {
     // immutable, non-secret binding; stdin bytes are never journaled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bootstrap: Option<bootstrap::BrokerBootstrapBinding>,
+    // Legacy records omit this field. A typed launch retains only the
+    // immutable, non-secret object identity returned by StartTransientUnit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    job: Option<JobBinding>,
     state: LedgerState,
     receipt: Option<LaunchReceipt>,
 }
@@ -309,6 +408,7 @@ impl BrokerLedger {
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
+            job: previous.job.clone(),
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -341,6 +441,7 @@ impl BrokerLedger {
             unit: previous.unit.clone(),
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
+            job: previous.job.clone(),
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -377,6 +478,7 @@ impl BrokerLedger {
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
+            job: previous.job.clone(),
             state: LedgerState::Stopped,
             receipt: Some(receipt.clone()),
         };
@@ -479,12 +581,103 @@ impl BrokerLedger {
             unit: unit.to_owned(),
             identity,
             bootstrap: bootstrap.cloned(),
+            job: None,
             state: LedgerState::Pending,
             receipt: None,
         };
         self.append(&record)?;
         self.records.insert(request.clone(), record);
         Ok(true)
+    }
+
+    /// Persist the exact object identity returned by `StartTransientUnit`.
+    /// This is a second append in the existing pending transition: callers
+    /// must invoke it immediately after the manager reply and before any
+    /// acknowledgement or retry decision.  A missing binding remains an
+    /// unresolved legacy reservation and never authorizes pathname adoption.
+    pub(super) fn bind_job(
+        &mut self,
+        request: &BrokerRequest,
+        policy: &LaunchPolicy,
+        job: &JobBinding,
+    ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
+        job.validate_for_request(request)?;
+        let Some(previous) = self.records.get(request) else {
+            return Err(BrokerError::Conflict(
+                "broker job binding has no durable launch reservation".to_owned(),
+            ));
+        };
+        if previous.unit != job.unit() || !previous.identity.matches_policy(policy) {
+            return Err(BrokerError::Conflict(
+                "broker job binding conflicts with its launch identity".to_owned(),
+            ));
+        }
+        if let Some(existing) = &previous.job {
+            if existing == job {
+                return Ok(());
+            }
+            return Err(BrokerError::Conflict(
+                "broker launch has a different durable job binding".to_owned(),
+            ));
+        }
+        if previous.state != LedgerState::Pending {
+            return Err(BrokerError::Conflict(
+                "broker job binding can only extend a pending launch".to_owned(),
+            ));
+        }
+        let record = LedgerRecord {
+            request: request.clone(),
+            unit: previous.unit.clone(),
+            identity: previous.identity.clone(),
+            job: Some(job.clone()),
+            state: previous.state,
+            receipt: previous.receipt.clone(),
+        };
+        self.append(&record)?;
+        self.records.insert(request.clone(), record);
+        Ok(())
+    }
+
+    /// Return the exact retained job binding after checking the request and
+    /// fixed policy.  `None` is meaningful: old records without a manager
+    /// object identity cannot be upgraded into a pathname-based cleanup path.
+    pub(super) fn job_binding(
+        &self,
+        request: &BrokerRequest,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<Option<JobBinding>> {
+        self.ensure_healthy()?;
+        let Some(record) = self.records.get(request) else {
+            return Ok(None);
+        };
+        let unit = unit_name(request);
+        if record.unit != unit || !record.identity.matches_policy(policy) {
+            return Err(BrokerError::Conflict(
+                "broker job lookup conflicts with its launch identity".to_owned(),
+            ));
+        }
+        if let Some(job) = &record.job {
+            job.validate_for_request(request)?;
+        }
+        Ok(record.job.clone())
+    }
+
+    /// Return a queued-job binding only for a still-pending reservation.  A
+    /// committed or terminal record is handled by its receipt/containment
+    /// identity, not by attempting to reuse an old manager job object.
+    pub(super) fn pending_job_binding(
+        &self,
+        request: &BrokerRequest,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<Option<JobBinding>> {
+        let Some(record) = self.records.get(request) else {
+            return Ok(None);
+        };
+        if record.state != LedgerState::Pending {
+            return Ok(None);
+        }
+        self.job_binding(request, policy)
     }
 
     pub(super) fn commit(
@@ -535,6 +728,7 @@ impl BrokerLedger {
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
+            job: previous.job.clone(),
             state: LedgerState::Committed,
             receipt: Some(receipt.clone()),
         };
@@ -654,6 +848,9 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
         if let Some(binding) = &record.bootstrap {
             binding.validate(&record.request)?;
         }
+        if let Some(job) = &record.job {
+            job.validate_for_request(&record.request)?;
+        }
         if record.unit != unit_name(&record.request) {
             return Err(BrokerError::Conflict(
                 "broker ledger unit does not match request identity".to_owned(),
@@ -689,7 +886,28 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                     "pending broker ledger record must not have a receipt".to_owned(),
                 ));
             }
-            (Some(_previous), LedgerState::Pending, _) => {
+            (Some(previous), LedgerState::Pending, None) => {
+                // Binding the exact object returned by StartTransientUnit is
+                // itself a durable extension of the reservation.  It must be
+                // the one and only additional pending record: no receipt is
+                // available yet, the predecessor is still unbound, and the
+                // new record must carry a binding.  Every other pending
+                // append is a duplicate, a regression, or an attempted
+                // replacement of immutable launch state.
+                if previous.state != LedgerState::Pending
+                    || previous.receipt.is_some()
+                    || previous.job.is_some()
+                    || record.job.is_none()
+                    || previous.unit != record.unit
+                    || previous.identity != record.identity
+                    || previous.bootstrap != record.bootstrap
+                {
+                    return Err(BrokerError::Invalid(
+                        "broker ledger has a duplicate or regressed pending record".to_owned(),
+                    ));
+                }
+            }
+            (Some(_previous), LedgerState::Pending, Some(_)) => {
                 return Err(BrokerError::Invalid(
                     "broker ledger has a duplicate or regressed pending record".to_owned(),
                 ));
@@ -716,6 +934,7 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                     || previous.unit != record.unit
                     || previous.identity != record.identity
                     || previous.bootstrap != record.bootstrap
+                    || previous.job != record.job
                     || previous
                         .receipt
                         .as_ref()
@@ -820,6 +1039,7 @@ mod tests {
             request,
             identity: identity(),
             bootstrap: None,
+            job: None,
             state: LedgerState::Pending,
             receipt: None,
         }
@@ -980,6 +1200,10 @@ mod tests {
         }
     }
 
+    fn job_policy() -> LaunchPolicy {
+        launch_policy()
+    }
+
     #[test]
     fn typed_reservation_rejects_changed_frame_boot_and_legacy_downgrade()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1084,5 +1308,121 @@ mod tests {
         assert!(!String::from_utf8(legacy.clone())?.contains("bootstrap"));
         assert!(parse_records(&legacy).is_ok());
         Ok(())
+    }
+    fn job(unit: &str, id: u32) -> JobBinding {
+        JobBinding::from_object_path(unit, &format!("{SYSTEMD_JOB_PATH_PREFIX}{id}"))
+            .expect("valid systemd job binding")
+    }
+
+    #[test]
+    fn job_binding_requires_the_canonical_pid1_object_identity() {
+        let request = request("job-syntax");
+        let unit = unit_name(&request);
+        let valid = job(&unit, 17);
+        assert_eq!(valid.job_id(), 17);
+        assert_eq!(valid.job_path(), format!("{SYSTEMD_JOB_PATH_PREFIX}17"));
+        assert!(JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/017").is_err());
+        assert!(JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/0").is_err());
+        assert!(
+            JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/17/extra").is_err()
+        );
+        let mut changed_unit = valid.clone();
+        changed_unit.unit = "other.service".to_owned();
+        assert!(changed_unit.validate_for_request(&request).is_err());
+        let mut changed_id = valid.clone();
+        changed_id.job_id = 18;
+        assert!(changed_id.validate_syntax_for_backend().is_err());
+    }
+
+    #[test]
+    fn pending_job_binding_is_durable_and_immutable_across_lifecycle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
+        let path = directory.path().join("job-ledger.jsonl");
+        let request = request("job-persist");
+        let unit = unit_name(&request);
+        let policy = job_policy();
+        let binding = job(&unit, 23);
+        let mut ledger = BrokerLedger::init(&path)?;
+        assert!(ledger.reserve(&request, &unit, &policy)?);
+        assert_eq!(ledger.pending_job_binding(&request, &policy)?, None);
+        ledger.bind_job(&request, &policy, &binding)?;
+        assert_eq!(
+            ledger.pending_job_binding(&request, &policy)?,
+            Some(binding.clone())
+        );
+        ledger.bind_job(&request, &policy, &binding)?;
+        let mut changed = binding.clone();
+        changed.job_id = 24;
+        assert!(ledger.bind_job(&request, &policy, &changed).is_err());
+
+        let receipt = LaunchReceipt {
+            request: request.clone(),
+            unit: unit.clone(),
+            pid: 42,
+            creation_token: "1234".to_owned(),
+            executable: policy.executable.clone(),
+            executable_sha256: policy.executable_sha256.clone(),
+            uid: policy.target_uid,
+            gid: policy.target_gid,
+            capability_bounding_set: 0,
+            ambient_capabilities: 0,
+            control_group: format!("/system.slice/{unit}"),
+            duplicate: false,
+        };
+        ledger.commit(&request, &receipt)?;
+        assert_eq!(
+            ledger.job_binding(&request, &policy)?,
+            Some(binding.clone())
+        );
+        ledger.begin_stop(&request, &receipt)?;
+        ledger.mark_stopped(&request, &receipt)?;
+        assert_eq!(ledger.job_binding(&request, &policy)?, Some(binding));
+        drop(ledger);
+        let reopened = BrokerLedger::open(path)?;
+        assert_eq!(
+            reopened.job_binding(&request, &policy)?,
+            Some(job(&unit, 23))
+        );
+        let legacy = serde_json::to_vec(&pending("legacy-nonce"))?;
+        assert!(!String::from_utf8(legacy)?.contains("job"));
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_transition_cannot_replace_or_remove_a_retained_job() {
+        let request = request("job-transition");
+        let unit = unit_name(&request);
+        let binding = job(&unit, 31);
+        let mut records = vec![pending("job-transition")];
+        records[0].job = Some(binding.clone());
+        let policy = job_policy();
+        records.push(LedgerRecord {
+            request: request.clone(),
+            unit: unit.clone(),
+            identity: identity(),
+            job: Some(binding.clone()),
+            state: LedgerState::Committed,
+            receipt: Some(LaunchReceipt {
+                request: request.clone(),
+                unit: unit.clone(),
+                pid: 42,
+                creation_token: "1234".to_owned(),
+                executable: policy.executable.clone(),
+                executable_sha256: policy.executable_sha256.clone(),
+                uid: policy.target_uid,
+                gid: policy.target_gid,
+                capability_bounding_set: 0,
+                ambient_capabilities: 0,
+                control_group: format!("/system.slice/{unit}"),
+                duplicate: false,
+            }),
+        });
+        let mut changed = records.clone();
+        changed[1].job = None;
+        assert!(parse_records(&encode(&changed)).is_err());
+        let mut replaced = records;
+        replaced[1].job = Some(job(&unit, 32));
+        assert!(parse_records(&encode(&replaced)).is_err());
     }
 }
