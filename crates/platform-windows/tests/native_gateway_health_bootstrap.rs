@@ -10,7 +10,7 @@ mod native {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,15 +18,22 @@ mod native {
         path: PathBuf,
     }
 
+    static TEST_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     impl TestDirectory {
         fn create() -> Result<Self, Box<dyn Error>> {
             let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "ascension-gateway-health-{}-{stamp}",
-                std::process::id()
-            ));
-            fs::create_dir(&path)?;
-            Ok(Self { path })
+            let prefix = format!("ascension-gateway-health-{}-{stamp}", std::process::id());
+            for _ in 0..128 {
+                let sequence = TEST_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!("{prefix}-{sequence}"));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Ok(Self { path }),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err("could not allocate a unique gateway test directory".into())
         }
 
         fn path(&self) -> &Path {
