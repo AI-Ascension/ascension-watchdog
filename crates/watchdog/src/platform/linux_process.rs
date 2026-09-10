@@ -191,15 +191,19 @@ impl LinuxProcessAdapter {
     /// identity.  This is the recovery path for a launch that never produced
     /// an `OwnedProcess` but whose cgroup authority could not be proven clean.
     /// A new launch using the same containment is rejected until this method
-    /// returns [`StopOutcome::AlreadyExited`] or [`StopOutcome::Exited`].
+    /// returns [`StopOutcome::AlreadyExited`] or [`StopOutcome::Exited`].  A
+    /// missing cgroup is not a terminal outcome: without a process identity or
+    /// a retained cgroup handle, its absence cannot prove that a helper or
+    /// descendant was not moved out of the planned containment.
     pub fn force_cleanup_planned_containment(
         &mut self,
         containment: &ContainmentId,
     ) -> Result<StopOutcome, AdapterError> {
         let name = containment_name(containment.as_str())?;
         let Some(cgroup) = self.cgroup_root.maybe_existing(&name)? else {
-            self.uncertain_containments.remove(&name);
-            return Ok(StopOutcome::AlreadyExited);
+            return Err(AdapterError::Unavailable(format!(
+                "{CLEANUP_UNCERTAIN_MARKER}: planned Linux containment {CGROUP_PREFIX}{name} is missing; exact cleanup cannot be proven"
+            )));
         };
         self.uncertain_containments
             .insert(name.clone(), cgroup.clone());
@@ -1895,6 +1899,32 @@ mod tests {
         let ordinary = AdapterError::Unavailable("helper did not start".to_owned());
         assert!(is_cleanup_uncertain(&uncertain));
         assert!(!is_cleanup_uncertain(&ordinary));
+    }
+
+    #[test]
+    fn missing_planned_containment_is_not_treated_as_clean()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let launcher = TrustedLinuxLauncher::new("/bin/true")?;
+        let mut adapter = LinuxProcessAdapter {
+            cgroup_root: CgroupRoot {
+                path: directory.path().to_owned(),
+            },
+            boot_id: "test-boot".to_owned(),
+            allowlist: BTreeMap::new(),
+            children: BTreeMap::new(),
+            uncertain_containments: BTreeMap::new(),
+            max_children: MAX_ACTIVE_CHILDREN,
+            launcher,
+        };
+        let planned = ContainmentId::new("cgroup-v2:missing-planned")?;
+
+        let error = adapter
+            .force_cleanup_planned_containment(&planned)
+            .expect_err("missing containment cannot prove failed-launch cleanup");
+        assert!(is_cleanup_uncertain(&error));
+        assert!(!adapter.has_uncertain_containment(&planned));
+        Ok(())
     }
 
     #[test]
