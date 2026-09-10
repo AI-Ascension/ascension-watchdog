@@ -13,6 +13,9 @@ use native_descriptor_store::NativeDescriptorStore;
 #[path = "native_activation.rs"]
 mod native_activation;
 
+#[path = "native_bootstrap.rs"]
+mod native_bootstrap;
+
 struct NativeSystemdBackend {
     retained: BTreeMap<String, RetainedContainment>,
     descriptor_store: Option<NativeDescriptorStore>,
@@ -250,8 +253,9 @@ impl SystemdBackend for NativeSystemdBackend {
     fn start(
         &mut self,
         unit: &str,
-        _request: &BrokerRequest,
+        request: &BrokerRequest,
         policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
         deadline: Instant,
     ) -> BrokerResult<UnitObservation> {
         if self.descriptor_store.is_none() {
@@ -280,11 +284,7 @@ impl SystemdBackend for NativeSystemdBackend {
         .map_err(|error| {
             BrokerError::Invalid(format!("systemd ExecStart value failed: {error}"))
         })?;
-        let environment = policy
-            .environment
-            .iter()
-            .map(|(name, value)| format!("{name}={value}"))
-            .collect::<Vec<_>>();
+        let environment = bootstrap_transport::launch_environment(policy, request, bootstrap)?;
         let mut properties = Vec::new();
         // The broker service is the owner of every transient unit.  If PID 1
         // observes this service leave active state, BindsTo tears down the
@@ -302,6 +302,14 @@ impl SystemdBackend for NativeSystemdBackend {
                 .map_err(|error| BrokerError::Invalid(error.to_string()))?,
         ));
         properties.push(("ExecStart", exec_start));
+        if let Some(bootstrap) = bootstrap {
+            // D-Bus transports this value as an out-of-band Unix descriptor,
+            // not StandardInputData or secret bytes in unit properties.
+            properties.push((
+                "StandardInputFileDescriptor",
+                native_bootstrap::stdin_property(request, bootstrap)?,
+            ));
+        }
         properties.push((
             "User",
             zbus::zvariant::Value::new(policy.target_uid.to_string())

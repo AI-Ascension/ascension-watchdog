@@ -16,6 +16,10 @@ struct LedgerRecord {
     request: BrokerRequest,
     unit: String,
     identity: LaunchIdentity,
+    // Legacy records omit this field. A typed launch records only the
+    // immutable, non-secret binding; stdin bytes are never journaled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bootstrap: Option<bootstrap::BrokerBootstrapBinding>,
     state: LedgerState,
     receipt: Option<LaunchReceipt>,
 }
@@ -304,6 +308,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -335,6 +340,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: previous.unit.clone(),
             identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -370,6 +376,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
             state: LedgerState::Stopped,
             receipt: Some(receipt.clone()),
         };
@@ -412,12 +419,30 @@ impl BrokerLedger {
         unit: &str,
         policy: &LaunchPolicy,
     ) -> BrokerResult<bool> {
+        self.reserve_with_bootstrap(request, unit, policy, None)
+    }
+
+    pub(super) fn reserve_with_bootstrap(
+        &mut self,
+        request: &BrokerRequest,
+        unit: &str,
+        policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapBinding>,
+    ) -> BrokerResult<bool> {
         self.ensure_healthy()?;
+        if let Some(binding) = bootstrap {
+            binding.validate(request)?;
+        }
         let identity = LaunchIdentity::from_policy(policy);
         if let Some(record) = self.records.get(request) {
             if record.unit != unit || !record.identity.matches_policy(policy) {
                 return Err(BrokerError::Conflict(
                     "broker ledger identity conflicts with current launch policy".to_owned(),
+                ));
+            }
+            if record.bootstrap.as_ref() != bootstrap {
+                return Err(BrokerError::Conflict(
+                    "broker launch bootstrap conflicts with its durable binding".to_owned(),
                 ));
             }
             if matches!(
@@ -453,6 +478,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: unit.to_owned(),
             identity,
+            bootstrap: bootstrap.cloned(),
             state: LedgerState::Pending,
             receipt: None,
         };
@@ -508,6 +534,7 @@ impl BrokerLedger {
             request: request.clone(),
             unit: receipt.unit.clone(),
             identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
             state: LedgerState::Committed,
             receipt: Some(receipt.clone()),
         };
@@ -624,6 +651,9 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
         }
         let record: LedgerRecord = parse_json(line, "broker ledger record")?;
         record.request.validate()?;
+        if let Some(binding) = &record.bootstrap {
+            binding.validate(&record.request)?;
+        }
         if record.unit != unit_name(&record.request) {
             return Err(BrokerError::Conflict(
                 "broker ledger unit does not match request identity".to_owned(),
@@ -685,6 +715,7 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                 if (!failed_launch_cleanup && previous.state != expected_previous)
                     || previous.unit != record.unit
                     || previous.identity != record.identity
+                    || previous.bootstrap != record.bootstrap
                     || previous
                         .receipt
                         .as_ref()
@@ -788,6 +819,7 @@ mod tests {
             unit: unit_name(&request),
             request,
             identity: identity(),
+            bootstrap: None,
             state: LedgerState::Pending,
             receipt: None,
         }
@@ -899,5 +931,158 @@ mod tests {
         let mut record = pending("committed-first");
         record.state = LedgerState::Committed;
         assert!(parse_records(&encode(&[record])).is_err());
+    }
+
+    fn typed_binding() -> bootstrap::BrokerBootstrapBinding {
+        bootstrap::BrokerBootstrapBinding {
+            version: 2,
+            kind: bootstrap::BootstrapKind::GatewayHealth,
+            watchdog_boot_id: "00000000-0000-4000-8000-000000000022".to_owned(),
+            frame_sha256: "a".repeat(64),
+        }
+    }
+
+    fn typed_lifecycle() -> Vec<LedgerRecord> {
+        let mut records = lifecycle("00000000-0000-4000-8000-000000000011", 0);
+        for record in &mut records {
+            record.request.component = BrokerComponent::Gateway;
+            record.unit = unit_name(&record.request);
+            record.bootstrap = Some(typed_binding());
+            if let Some(receipt) = &mut record.receipt {
+                receipt.request = record.request.clone();
+                receipt.unit = record.unit.clone();
+                receipt.control_group = format!("/system.slice/{}", record.unit);
+            }
+        }
+        records
+    }
+
+    fn launch_policy() -> LaunchPolicy {
+        let identity = identity();
+        LaunchPolicy {
+            executable: identity.executable,
+            executable_sha256: identity.executable_sha256,
+            arguments: identity.arguments,
+            working_directory: identity.working_directory,
+            environment: identity.environment,
+            target_uid: identity.target_uid,
+            target_gid: identity.target_gid,
+            capabilities: CapabilityPolicy {
+                bounding_set: identity.capability_bounding_set,
+                ambient_set: identity.ambient_capabilities,
+                no_new_privileges: identity.no_new_privileges,
+            },
+            cgroup: CgroupPolicy {
+                tasks_max: identity.tasks_max,
+                memory_max_bytes: identity.memory_max_bytes,
+            },
+            timeout: Duration::from_nanos(identity.timeout_nanos),
+        }
+    }
+
+    #[test]
+    fn typed_reservation_rejects_changed_frame_boot_and_legacy_downgrade()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let records = typed_lifecycle();
+        let first = &records[0];
+        let policy = launch_policy();
+        let binding = typed_binding();
+        let mut ledger = BrokerLedger::memory();
+        assert!(ledger.reserve_with_bootstrap(
+            &first.request,
+            &first.unit,
+            &policy,
+            Some(&binding)
+        )?);
+        assert!(!ledger.reserve_with_bootstrap(
+            &first.request,
+            &first.unit,
+            &policy,
+            Some(&binding)
+        )?);
+        assert!(
+            ledger
+                .reserve(&first.request, &first.unit, &policy)
+                .is_err()
+        );
+        let mut changed = binding.clone();
+        changed.frame_sha256 = "b".repeat(64);
+        assert!(
+            ledger
+                .reserve_with_bootstrap(&first.request, &first.unit, &policy, Some(&changed))
+                .is_err()
+        );
+        changed = binding;
+        changed.watchdog_boot_id = "00000000-0000-4000-8000-000000000033".to_owned();
+        assert!(
+            ledger
+                .reserve_with_bootstrap(&first.request, &first.unit, &policy, Some(&changed))
+                .is_err()
+        );
+        assert_eq!(ledger.state(&first.request), Some(LedgerState::Pending));
+        assert_eq!(ledger.records.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_reservation_cannot_be_upgraded_to_typed_stdin()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let records = typed_lifecycle();
+        let first = &records[0];
+        let policy = launch_policy();
+        let mut ledger = BrokerLedger::memory();
+        assert!(ledger.reserve(&first.request, &first.unit, &policy)?);
+        assert!(
+            ledger
+                .reserve_with_bootstrap(
+                    &first.request,
+                    &first.unit,
+                    &policy,
+                    Some(&typed_binding())
+                )
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn typed_lifecycle_binding_is_immutable_on_reopen() {
+        let original = typed_lifecycle();
+        assert!(parse_records(&encode(&original)).is_ok());
+        for index in 1..original.len() {
+            for remove in [false, true] {
+                let mut records = original.clone();
+                if remove {
+                    records[index].bootstrap = None;
+                } else {
+                    records[index]
+                        .bootstrap
+                        .as_mut()
+                        .expect("typed binding")
+                        .frame_sha256 = "b".repeat(64);
+                }
+                assert!(parse_records(&encode(&records)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn typed_ledger_reopens_binding_and_legacy_encoding_stays_unchanged()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
+        let path = directory.path().join("typed-ledger.jsonl");
+        let mut ledger = BrokerLedger::init(&path)?;
+        for record in typed_lifecycle() {
+            ledger.append(&record)?;
+        }
+        drop(ledger);
+        let reopened = BrokerLedger::open(path)?;
+        let record = reopened.records.values().next().expect("one typed record");
+        assert_eq!(record.bootstrap, Some(typed_binding()));
+        assert_eq!(record.state, LedgerState::Stopped);
+        let legacy = encode(&lifecycle("legacy", 0));
+        assert!(!String::from_utf8(legacy.clone())?.contains("bootstrap"));
+        assert!(parse_records(&legacy).is_ok());
+        Ok(())
     }
 }

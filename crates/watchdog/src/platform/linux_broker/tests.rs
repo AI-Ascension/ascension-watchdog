@@ -10,8 +10,9 @@ mod failed_launch_cleanup;
 #[path = "orphan_cleanup_tests.rs"]
 mod orphan_cleanup;
 
-struct FakeBackend {
-    starts: usize,
+pub(super) struct FakeBackend {
+    pub(super) starts: usize,
+    pub(super) bootstraps: Vec<(bootstrap::BrokerBootstrapBinding, Vec<u8>)>,
     inspects: usize,
     stops: usize,
     units: BTreeMap<String, UnitObservation>,
@@ -31,9 +32,10 @@ struct FakeBackend {
 }
 
 impl FakeBackend {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             starts: 0,
+            bootstraps: Vec::new(),
             inspects: 0,
             stops: 0,
             units: BTreeMap::new(),
@@ -71,9 +73,14 @@ impl SystemdBackend for FakeBackend {
         unit: &str,
         _request: &BrokerRequest,
         policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
         _deadline: Instant,
     ) -> BrokerResult<UnitObservation> {
         self.starts += 1;
+        if let Some(bootstrap) = bootstrap {
+            self.bootstraps
+                .push((bootstrap.binding().clone(), bootstrap.frame().to_vec()));
+        }
         let observation = self
             .start_override
             .clone()
@@ -335,7 +342,7 @@ fn policy() -> BrokerPolicy {
         .expect("valid fixture policy")
 }
 
-fn transport_policy() -> BrokerPolicy {
+pub(super) fn transport_policy() -> BrokerPolicy {
     let base = policy();
     let executable = fs::canonicalize("/proc/self/exe").expect("test executable path");
     let peer = PeerPolicy {
@@ -344,14 +351,14 @@ fn transport_policy() -> BrokerPolicy {
         executable_sha256: digest(&executable),
         executable,
     };
-    // The real peer here is the large, unoptimized test image rather than the
-    // tiny sleep fixture. Its authenticated digest must fit the same bounded
-    // request window used by the real transport.
     let mut components = base.components.clone();
     for launch in components.values_mut() {
         launch.timeout = MAX_IO_TIMEOUT;
     }
-    BrokerPolicy::new(peer, components).expect("transport fixture policy")
+    // This fixture deliberately authenticates the current test process over a
+    // socket pair.  Production rejects procfs policy paths; the direct struct
+    // construction is test-only and keeps that production validation intact.
+    BrokerPolicy { peer, components }
 }
 
 fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) {
@@ -548,6 +555,7 @@ fn failed_launch_postcondition_cannot_authorize_cleanup_of_observed_cgroup() {
                 &unit,
                 &request,
                 launch_policy,
+                None,
                 Instant::now() + Duration::from_secs(2),
             )
             .expect("construct fixture observation");

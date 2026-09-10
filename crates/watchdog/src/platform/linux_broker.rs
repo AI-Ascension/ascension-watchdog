@@ -58,6 +58,10 @@ const MAX_LEDGER_BYTES: usize = MAX_LEDGER_TRANSITIONS * (MAX_FRAME_BYTES + 1);
 const BROKER_UNIT_NAME: &str = "ascension-watchdog-broker.service";
 pub const BROKER_PROTOCOL_VERSION: u8 = 1;
 
+pub mod bootstrap;
+mod bootstrap_transport;
+pub use bootstrap_transport::BrokerBootstrapLaunchError;
+
 fn remaining(deadline: Instant) -> BrokerResult<Duration> {
     deadline
         .checked_duration_since(Instant::now())
@@ -874,6 +878,7 @@ impl UnitObservation {
 
 /// Public receipt returned to the bounded broker client.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LaunchReceipt {
     pub request: BrokerRequest,
     pub unit: String,
@@ -911,6 +916,7 @@ pub trait SystemdBackend {
         unit: &str,
         request: &BrokerRequest,
         policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
         deadline: Instant,
     ) -> BrokerResult<UnitObservation>;
     fn inspect(
@@ -1028,9 +1034,47 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         request: &BrokerRequest,
         request_deadline: Instant,
     ) -> BrokerResult<LaunchReceipt> {
+        self.handle_launch_at_deadline(credentials, request, None, request_deadline)
+    }
+
+    /// Launch a fixed policy with a separately typed stdin frame. The caller
+    /// still owns durable deployment admission; parsing a frame is not proof
+    /// of Running intent. The broker journals only its immutable frame binding.
+    pub fn handle_with_bootstrap(
+        &mut self,
+        credentials: PeerCredentials,
+        request: &BrokerRequest,
+        bootstrap: &bootstrap::BrokerBootstrapLaunch,
+    ) -> BrokerResult<LaunchReceipt> {
+        let timeout = self.policy.component(request.component)?.timeout;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        self.handle_launch_at_deadline(credentials, request, Some(bootstrap), deadline)
+    }
+
+    fn handle_launch_at_deadline(
+        &mut self,
+        credentials: PeerCredentials,
+        request: &BrokerRequest,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
+        request_deadline: Instant,
+    ) -> BrokerResult<LaunchReceipt> {
         request.validate()?;
         authenticate_peer(credentials, &self.policy.peer, request_deadline)?;
+        if let Some(bootstrap) = bootstrap {
+            bootstrap.validate_for_request(request)?;
+            bootstrap_transport::authenticate_worker_peer(
+                bootstrap,
+                credentials,
+                &self.policy.peer,
+                request_deadline,
+            )?;
+        }
         let policy = self.policy.component(request.component)?;
+        // Validate the sole generated environment value before reserving a
+        // nonce. Invalid fixed policy must not create an uncertain launch.
+        bootstrap_transport::launch_environment(policy, request, bootstrap)?;
         self.ledger.ensure_healthy()?;
         let unit = unit_name(request);
         if !self.active_units.contains(&unit) && self.active_units.len() >= MAX_ACTIVE_PROCESSES {
@@ -1055,7 +1099,15 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
                 ));
             }
         }
-        let newly_reserved = self.ledger.reserve(request, &unit, policy)?;
+        let newly_reserved = match bootstrap {
+            Some(bootstrap) => self.ledger.reserve_with_bootstrap(
+                request,
+                &unit,
+                policy,
+                Some(bootstrap.binding()),
+            )?,
+            None => self.ledger.reserve(request, &unit, policy)?,
+        };
         if !newly_reserved {
             if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
                 observation.verify(&unit, policy)?;
@@ -1076,7 +1128,9 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         // durable pending reservation and leave cleanup to a later exact-unit
         // reconciliation instead of stopping an orphan that may have raced
         // this request.
-        let observation = self.backend.start(&unit, request, policy, deadline)?;
+        let observation = self
+            .backend
+            .start(&unit, request, policy, bootstrap, deadline)?;
         // A failed postcondition cannot supply cleanup authority. In
         // particular, do not follow its cgroup or executable identity:
         // they may describe a different process. Preserve the pending
@@ -1480,7 +1534,21 @@ fn handle_connection<B: SystemdBackend>(
     // untrusted peer from holding a root broker connection open while it
     // trickles a body, and the handle path repeats the check after parsing.
     authenticate_peer(credentials, &broker.policy.peer, deadline)?;
-    let bytes = read_frame(stream, deadline)?;
+    let bytes = bootstrap_transport::read_request(stream, deadline)?;
+    if bootstrap_transport::is_bootstrap_request(&bytes) {
+        return bootstrap_transport::handle_connection(
+            stream,
+            broker,
+            credentials,
+            &bytes,
+            deadline,
+        );
+    }
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(BrokerError::Invalid(
+            "broker request exceeds frame bound".to_owned(),
+        ));
+    }
     let value: StrictJsonValue = match parse_json(&bytes, "broker request JSON") {
         Ok(value) => value,
         Err(error) => {

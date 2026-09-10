@@ -130,7 +130,7 @@ fn failed_cleanup_intent_persistence_prevents_termination_and_descriptor_removal
     let deadline = Instant::now() + Duration::from_secs(2);
     let observed = broker
         .backend
-        .start(&unit, &request, &launch, deadline)
+        .start(&unit, &request, &launch, None, deadline)
         .expect("synthetic launch");
     broker
         .backend
