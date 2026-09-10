@@ -9,9 +9,9 @@
     "watchdog_source_tested_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
     "watchdog_implementation_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "3a6318d7d16c26f7e6ee12514f8aaf140215ef55",
-    "hosted_runs": [34522351534, 34522353025, 34522351498, 34522353092],
-    "hosted_run_status_at_capture": "Rust/synthetic runs 34522351534 and 34522353025 passed on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed; native Windows service-session remains UNVERIFIED on runner session 2"
+    "watchdog_last_observed_pr_head": "f72aeab586816be71b264bae83db192a1e8f8103",
+    "hosted_runs": [34524471744, 34524473975, 34524471775, 34524473943],
+    "hosted_run_status_at_capture": "Rust/synthetic runs 34524471744 and 34524473975 passed on Ubuntu and Windows; standards runs 34524471775 and 34524473943 passed; native Windows service-session remains UNVERIFIED on runner session 2"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -44,7 +44,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
         "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Current source commit 0542ab8 adds release activation/rollback and strict selector/receipt binding; hosted validation runs 34522351534 and 34522353025 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; substantive source head 0542ab8; current PR head 3a6318d is a documentation refresh; hosted validation runs 34523347034 and 34523347502 plus standards runs 34523347083 and 34523347540 are tracked for the current head"
+      "remote": "pushed to codex/watchdog-integrated-20260910; substantive source head 0542ab8; current PR head f72aeab adds collision-safe concurrent Windows fixture allocation; hosted validation runs 34524471744 and 34524473975 plus standards runs 34524471775 and 34524473943 passed"
     },
     "gateway": {
       "commit": "de1fe72345ea972d56c05d30837da5327e5f1655",

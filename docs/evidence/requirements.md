@@ -172,8 +172,8 @@ Pinned-toolchain checks passed: standards validation, format, strict Clippy,
 206 watchdog library tests, all workspace integration suites, the five selector
 tests, the two restore CLI tests, the namespace-isolated Linux installer test,
 and the current 10-case adversarial suite (4 expected workspace tests ignored).
-Hosted validation runs `34522351534` and `34522353025` passed on both Ubuntu
-and Windows; standards runs `34522351498` and `34522353092` passed. The hosted
+Hosted validation runs `34524471744` and `34524473975` passed on both Ubuntu
+and Windows; standards runs `34524471775` and `34524473943` passed. The hosted
 service-session step remains explicitly `UNVERIFIED` on runner session 2; the
 session-0 tests did not execute.
 

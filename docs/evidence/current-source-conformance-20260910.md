@@ -9,7 +9,7 @@ cold-boot, or soak claim.
 
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
-| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `0542ab87f58d7aa38be35ccd407d202e224e2789` | open draft; durable release activation/rollback, strict selector/receipt binding, request-collision rejection, and runtime launch fence source commit; hosted Ubuntu/Windows and standards validation passed |
+| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `0542ab87f58d7aa38be35ccd407d202e224e2789` | open draft; substantive source commit plus f72aeab collision-safe Windows fixture tests; durable release activation/rollback and runtime launch fence source-tested; hosted Ubuntu/Windows and standards validation passed |
 | sts2-gateway | `main` / PR #38 | `de1fe72345ea972d56c05d30837da5327e5f1655` | merged; PR #37 included |
 | sts2-harness | `main` / PR #59 | `5cc486a66b6f11930675af06f7426cd91c609983` | merged |
 | sts2-mcp-server | `main` / PR #38 | `9fa09faed351a27bfeaebc2344af7ffd12ac784d` | merged; native coop adapter |
@@ -40,8 +40,8 @@ components with pinned locked dependencies:
   explicitly ignored, with all workspace integration suites passing. The
   five selector tests, restore CLI (2 tests), and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 hosted validation runs `34522351534` and `34522353025` passed
-  on both Ubuntu and Windows; standards runs `34522351498` and `34522353092`
+* Watchdog PR #9 hosted validation runs `34524471744` and `34524473975` passed
+  on both Ubuntu and Windows; standards runs `34524471775` and `34524473943`
   passed. Native service-session remains separately `UNVERIFIED`.
 * Gateway PR #38 hosted quality and policy runs `34510597219` and
   `34510597283` passed. A broader parallel local attempt exposed timing-sensitive

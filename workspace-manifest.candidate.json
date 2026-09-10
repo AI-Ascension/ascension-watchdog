@@ -12,11 +12,11 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "0542ab87f58d7aa38be35ccd407d202e224e2789",
-      "last_observed_pr_head": "3a6318d7d16c26f7e6ee12514f8aaf140215ef55",
+      "last_observed_pr_head": "f72aeab586816be71b264bae83db192a1e8f8103",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; substantive source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing; current PR head 3a6318d is a documentation refresh; hosted checks for 3a6318d pass; mergeable; not-merged"
+      "state": "open-draft; substantive source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing; current PR head f72aeab adds collision-safe concurrent Windows fixture allocation; hosted Ubuntu/Windows validation and standards checks pass; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
@@ -73,8 +73,8 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34522351534, 34522353025],
-    "hosted_watchdog_status_at_capture": "passed-at-0542ab8 on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed; native service-session remains separately unverified",
+    "hosted_watchdog_runs": [34524471744, 34524473975],
+    "hosted_watchdog_status_at_capture": "passed-at-f72aeab on Ubuntu and Windows; standards runs 34524471775 and 34524473943 passed; native service-session remains separately unverified",
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"

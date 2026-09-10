@@ -8,7 +8,7 @@
       "tested_source": "0542ab87f58d7aa38be35ccd407d202e224e2789",
       "implementation_source": "0542ab87f58d7aa38be35ccd407d202e224e2789",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "3a6318d7d16c26f7e6ee12514f8aaf140215ef55",
+      "remote_pr_head_at_capture": "f72aeab586816be71b264bae83db192a1e8f8103",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {
@@ -64,7 +64,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local-at-0542ab8-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; hosted validation runs 34522351534 and 34522353025 passed on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed; native service-session remains unverified"
+      "result": "pass-local-at-0542ab8-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests added at f72aeab; hosted validation runs 34524471744 and 34524473975 passed on Ubuntu and Windows; standards runs 34524471775 and 34524473943 passed; native service-session remains unverified"
     },
     "sts2-gateway": {
       "commands": [
