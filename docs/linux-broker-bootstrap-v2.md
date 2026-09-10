@@ -112,9 +112,10 @@ neither a `CancelJob` reply nor a raced `JobRemoved` event proves whether the
 unit executed. Matching `JobRemoved` decoding is available only with the
 durable binding; unrelated or malformed signals fail closed.
 
-Durable cancellation intent across broker death, asynchronous `JobRemoved`
-subscription/replay, and the final watchdog Stop/exec admission barrier remain
-open. Pending records without retained original containment still cannot
+The one-way cancellation intent is now durable in the pending journal and is
+replayed after a broker-ledger reopen. Asynchronous `JobRemoved`
+subscription/replay across broker death and the final watchdog Stop/exec
+admission barrier remain open. Pending records without retained original containment still cannot
 authorize pathname adoption or termination. These cases remain uncertain, not
 successful cleanup. Add parent/broker death, late job execution, lost response,
 concurrent Stop, missing original capability and same-name replacement

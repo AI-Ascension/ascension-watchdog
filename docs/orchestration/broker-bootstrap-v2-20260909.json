@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "base_commit": "54bda896364e502edef42192b138fc30ce565ac3",
-  "source_state": "uncommitted root integration; no manifest or dependency changes",
-  "classification": "confirmed broker-side implementation and synthetic transport/descriptor validation; runtime selection and native service validation incomplete",
+  "base_commit": "local-integration-pending",
+  "source_state": "local integration branch; validation pending",
+  "classification": "broker-side implementation, explicit opt-in runtime selection, exact queued-job binding/cancellation seams, durable pending cancellation intent, and synthetic transport/descriptor validation; native service validation and JobRemoved replay remain incomplete",
   "tasks": [
     {
       "id": "BROKER-BOOTSTRAP-CODEC-16",
@@ -38,25 +38,25 @@
     "model_effort": "existing requested Luna/max agents reused; this wave does not establish fresh observed runtime model metadata"
   },
   "source_sha256": {
-    "crates/watchdog/src/platform/linux_broker.rs": "dc7542a9352cc4e0dc1a16e9584ee01026f64d3f5e84cf32c7b73315a8726309",
+    "crates/watchdog/src/platform/linux_broker.rs": "pending",
     "crates/watchdog/src/platform/linux_broker/bootstrap.rs": "d3510080e8eb7b041f904f4e2eaa4287e5e856909da7a367f915510f00ac8a3c",
     "crates/watchdog/src/platform/linux_broker/bootstrap_tests.rs": "f80a8e275f645920938cd9be1f5a77a605af1b8fb7a2c5403506e0ea976d57eb",
     "crates/watchdog/src/platform/linux_broker/bootstrap_transport.rs": "874ff4269174c21475eb9967125a0204c264783dd168ad6b7fe9c3b6578a5ac4",
     "crates/watchdog/src/platform/linux_broker/bootstrap_transport_tests.rs": "73e37adf7fc8bab2741220ebdc26cc034cc229815eb7a9c59e5fced1de403d69",
     "crates/watchdog/src/platform/linux_broker/native_bootstrap.rs": "9f0385f120cd4c339fee3ca1f869eb173933ba4c8afb6bdd99ef2af6ab3dba1f",
-    "crates/watchdog/src/platform/linux_broker/ledger.rs": "a05924eb963bb1408316c97598141141b51fb7df2559a72fa4816d7eca6d6106",
-    "crates/watchdog/src/platform/linux_broker/native.rs": "c8afe9ab49e45c5b347b54c417648cf6f0873567083c3fa7bbe7499a69786670",
-    "crates/watchdog/src/platform/linux_broker/tests.rs": "36b71fbc9f3018cce35a5aa2ac2cbb62e1df0edb5a326148bf24ac41127ee09e",
+    "crates/watchdog/src/platform/linux_broker/ledger.rs": "pending",
+    "crates/watchdog/src/platform/linux_broker/native.rs": "pending",
+    "crates/watchdog/src/platform/linux_broker/tests.rs": "pending",
     "crates/watchdog/src/platform/linux_broker/failed_launch_cleanup_tests.rs": "3b38ead12c7ecc4a26162217879360742ee3939d846d03996b21679d0f6a89c4"
   },
   "verification": {
     "root_focused_command": "CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 -p ascension-watchdog --lib platform::linux_broker",
-    "root_focused": {"passed": 105, "failed": 0, "ignored_native": 1, "filtered": 127, "exit_code": 0, "test_seconds": 21.93},
-    "independent_focused": {"passed": 105, "failed": 0, "ignored_native": 1, "filtered": 127, "exit_code": 0, "test_seconds": 19.18},
-    "strict_clippy": "CARGO_INCREMENTAL=0 cargo clippy --locked --offline -j1 --workspace --all-targets --all-features -- -D warnings; exit 0; 26.50 seconds",
-    "format_and_diff": "passed on frozen production source",
-    "full_workspace_tests_and_windows_cross_clippy": "running; not yet a pass",
-    "release_build_from_v2_source": "not yet run"
+    "root_focused": "pending",
+    "independent_focused": "pending",
+    "strict_clippy": "pending",
+    "format_and_diff": "pending",
+    "full_workspace_tests_and_windows_cross_clippy": "pending",
+    "release_build_from_v2_source": "pending"
   },
   "corrected_intermediate_failures": [
     "Strict Clippy rejected one err().expect() test expression; changed to expect_err without allowances",
@@ -64,11 +64,12 @@
   ],
   "runtime_broker_selected": false,
   "asynchronous_pending_cancel_implemented": false,
+  "durable_pending_cancel_intent": true,
   "native_systemd_stdin_verified": false,
   "service_installed_or_activated": false,
   "pushed_or_merged": false,
   "remaining": [
-    "Broker asynchronous job identity, durable cancel/resolve, and Pending ownership reconciliation",
+    "Asynchronous JobRemoved subscription/replay across broker death",
     "Final watchdog Stop/exec admission barrier without releasing authority while PID 1 launch can still occur",
     "Receipt-backed runtime ownership and explicit backend selection preserving typed bootstrap",
     "Authorized native systemd stdin, process/cgroup cleanup, service restart and reboot validation",

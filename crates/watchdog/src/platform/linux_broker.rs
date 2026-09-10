@@ -1111,6 +1111,12 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
             None => self.ledger.reserve(request, &unit, policy)?,
         };
         if !newly_reserved {
+            if self.ledger.pending_cancel_requested(request, policy)? {
+                return Err(BrokerError::Conflict(
+                    "durable launch cancellation is pending; refusing to relaunch old nonce"
+                        .to_owned(),
+                ));
+            }
             if let Some(observation) = self.backend.inspect(&unit, policy, deadline)? {
                 observation.verify(&unit, policy)?;
                 let receipt = receipt_from(request, &observation, true);
@@ -1246,6 +1252,10 @@ impl<B: SystemdBackend> LinuxSystemdBroker<B> {
         match record {
             ledger::LifecycleRecord::Pending => {
                 if operation == BrokerLifecycleOperation::Stop {
+                    // Record the intent before touching PID 1.  The bit is
+                    // replayable after broker death and never serves as a
+                    // terminal execution witness.
+                    self.ledger.request_pending_stop(request, policy)?;
                     if let Some(job) = self.ledger.pending_job_binding(request, policy)? {
                         // A queued-job cancellation is an effect, but neither
                         // a successful CancelJob call nor a raced JobRemoved

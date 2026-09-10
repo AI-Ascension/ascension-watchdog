@@ -119,6 +119,11 @@ struct LedgerRecord {
     // immutable, non-secret object identity returned by StartTransientUnit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     job: Option<JobBinding>,
+    // A pending Stop is an intent, not proof that PID 1 did or did not run
+    // the transient unit.  Older journals omit this field and therefore
+    // decode as an unrequested cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cancel_requested: Option<bool>,
     state: LedgerState,
     receipt: Option<LaunchReceipt>,
 }
@@ -409,6 +414,7 @@ impl BrokerLedger {
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
             job: previous.job.clone(),
+            cancel_requested: None,
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -442,6 +448,7 @@ impl BrokerLedger {
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
             job: previous.job.clone(),
+            cancel_requested: previous.cancel_requested,
             state: LedgerState::StopPending,
             receipt: Some(receipt.clone()),
         };
@@ -479,6 +486,7 @@ impl BrokerLedger {
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
             job: previous.job.clone(),
+            cancel_requested: previous.cancel_requested,
             state: LedgerState::Stopped,
             receipt: Some(receipt.clone()),
         };
@@ -555,6 +563,11 @@ impl BrokerLedger {
                     "broker lifecycle stop owns this launch nonce".to_owned(),
                 ));
             }
+            if record.cancel_requested == Some(true) {
+                return Err(BrokerError::Conflict(
+                    "broker launch cancellation owns this pending nonce".to_owned(),
+                ));
+            }
             return Ok(false);
         }
         if self.records.len() >= MAX_LEDGER_REQUESTS {
@@ -582,6 +595,7 @@ impl BrokerLedger {
             identity,
             bootstrap: bootstrap.cloned(),
             job: None,
+            cancel_requested: None,
             state: LedgerState::Pending,
             receipt: None,
         };
@@ -632,6 +646,7 @@ impl BrokerLedger {
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
             job: Some(job.clone()),
+            cancel_requested: previous.cancel_requested,
             state: previous.state,
             receipt: previous.receipt.clone(),
         };
@@ -662,6 +677,68 @@ impl BrokerLedger {
             job.validate_for_request(request)?;
         }
         Ok(record.job.clone())
+    }
+
+    /// Persist a Stop intent for a still-pending launch before touching the
+    /// manager job.  Repeating the request is idempotent; the bit is never
+    /// cleared or interpreted as proof of cancellation.
+    pub(super) fn request_pending_stop(
+        &mut self,
+        request: &BrokerRequest,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<()> {
+        self.ensure_healthy()?;
+        let Some(previous) = self.records.get(request) else {
+            return Err(BrokerError::Conflict(
+                "pending stop has no durable launch reservation".to_owned(),
+            ));
+        };
+        if previous.state != LedgerState::Pending {
+            return Err(BrokerError::Conflict(
+                "pending stop requires a pending launch reservation".to_owned(),
+            ));
+        }
+        if previous.unit != unit_name(request) || !previous.identity.matches_policy(policy) {
+            return Err(BrokerError::Conflict(
+                "pending stop conflicts with its immutable launch identity".to_owned(),
+            ));
+        }
+        if previous.cancel_requested == Some(true) {
+            return Ok(());
+        }
+        let record = LedgerRecord {
+            request: request.clone(),
+            unit: previous.unit.clone(),
+            identity: previous.identity.clone(),
+            bootstrap: previous.bootstrap.clone(),
+            job: previous.job.clone(),
+            cancel_requested: Some(true),
+            state: previous.state,
+            receipt: previous.receipt.clone(),
+        };
+        self.append(&record)?;
+        self.records.insert(request.clone(), record);
+        Ok(())
+    }
+
+    pub(super) fn pending_cancel_requested(
+        &self,
+        request: &BrokerRequest,
+        policy: &LaunchPolicy,
+    ) -> BrokerResult<bool> {
+        self.ensure_healthy()?;
+        let Some(record) = self.records.get(request) else {
+            return Ok(false);
+        };
+        if record.state != LedgerState::Pending {
+            return Ok(false);
+        }
+        if record.unit != unit_name(request) || !record.identity.matches_policy(policy) {
+            return Err(BrokerError::Conflict(
+                "pending cancellation conflicts with its immutable launch identity".to_owned(),
+            ));
+        }
+        Ok(record.cancel_requested == Some(true))
     }
 
     /// Return a queued-job binding only for a still-pending reservation.  A
@@ -730,6 +807,7 @@ impl BrokerLedger {
             identity: previous.identity.clone(),
             bootstrap: previous.bootstrap.clone(),
             job: previous.job.clone(),
+            cancel_requested: previous.cancel_requested,
             state: LedgerState::Committed,
             receipt: Some(receipt.clone()),
         };
@@ -871,7 +949,13 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
             ));
         }
         match (records.get(&record.request), record.state, &record.receipt) {
-            (None, LedgerState::Pending, None) => {}
+            (None, LedgerState::Pending, None) => {
+                if record.cancel_requested.is_some() {
+                    return Err(BrokerError::Invalid(
+                        "broker cancellation intent lacks a pending predecessor".to_owned(),
+                    ));
+                }
+            }
             (None, LedgerState::Committed, _) => {
                 return Err(BrokerError::Invalid(
                     "broker ledger committed record lacks a pending predecessor".to_owned(),
@@ -895,10 +979,17 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                 // new record must carry a binding.  Every other pending
                 // append is a duplicate, a regression, or an attempted
                 // replacement of immutable launch state.
-                if previous.state != LedgerState::Pending
-                    || previous.receipt.is_some()
-                    || previous.job.is_some()
-                    || record.job.is_none()
+                let job_binding_extension = previous.state == LedgerState::Pending
+                    && previous.receipt.is_none()
+                    && previous.job.is_none()
+                    && record.job.is_some()
+                    && previous.cancel_requested == record.cancel_requested;
+                let cancel_intent_extension = previous.state == LedgerState::Pending
+                    && previous.receipt.is_none()
+                    && previous.cancel_requested.is_none()
+                    && record.cancel_requested == Some(true)
+                    && previous.job == record.job;
+                if (!job_binding_extension && !cancel_intent_extension)
                     || previous.unit != record.unit
                     || previous.identity != record.identity
                     || previous.bootstrap != record.bootstrap
@@ -936,6 +1027,7 @@ fn parse_records(bytes: &[u8]) -> BrokerResult<BTreeMap<BrokerRequest, LedgerRec
                     || previous.identity != record.identity
                     || previous.bootstrap != record.bootstrap
                     || previous.job != record.job
+                    || previous.cancel_requested != record.cancel_requested
                     || previous
                         .receipt
                         .as_ref()
@@ -1041,6 +1133,7 @@ mod tests {
             identity: identity(),
             bootstrap: None,
             job: None,
+            cancel_requested: None,
             state: LedgerState::Pending,
             receipt: None,
         }
@@ -1152,6 +1245,34 @@ mod tests {
         let mut record = pending("committed-first");
         record.state = LedgerState::Committed;
         assert!(parse_records(&encode(&[record])).is_err());
+    }
+
+    #[test]
+    fn pending_cancel_intent_is_durable_and_cannot_be_cleared()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
+        let path = directory.path().join("ledger.jsonl");
+        let request = request("pending-cancel-intent");
+        let unit = unit_name(&request);
+        let policy = job_policy();
+        let mut ledger = BrokerLedger::init(&path)?;
+        assert!(ledger.reserve(&request, &unit, &policy)?);
+        let binding = JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/37")?;
+        ledger.bind_job(&request, &policy, &binding)?;
+        assert!(!ledger.pending_cancel_requested(&request, &policy)?);
+        ledger.request_pending_stop(&request, &policy)?;
+        ledger.request_pending_stop(&request, &policy)?;
+        assert!(ledger.pending_cancel_requested(&request, &policy)?);
+        drop(ledger);
+
+        let mut reopened = BrokerLedger::open(path)?;
+        assert!(reopened.pending_cancel_requested(&request, &policy)?);
+        assert_eq!(
+            reopened.pending_job_binding(&request, &policy)?,
+            Some(binding)
+        );
+        assert!(reopened.reserve(&request, &unit, &policy).is_err());
+        Ok(())
     }
 
     fn typed_binding() -> bootstrap::BrokerBootstrapBinding {
@@ -1404,6 +1525,7 @@ mod tests {
             identity: identity(),
             bootstrap: None,
             job: Some(binding.clone()),
+            cancel_requested: None,
             state: LedgerState::Committed,
             receipt: Some(LaunchReceipt {
                 request: request.clone(),

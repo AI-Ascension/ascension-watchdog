@@ -66,17 +66,17 @@ cargo test --locked --offline -p ascension-watchdog --lib runtime_process::tests
 cargo clippy --locked --offline -p ascension-watchdog --lib --all-targets -- -D warnings
 ```
 
-The current integrated broker focused gate passes 114 tests with one explicitly
-gated native-systemd test ignored; the workspace gate must still be rerun after
-this source change. These checks prove selector bounds, direct-backend
-defaulting, request round-tripping, receipt correlation, exact job identity,
-and pending cancellation uncertainty. They do not prove a root-owned socket,
-systemd/D-Bus effects, cross-UID execution, reboot recovery, or live service
-behavior.
+The focused broker and workspace gates must be rerun for the current integrated
+source before this record is used as completion evidence. They cover selector
+bounds, direct-backend defaulting, request round-tripping, receipt correlation,
+exact job identity, and pending cancellation uncertainty. They do not prove a
+root-owned socket, systemd/D-Bus effects, cross-UID execution, reboot recovery,
+or live service behavior.
 
-The broker API remains synchronous at the wire boundary. It exposes bounded
-job identity resolution/cancellation but does not yet persist a separate
-cancellation intent or replay `JobRemoved` events across broker restarts.
-Callers must retain the operation in their own durable journal and use an
-operation-specific effect witness; this selector does not claim terminal
-success from a cancellation reply.
+The broker API remains synchronous at the wire boundary. A pending Stop now
+persists a one-way cancellation intent before touching the manager job, and
+that intent is replayed after a broker-ledger reopen. Bounded job identity
+resolution/cancellation is still separate from `JobRemoved` subscription and
+replay across broker restarts. Callers must retain the operation in their own
+durable journal and use an operation-specific effect witness; this selector
+does not claim terminal success from a cancellation reply.

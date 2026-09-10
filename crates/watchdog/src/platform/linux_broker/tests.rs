@@ -826,6 +826,12 @@ fn stop_of_pending_launch_cancels_only_the_durable_queued_job_and_stays_uncertai
         broker.ledger.state(&request),
         Some(ledger::LedgerState::Pending)
     );
+    assert!(
+        broker
+            .ledger
+            .pending_cancel_requested(&request, launch_policy)
+            .expect("pending cancellation intent")
+    );
     assert_eq!(
         broker
             .ledger
@@ -833,6 +839,56 @@ fn stop_of_pending_launch_cancels_only_the_durable_queued_job_and_stays_uncertai
             .expect("pending job binding"),
         broker.backend.queued_job.clone()
     );
+}
+
+#[test]
+fn pending_cancel_intent_replays_after_broker_reopen() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir_in(std::env::current_dir()?)?;
+    let path = directory.path().join("ledger.jsonl");
+    let policy = policy();
+    let request = request("pending-cancel-reopen");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let binding = ledger::JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/92")?;
+    let mut ledger = BrokerLedger::init(&path)?;
+    assert!(ledger.reserve(&request, &unit, launch_policy)?);
+    ledger.bind_job(&request, launch_policy, &binding)?;
+
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding.clone());
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, ledger);
+    let (peer, mut child) = credentials(&policy);
+    assert!(matches!(
+        broker.stop(peer, request.clone()),
+        Err(BrokerError::Conflict(_))
+    ));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    drop(broker);
+
+    let reopened = BrokerLedger::open(&path)?;
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding);
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, reopened);
+    let (peer, mut child) = credentials(&policy);
+    assert!(matches!(
+        broker.stop(peer, request.clone()),
+        Err(BrokerError::Conflict(_))
+    ));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    assert!(
+        broker
+            .ledger
+            .pending_cancel_requested(&request, launch_policy)?
+    );
+    Ok(())
 }
 
 #[test]
