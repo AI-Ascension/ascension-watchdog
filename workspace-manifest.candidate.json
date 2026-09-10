@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "classification": "candidate-source-set-not-activated",
+  "generated_at": "2026-09-10",
+  "purpose": "Exact source pins captured for cross-repository integration review; this is not an installed or activated release.",
+  "activation": {
+    "activated": false,
+    "artifact_digests_verified": false,
+    "native_install_verified": false,
+    "rollback_verified": false
+  },
+  "repositories": {
+    "ascension-watchdog": {
+      "revision": "572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c",
+      "ref": "codex/watchdog-ci-auth-fixture-fix",
+      "remote": "AI-Ascension/ascension-watchdog",
+      "state": "open-pr-source"
+    },
+    "sts2-gateway": {
+      "revision": "8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711",
+      "ref": "codex/gateway-allocation-cleanup-integration",
+      "remote": "AI-Ascension/sts2-gateway",
+      "pull_request": 35,
+      "state": "open-draft"
+    },
+    "sts2-harness": {
+      "revision": "8b3bd55af5b917e92f8ec7f06676acd364ae6246",
+      "ref": "codex/harness-integrated-full",
+      "remote": "AI-Ascension/sts2-harness",
+      "pull_request": 50,
+      "state": "merged-head; merge-commit/live-consumer-verification-separate"
+    },
+    "sts2-mcp-server": {
+      "revision": "6ad97aeead88cdb2097675ddff076bc4bb97529d",
+      "ref": "work/w04-presentation",
+      "remote": "AI-Ascension/sts2-mcp-server",
+      "pull_request": 26,
+      "state": "open-draft"
+    },
+    "sts2-game-mod": {
+      "revision": "ad9278512563d4a319177d4c10654ceec696c78c",
+      "ref": "fix/rest-catalog-completeness-bfca-20260908",
+      "remote": "AI-Ascension/sts2-game-mod",
+      "pull_request": 63,
+      "state": "open-draft"
+    },
+    "sts2-protocol": {
+      "revision": "e9199f0706b1629b19efc6d7874d01662b1802b2",
+      "ref": "recovery/protocol-rest-fixture-refresh-dc3a-20260909",
+      "remote": "AI-Ascension/sts2-protocol",
+      "pull_request": 24,
+      "state": "open-draft-dirty"
+    },
+    "sts2-game-core": {
+      "revision": "9a27a80c32dcadd8030cf42c861e9e5da4daed1c",
+      "ref": "work/w04-presentation",
+      "remote": "AI-Ascension/sts2-game-core",
+      "pull_request": 9,
+      "state": "open-draft"
+    },
+    "ai-agent-observability": {
+      "revision": "a126715501d65a2d25f9d6ecf9c6bd142cc5f590",
+      "ref": "codex/otel-native-health-probe",
+      "remote": "AI-Ascension/ai-agent-observability",
+      "pull_request": 16,
+      "state": "open-draft"
+    }
+  },
+  "evidence_boundary": {
+    "source_pins": "confirmed-from-remote-pr-heads-2026-09-10",
+    "cross_consumer_build": "not-run",
+    "live_host": "not-run",
+    "cold_boot": "not-run",
+    "soak": "not-run"
+  }
+}
