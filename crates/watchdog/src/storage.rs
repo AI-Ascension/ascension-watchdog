@@ -215,6 +215,91 @@ fn lock_path(database: &Path) -> PathBuf {
     PathBuf::from(value)
 }
 
+/// A newly-created restore target that is published only after all
+/// compatibility, integrity, rekey, and quarantine updates have committed.
+/// Dropping an uncommitted staging file removes only that fresh temporary
+/// object; an existing owner-local database is never replaced or truncated.
+struct RestoreStagingFile {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl RestoreStagingFile {
+    fn create(destination: &Path) -> Result<Self> {
+        let parent = destination.parent().ok_or_else(|| {
+            WatchdogError::InvalidInput("restore destination has no parent".to_owned())
+        })?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+        let name = destination.file_name().ok_or_else(|| {
+            WatchdogError::InvalidInput("restore destination must name a file".to_owned())
+        })?;
+        // A random suffix makes an attacker-selected pre-existing staging name
+        // impractical while create_new preserves the no-overwrite boundary.
+        for _ in 0..8 {
+            let path = parent.join(format!(
+                ".{}.restore-{}.tmp",
+                name.to_string_lossy(),
+                Uuid::new_v4()
+            ));
+            let mut options = OpenOptions::new();
+            options.create_new(true).read(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&path) {
+                Ok(file) => {
+                    file.sync_all()?;
+                    return Ok(Self {
+                        path,
+                        committed: false,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(WatchdogError::Conflict(
+            "could not reserve a unique restore staging path".to_owned(),
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn commit(mut self, destination: &Path) -> Result<()> {
+        let stable = canonical_owner_path(&self.path, "restore staging")?;
+        if stable != self.path {
+            return Err(WatchdogError::Conflict(
+                "restore staging path changed before publication".to_owned(),
+            ));
+        }
+        let file = OpenOptions::new().read(true).open(&self.path)?;
+        file.sync_all()?;
+        fs::rename(&self.path, destination)?;
+        self.committed = true;
+        #[cfg(unix)]
+        if let Some(parent) = destination.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RestoreStagingFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// Open the lock file with no delete sharing on Windows.  This is the stable
 /// standard-library equivalent of the native platform wrapper's protected
 /// file boundary: another process may still open the file and receive normal
@@ -1154,19 +1239,20 @@ impl Store {
         effective_config.desired_mode = DesiredMode::Stopped;
         let expected_config_digest = effective_config.digest()?;
         let expected_compat_digest = config_compatibility_digest(&effective_config)?;
-        if let Some(parent) = destination.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        let stable_destination = canonical_owner_path(&destination, "destination")?;
-        if stable_destination != destination {
+        // Materialize and validate the transformed copy away from the final
+        // destination.  A failed pragma, migration, or metadata update must
+        // not leave a newly-created destination that looks usable to a later
+        // operator.  The final rename is the only point at which the new
+        // namespace becomes addressable.
+        let staging = RestoreStagingFile::create(&destination)?;
+        fs::copy(&backup, staging.path())?;
+        let stable_staging = canonical_owner_path(staging.path(), "restore staging")?;
+        if stable_staging != staging.path() {
             return Err(WatchdogError::Conflict(
-                "restore destination changed while preparing copy".to_string(),
+                "restore staging path changed while preparing copy".to_string(),
             ));
         }
-        std::fs::copy(&backup, &destination)?;
-        let mut conn = open_connection(&destination)?;
+        let mut conn = open_connection(staging.path())?;
         // VACUUM INTO produces a standalone database using the source's
         // journal mode.  Re-establish the watchdog's required WAL/FULL
         // contract before any caller can reopen the restored state.
@@ -1211,6 +1297,7 @@ impl Store {
         )?;
         tx.commit()?;
         drop(conn);
+        staging.commit(&destination)?;
         Self::open(destination, &effective_config)
     }
 
