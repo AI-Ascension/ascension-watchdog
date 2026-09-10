@@ -21,9 +21,10 @@
     "hosted_status_at_capture": "Rust/synthetic and standards runs passed on Ubuntu and Windows; Windows service-session is explicitly UNVERIFIED on runner session 2",
     "native_worker_smoke": {
       "harness_pr": 66,
-      "harness_commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
-      "image_sha256": "4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2",
-      "result": "1 passed, 0 failed, 0 ignored; 23.21s; authenticated Linux process-boundary dispatch admission and durable stop/cleanup",
+      "harness_commit": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+      "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "image_sha256": "5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f",
+      "result": "1 passed, 0 failed, 0 ignored; 25.33s; authenticated Linux process-boundary dispatch admission and durable stop/cleanup after endpoint hardening",
       "limits": "synthetic HTTP503 gateway and /usr/bin/true MCP; not gameplay/provider/service/reboot/release/soak"
     }
   },
@@ -42,7 +43,8 @@
     },
     {
       "repository": "sts2-harness",
-      "integration_commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "integration_commit": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "feature_commit": "58dede2eb661133d8910a1f785e8a90346efe8dd",
       "pull_request": 66,
       "root_results": [
         "lifecycle suite: 28 passed",
@@ -50,14 +52,14 @@
         "full locked workspace report: 171 runtime passed, 1 ignored"
       ],
       "scope": "authenticated native Linux worker endpoint, durable runtime-v3 recovery, provider accounting and synthetic subprocess tests",
-      "pending": "PR #66 remains unmerged; cross-repository release-set rebuild and native/live gateway-MCP-host recovery"
+      "pending": "cross-repository release-set rebuild and native/live gateway-MCP-host recovery"
     },
     {
       "repository": "sts2-gateway",
       "candidate_commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "integrated": false,
       "pull_request": 39,
-      "pending": "restart guard in open PR #34, managed host settlement, and cross-repository rebuild"
+      "pending": "restart guard in open PR #34 at 87792cf, managed host settlement, and cross-repository rebuild"
     }
   ],
   "remaining_production_work": [
@@ -75,7 +77,7 @@
     "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/9",
     "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/66",
     "game_mod_pr": "https://github.com/AI-Ascension/sts2-game-mod/pull/72",
-    "status": "watchdog PR #9 and harness endpoint PR #66 are open; gateway #39, MCP #40, game-mod dependency/main updates, protocol #38, game-core and observability updates are merged; no merge authorization was exercised"
+    "status": "watchdog PR #9 and gateway restart-guard PR #34 remain open; harness endpoint PR #66 auto-merged at a0ace671 after green checks; gateway #39, MCP #40, game-mod dependency/main updates, protocol #38, game-core and observability updates are merged; no merge command was issued for PR #66 by the implementation lane"
   },
   "service_install_or_release_activation_this_checkpoint": false
 }

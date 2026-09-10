@@ -1,7 +1,8 @@
 # Worker endpoint namespace v1
 
-Owner: watchdog launch boundary. The Linux producer is implemented in harness PR
-#66 (`ef8c45e853d5f86c2653159a449826ffc20b5950`) and is consumed by the
+Owner: watchdog launch boundary. The Linux producer is implemented in merged
+harness PR #66 (feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`, now
+main `a0ace6712686cb30d6f0b556cb6814ad4c0721d1`) and is consumed by the
 watchdog's configured worker client. The source/component gates and one native
 Linux process-boundary smoke pass; Windows producer implementation, service
 installation, live gameplay, and native producer-to-consumer release acceptance
@@ -50,16 +51,18 @@ unchanged approved launch bytes, current/prior socket fault tests, and actual na
 bootstrap-to-authenticated-exchange tests. Pure derivation tests are not that final
 integration evidence. The current native Linux evidence is recorded in
 [`docs/evidence/real-harness-worker.md`](evidence/real-harness-worker.md): the
-watchdog launched the exact PR #66 harness image, authenticated the bootstrap and
+watchdog launched the exact merged PR #66 hardening image, authenticated the bootstrap and
 control exchange, admitted one dispatch, and persisted stop/cleanup. The downstream
 gateway and MCP processes were intentionally bounded synthetic fault fixtures, so
 the run does not establish a settled game action or provider result.
 
 ## Current component gate
 
-Harness PR #66 was rebased onto current harness `main` (`63dc563690c93c575e75228f54672c1689d8a879`).
-Its locked format, check, Clippy, policy, and all-target/all-feature tests pass. The
-release image used by the native smoke is retained outside the repository with
-SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`.
+Harness PR #66 merged automatically after its hardening checks passed; the feature
+head is `58dede2eb661133d8910a1f785e8a90346efe8dd` and current `main` is
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1`. Its locked format, check, Clippy,
+policy, and all-target/all-feature tests pass. The release image used by the
+native smoke is retained outside the repository with SHA-256
+`5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`.
 The image and endpoint namespace are immutable, owner-local test inputs; no
 credential or local path is part of the committed contract.

@@ -6,7 +6,7 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
 The pins were refreshed from authoritative remote PR and branch metadata on
-2026-09-10T23:00Z. The watchdog integration branch is draft PR #9 at
+2026-09-10T23:40Z. The watchdog integration branch is draft PR #9 at
 `f5eaf5e35be025015a28da931aa973a0ade8f0ef`; its durable exact-digest release
 selector, strict selector/receipt binding, request-collision rejection,
 authenticated activation/rollback boundary, and collision-safe Windows fixture
@@ -20,16 +20,16 @@ MCP `037d10def1cbcb1c807e136d31b294355a92c010`, game-mod
 `888b06702021cd2bbd22773b0267733766c3b04a`, protocol
 `f22dd7216f65de91a0ffa27f50bc2036be6c8b24`, game-core
 `f9db577530a4d159b066d3facbd780d61c044eb0`, and observability
-`89539a6e7754b389f8eac148ba8a49c3892cddd8`. The harness entry is the open
-worker-endpoint PR #66 at `ef8c45e853d5f86c2653159a449826ffc20b5950`, based on
-current harness main `63dc563690c93c575e75228f54672c1689d8a879`; it is the exact
-image used by the native worker smoke. Locked component gates and
+`89539a6e7754b389f8eac148ba8a49c3892cddd8`. The harness entry is merged PR
+#66: feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`, now on main at
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1`; it is the exact hardening source
+used by the native worker smoke. Locked component gates and
 runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
 [`release-set-verification-20260910.json`](release-set-verification-20260910.json).
 The current protocol artifact records serialized component conformance for the
 gateway/MCP/harness heads, while the worker endpoint is a separate Linux
 process-boundary contract. The exact watchdog-to-harness smoke passed with
-image SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`,
+image SHA-256 `5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`,
 but the downstream gateway/MCP inputs were synthetic faults. No claim is made
 that the full set composes, installs, activates, or runs a live game host.
 

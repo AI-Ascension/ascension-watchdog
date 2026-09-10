@@ -18,11 +18,12 @@
       "ref": "main"
     },
     "sts2-harness": {
-      "tested_source": "ef8c45e853d5f86c2653159a449826ffc20b5950",
-      "selected_remote_revision": "63dc563690c93c575e75228f54672c1689d8a879",
+      "tested_source": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+      "selected_remote_revision": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
       "remote_pr": 66,
-      "ref": "codex/harness-worker-endpoint-20260910"
+      "ref": "main",
+      "state": "merged; feature head 58dede2; merge commit a0ace671"
     },
     "sts2-mcp-server": {
       "selected_remote_revision": "037d10def1cbcb1c807e136d31b294355a92c010",
@@ -81,7 +82,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "PR #66 endpoint branch: locked fmt/check/Clippy/policy/all-target/all-feature gates pass; integrated native worker smoke pass; current main base 63dc563"
+      "result": "PR #66 hardening feature head: locked fmt/check/Clippy/policy/all-target/all-feature gates pass; hosted runs 34542578041 and 34542578085 pass; endpoint auto-merged to main a0ace671; native worker smoke rerun separately"
     },
     "sts2-game-mod": {
       "commands": [
@@ -140,14 +141,15 @@
         "consumer_conformance_sha256": "ca8a60ba24c7cf6664eab71b0f2cb6992125fec45349154df6222c0bccfc3cd9"
       }
     },
-    "result": "byte-identical frozen artifacts across the inspected component copies; current protocol main refresh binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 component heads; worker endpoint PR #66 is a separate native process-boundary contract; no live host conformance"
+    "result": "byte-identical frozen artifacts across the inspected component copies; current protocol main refresh binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 component heads; merged worker endpoint PR #66 is a separate native process-boundary contract; no live host conformance"
   },
   "native_worker_smoke": {
     "watchdog_revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
-    "harness_revision": "ef8c45e853d5f86c2653159a449826ffc20b5950",
-    "harness_image_sha256": "4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2",
-    "command_result": "1 passed, 0 failed, 0 ignored; 23.21s",
-    "scope": "native Linux watchdog-to-harness bootstrap/control/dispatch admission and durable stop/cleanup with synthetic HTTP503 gateway and /usr/bin/true MCP; no gameplay/provider/release/service/reboot/soak"
+    "harness_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+    "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+    "harness_image_sha256": "5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f",
+    "command_result": "1 passed, 0 failed, 0 ignored; 25.33s",
+    "scope": "native Linux watchdog-to-harness bootstrap/control/dispatch admission and durable stop/cleanup after endpoint hardening with synthetic HTTP503 gateway and /usr/bin/true MCP; no gameplay/provider/release/service/reboot/soak"
   },
   "release_boundary": {
     "cross_repository_clean_build": "not-run; component worktrees were checked independently and no unified consumer build exists",

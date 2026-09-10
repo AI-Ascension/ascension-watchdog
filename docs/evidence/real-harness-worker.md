@@ -194,3 +194,22 @@ owned descendant cleanup. It does not establish a native Windows endpoint,
 systemd/SCM service installation, game or provider execution, host settlement,
 reboot recovery, release activation, or soak. The HTTP 503 gateway and
 `/usr/bin/true` MCP remain downstream synthetic faults by design.
+
+## Post-merge endpoint hardening rerun, 2026-09-10
+
+Harness PR #66 hardening feature head
+`58dede2eb661133d8910a1f785e8a90346efe8dd` auto-merged to current harness main
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1` after hosted quality/policy runs
+`34542578041` and `34542578085` passed. The hardened image was rebuilt at
+`/home/timot/sts2-harness-runtime-endpoint-image-hardening`, retained with mode
+`0500`, and verified at SHA-256
+`5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`.
+
+The exact native smoke command was rerun with that image and the same watchdog
+PR #9 source. Result: **1 passed, 0 failed, 0 ignored**, **25.33 seconds**.
+In addition to the earlier bootstrap/control/admission/stop assertions, this
+run exercises the endpoint source containing true-EOF bootstrap parsing,
+bounded authentication slots/deadlines, and sealed runtime-image snapshots.
+The gateway remained an HTTP-503 fixture and MCP remained `/usr/bin/true`; no
+gameplay, provider settlement, installed service, release activation, reboot,
+or soak claim follows.

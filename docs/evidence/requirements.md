@@ -27,6 +27,24 @@ service installation, release activation, reboot, or soak. The nested
 depth-2/depth-3 Luna-Max delegation smoke remains unobserved, and all native
 Windows, live-host, cold-boot, and soak axes remain unverified.
 
+### Post-merge endpoint hardening refresh — 2026-09-10 23:40Z
+
+Harness PR #66 hardening feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`
+auto-merged after hosted runs `34542578041` and `34542578085` passed; current
+harness `main` is `a0ace6712686cb30d6f0b556cb6814ad4c0721d1`. The refresh adds
+true bootstrap EOF enforcement, bounded authentication slots/deadlines, and a
+sealed runtime-image snapshot. The explicitly gated watchdog native Linux smoke
+was rerun against image SHA-256
+`5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f` and passed
+1/1 in 25.33s. This remains process-boundary evidence with synthetic HTTP-503
+gateway and `/usr/bin/true` MCP fixtures; it does not establish gameplay,
+provider settlement, service installation, release activation, reboot, or soak.
+
+Gateway restart-fencing follow-up PR #34 is complete at
+`87792cf3f6e2c3b6627d3a34bf380bb337c01373`, rebased on current main with hosted
+CI/policy and local 270-test validation passing. It remains an open draft and is
+not part of the candidate main source pin.
+
 ## Scope and evidence boundary
 
 The historical audit snapshot below began from an isolated implementation

@@ -10,9 +10,9 @@
     "watchdog_implementation_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_pr": 9,
     "watchdog_last_observed_pr_head": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
-    "hosted_runs": [34525217061, 34525218190, 34525217025, 34525218179],
-    "hosted_run_status_at_capture": "Rust/synthetic runs 34525217061 and 34525218190 passed on Ubuntu and Windows; standards runs 34525217025 and 34525218179 passed; native Windows service-session remains UNVERIFIED on runner session 2",
-    "native_worker_smoke": "harness PR66 ef8c45e image 4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2; 1 passed in 23.21s; Linux process-boundary only"
+    "hosted_runs": [34540218117, 34540218721, 34540218115, 34540218723],
+    "hosted_run_status_at_capture": "latest PR #9 Rust/synthetic runs 34540218117 and 34540218721 passed on Ubuntu and Windows; standards runs 34540218115 and 34540218723 passed; native Windows service-session remains UNVERIFIED on runner session 2",
+    "native_worker_smoke": "harness PR66 hardening 58dede2 (merged main a0ace671) image 5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f; 1 passed in 25.33s; Linux process-boundary only"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -49,21 +49,24 @@
     },
     "gateway": {
       "commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+      "follow_up_pr": 34,
+      "follow_up_commit": "87792cf3f6e2c3b6627d3a34bf380bb337c01373",
       "branch": "main",
       "pr": 39,
       "remote_head": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
       "change": "merged co-op host-lease consumer on top of durable Runtime-v3 UNKNOWN handling and exact replay",
       "verification": "current-main locked format, Clippy, workspace tests, and serial runtime suite passed in an isolated checkout; hosted Rust-quality and repository-policy checks passed (34510597219, 34510597283); a broader parallel attempt exposed timing-sensitive fixture failures and was not used as a gate",
-      "delivery": "PR #39 merged (PRs #37 and #38 included); current main is c8be3a72"
+      "delivery": "PR #39 merged (PRs #37 and #38 included); current main is c8be3a72; restart guard PR #34 open draft at 87792cf with hosted gates pass"
     },
     "harness": {
-      "commit": "ef8c45e853d5f86c2653159a449826ffc20b5950",
+      "commit": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+      "main_commit": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "branch": "codex/harness-worker-endpoint-20260910",
       "pr": 66,
-      "remote_head": "63dc563690c93c575e75228f54672c1689d8a879",
-      "change": "authenticated native Linux worker endpoint, peer/image proof, durable admission and unknown/quarantine handling",
-      "verification": "PR #66 locked policy/format/check/Clippy/all-target/all-feature gates and integrated watchdog native worker smoke passed; current main base 63dc563",
-      "delivery": "PR #66 open and unmerged; current main remains 63dc563"
+      "remote_head": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "change": "authenticated native Linux worker endpoint, peer/image proof, durable admission and unknown/quarantine handling, true EOF, bounded authentication, and sealed executable snapshots",
+      "verification": "PR #66 hardening locked policy/format/check/Clippy/all-target/all-feature gates and integrated watchdog native worker smoke passed; hosted runs 34542578041 and 34542578085 passed",
+      "delivery": "PR #66 auto-merged after green checks; current main a0ace671"
     },
     "protocol": {
       "commit": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
@@ -103,8 +106,8 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to watchdog f5eaf5e, harness endpoint PR66 ef8c45e, and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
-    "The current protocol artifact binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 as serialized component consumers; the harness endpoint is a separate Linux process-boundary contract. Treat artifact-byte equality, component adapters, and the native worker smoke as bounded evidence only.",
+    "Keep candidate manifest source-pinned to watchdog f5eaf5e, merged harness endpoint PR66 feature head 58dede2/main a0ace671, and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
+    "The current protocol artifact binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 as serialized component consumers; the merged worker endpoint is a separate Linux process-boundary contract. Treat artifact-byte equality, component adapters, and the native worker smoke as bounded evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

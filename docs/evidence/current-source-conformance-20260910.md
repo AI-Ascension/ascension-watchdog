@@ -10,8 +10,8 @@ cold-boot, or soak claim.
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
 | ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `f5eaf5e35be025015a28da931aa973a0ade8f0ef` | open draft; activation/rollback, launch fencing, collision-safe Windows fixtures, and native worker smoke evidence; hosted Ubuntu/Windows and standards validation passed |
-| sts2-gateway | `main` / PR #39 | `c8be3a72ba9e304392575a1b2bdbc262e392be21` | merged; host-lease/co-op consumer and recovery echo-response fencing |
-| sts2-harness | `codex/harness-worker-endpoint-20260910` / PR #66 (base main) | `ef8c45e853d5f86c2653159a449826ffc20b5950` | open; authenticated native Linux worker endpoint; current main base `63dc563` |
+| sts2-gateway | `main` / PR #39 (follow-up PR #34) | `c8be3a72ba9e304392575a1b2bdbc262e392be21` (follow-up `87792cf3f6e2c3b6627d3a34bf380bb337c01373`) | merged main; restart guard follow-up open draft with hosted gates pass |
+| sts2-harness | `main` / PR #66 | `a0ace6712686cb30d6f0b556cb6814ad4c0721d1` (feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`) | merged automatically after green hosted checks; authenticated native Linux worker endpoint plus EOF/auth/deadline/ sealed-image hardening |
 | sts2-mcp-server | `main` / PR #40 | `037d10def1cbcb1c807e136d31b294355a92c010` | merged; native co-op adapter and pending-rejoin response fencing |
 | sts2-game-mod | `main` / PR #65 | `888b06702021cd2bbd22773b0267733766c3b04a` | merged; operation-aware Runtime-v3 admission and dependency refresh |
 | sts2-protocol | `main` / PR #38 | `f22dd7216f65de91a0ffa27f50bc2036be6c8b24` | merged; refreshed serialized co-op artifact and consumer pins |
@@ -19,12 +19,14 @@ cold-boot, or soak claim.
 | ai-agent-observability | `main` / PR #19 | `89539a6e7754b389f8eac148ba8a49c3892cddd8` | merged; OTLP bind/inode durability repair |
 
 The revisions were checked against authoritative remote refs and PR metadata
-at the refresh timestamp. Open PR #9 and open harness PR #66 are intentionally
-separate from merged companion revisions. The selected watchdog source
-`f5eaf5e` includes the durable release selector, strict selector/receipt
-binding, request-collision rejection, authenticated activation boundary, and
-the native worker smoke integration. The endpoint image used by that smoke is
-SHA-256 `4b71eeb3c9ff410707ff2272e730889b1378cf4cae1a6b08c7531233f3bb48f2`.
+at the refresh timestamp. Open draft PR #9 remains separate from merged
+companion revisions. Harness PR #66 auto-merged after its hardening checks
+passed; both its feature head and merge commit are retained above. The selected
+watchdog source `f5eaf5e` includes the durable release selector, strict
+selector/receipt binding, request-collision rejection, authenticated activation
+boundary, and the native worker smoke integration. The post-hardening endpoint
+image used by that smoke is SHA-256
+`5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`.
 
 ## Component gates
 
@@ -50,9 +52,10 @@ components with pinned locked dependencies:
   current `main` `89539a6` are source-pinned. Their prior clean component gates
   remain evidence for the corresponding source families; no new unified build is
   claimed by this refresh.
-* Harness PR #66 passed locked format, check, Clippy, repository policy, and
-  all-target/all-feature tests; its hosted Rust-quality run `34538444783` and
-  policy run `34538444761` passed. The native smoke is recorded separately.
+* Harness PR #66 hardening passed locked format, check, Clippy, repository
+  policy, and all-target/all-feature tests; hosted Rust-quality run
+  `34542578041` and policy run `34542578085` passed before it auto-merged. The
+  native smoke is recorded separately.
 * MCP current `main` `037d10d` passed `cargo fmt --all -- --check`, locked
   warnings-denied workspace Clippy, and locked all-target/all-feature workspace
   tests in a clean detached worktree. Its native coop adapter tests cover the
@@ -76,7 +79,7 @@ Protocol and gateway now carry matching `coop-native-v1` producer artifacts.
 
 The artifact comparison is not live consumer conformance. Protocol main's
 `consumer-conformance.json` now binds gateway `c8be3a7`, MCP `037d10d`, and
-harness main `63dc563` as serialized component consumers; the worker endpoint
+harness main `63dc563` as serialized component consumers; the merged worker endpoint
 PR is a separate process-boundary artifact. Game-mod has no native worker
 consumer. Therefore no exact cross-consumer build or coop-native host settlement
 run can be truthfully reported from this source set. Existing REST/runtime-v3
