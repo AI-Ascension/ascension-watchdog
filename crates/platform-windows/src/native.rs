@@ -88,6 +88,7 @@ const SERVICE_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLANNED_JOB_PREFIX: &str = "windows-job:";
 const MAX_PLANNED_JOB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
+const JOB_EMPTY_SETTLE_DELAY: Duration = Duration::from_millis(25);
 const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
 const HASH_READ_BYTES: usize = 64 * 1024;
 const SHA256_K: [u32; 64] = [
@@ -936,8 +937,10 @@ fn terminate_job_and_wait(
     let deadline = Instant::now()
         .checked_add(force_timeout)
         .unwrap_or_else(Instant::now);
+    let mut empty_since = None;
     loop {
         if active_processes(job)? == 0 {
+            let observed_at = *empty_since.get_or_insert_with(Instant::now);
             let leader_exited = match leader {
                 Some(process) => match unsafe { WaitForSingleObject(process, 0) } {
                     WAIT_OBJECT_0 => true,
@@ -951,9 +954,13 @@ fn terminate_job_and_wait(
                 },
                 None => true,
             };
-            if leader_exited {
+            if leader_exited
+                && (leader.is_some() || observed_at.elapsed() >= JOB_EMPTY_SETTLE_DELAY)
+            {
                 return Ok(StopOutcome::Exited);
             }
+        } else {
+            empty_since = None;
         }
         if Instant::now() >= deadline {
             return Ok(StopOutcome::TimedOut);
