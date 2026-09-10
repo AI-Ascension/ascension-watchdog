@@ -387,7 +387,7 @@ impl JobOwnedProcess {
     /// Terminate the verified Job Object and wait for all owned descendants.
     pub fn force_stop(&self) -> Result<StopOutcome, PlatformError> {
         self.verify_identity()?;
-        terminate_job_and_wait(&self.job, self.force_timeout)
+        terminate_job_and_wait(&self.job, self.force_timeout, Some(self.process.raw()))
     }
 
     /// Reopen a named job after watchdog restart and verify its recorded
@@ -569,7 +569,7 @@ impl WindowsProcessLauncher {
         let Some(job) = open_planned_job(planned_containment, self.config.max_processes)? else {
             return Ok(StopOutcome::AlreadyExited);
         };
-        terminate_job_and_wait(&job, force_timeout)
+        terminate_job_and_wait(&job, force_timeout, None)
     }
 
     /// Launch a direct executable with Job Object assignment before resume.
@@ -766,7 +766,7 @@ fn classify_spawn_cleanup(
     force_timeout: Duration,
     launch_error: PlatformError,
 ) -> WindowsLaunchError {
-    match terminate_job_and_wait(job, force_timeout) {
+    match terminate_job_and_wait(job, force_timeout, None) {
         Ok(StopOutcome::Exited | StopOutcome::AlreadyExited) => {
             WindowsLaunchError::Ordinary(launch_error)
         }
@@ -923,6 +923,7 @@ fn open_planned_job(
 fn terminate_job_and_wait(
     job: &OwnedHandle,
     force_timeout: Duration,
+    leader: Option<HANDLE>,
 ) -> Result<StopOutcome, PlatformError> {
     let active = active_processes(job)?;
     if active == 0 {
@@ -932,10 +933,34 @@ fn terminate_job_and_wait(
     if terminated == 0 {
         return Err(last_error("TerminateJobObject"));
     }
-    if wait_for_job_empty(job, force_timeout)? {
-        Ok(StopOutcome::Exited)
-    } else {
-        Ok(StopOutcome::TimedOut)
+    let deadline = Instant::now()
+        .checked_add(force_timeout)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if active_processes(job)? == 0 {
+            let leader_exited = match leader {
+                Some(process) => match unsafe { WaitForSingleObject(process, 0) } {
+                    WAIT_OBJECT_0 => true,
+                    WAIT_TIMEOUT => false,
+                    code => {
+                        return Err(PlatformError::Win32 {
+                            operation: "WaitForSingleObject(job leader)".to_owned(),
+                            code,
+                        });
+                    }
+                },
+                None => true,
+            };
+            if leader_exited {
+                return Ok(StopOutcome::Exited);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(StopOutcome::TimedOut);
+        }
+        thread::sleep(
+            Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now())),
+        );
     }
 }
 
@@ -957,23 +982,6 @@ fn active_processes(job: &OwnedHandle) -> Result<u32, PlatformError> {
         return Err(last_error("QueryInformationJobObject"));
     }
     Ok(accounting.ActiveProcesses)
-}
-
-fn wait_for_job_empty(job: &OwnedHandle, timeout: Duration) -> Result<bool, PlatformError> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .unwrap_or_else(Instant::now);
-    loop {
-        if active_processes(job)? == 0 {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        thread::sleep(
-            Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now())),
-        );
-    }
 }
 
 fn verify_job_owner(job: &OwnedHandle) -> Result<(), PlatformError> {
