@@ -48,6 +48,7 @@ impl AdminDispatcher for Dispatcher<'_> {
                 self.validate_reconcile_target(request)?;
                 OperatorCommand::Reconcile
             }
+            AdminCommand::ReleaseInspect(_) => OperatorCommand::ReleaseInspect,
             AdminCommand::Backup(_) => OperatorCommand::Backup,
             _ => return Err(AdminDispatchError::Unsupported),
         };
@@ -62,7 +63,10 @@ impl AdminDispatcher for Dispatcher<'_> {
             context.command_fingerprint(),
         )
         .map_err(|error| AdminDispatchError::from(&error))?;
-        if matches!(operation, OperatorCommand::Jobs | OperatorCommand::Attempt) {
+        if matches!(
+            operation,
+            OperatorCommand::Jobs | OperatorCommand::Attempt | OperatorCommand::ReleaseInspect
+        ) {
             self.supervisor
                 .store
                 .admit_operator_read(&durable_context, operation)
@@ -338,6 +342,23 @@ impl Dispatcher<'_> {
                         .map_err(|_| AdminDispatchError::PersistenceUnavailable)?,
                 ))
             }
+            AdminCommand::ReleaseInspect(request) => {
+                let inspection = self.supervisor.inspect_release(&request.release_id)?;
+                let status = self
+                    .supervisor
+                    .store
+                    .status()
+                    .map_err(|error| AdminDispatchError::from(&error))?;
+                Ok(AdminResult::ReleaseInspection(
+                    crate::admin::ReleaseInspection {
+                        release_id: inspection.release_id,
+                        release_digest: inspection.manifest_digest.clone(),
+                        compatible: inspection.compatible,
+                        active: status.approved_release_digest.as_deref()
+                            == Some(inspection.manifest_digest.as_str()),
+                    },
+                ))
+            }
             _ => Err(AdminDispatchError::Unsupported),
         }
     }
@@ -346,6 +367,27 @@ impl Dispatcher<'_> {
 impl Supervisor {
     pub(crate) fn admin_configuration(&self) -> Option<crate::config::AdminConfig> {
         self.config.admin.clone()
+    }
+
+    fn inspect_release(
+        &self,
+        release_id: &str,
+    ) -> Result<crate::release_staged::ProtectedReleaseInspection, AdminDispatchError> {
+        let catalog = self
+            .config
+            .release_catalog
+            .as_ref()
+            .ok_or(AdminDispatchError::Unsupported)?;
+        let owner_policy =
+            crate::release_staged::CatalogOwnerPolicy::approved_unix_uid(catalog.owner_uid);
+        let catalog = crate::release_staged::ProtectedReleaseCatalog::new_with_owner_policy(
+            &catalog.root,
+            owner_policy,
+        )
+        .map_err(|_| AdminDispatchError::Conflict)?;
+        catalog
+            .inspect(release_id, &self.config)
+            .map_err(|_| AdminDispatchError::Conflict)
     }
 }
 

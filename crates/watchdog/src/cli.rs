@@ -96,7 +96,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "migrate" => migration_command(&args, &config_path),
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
-        "release" => release_command(&mut args),
+        "release" => release_command(&mut args, &config_path),
         "status" | "start" | "pause" | "resume" | "drain" | "stop" | "retry" | "reconcile"
         | "backup" => operator_command(&command, &mut args, &config_path),
         "daemon" | "run" => daemon_command(&mut args, &config_path),
@@ -335,13 +335,33 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
     Ok(Some(serde_json::to_string(&supervisor.status()?)?))
 }
 
-fn release_command(args: &mut Vec<String>) -> Result<Option<String>> {
+fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
     if args.first().map(String::as_str) != Some("inspect") {
         return Err(WatchdogError::InvalidInput(
             "release requires inspect".to_owned(),
         ));
     }
     args.remove(0);
+    if let Some(release_id) = take_option(args, "--release-id") {
+        if !args.is_empty() {
+            return Err(WatchdogError::InvalidInput(
+                "unexpected release inspect argument".to_owned(),
+            ));
+        }
+        let config = WatchdogConfig::from_file(config_path)?;
+        if config.admin.is_none() {
+            return Err(WatchdogError::Unauthorized(
+                "authenticated admin configuration is required for catalog release inspection"
+                    .to_owned(),
+            ));
+        }
+        let command =
+            crate::admin::AdminCommand::ReleaseInspect(crate::admin::ReleaseInspectRequest {
+                release_id,
+            });
+        command.validate().map_err(WatchdogError::InvalidInput)?;
+        return read_admin_command(&config, command);
+    }
     let manifest = take_option(args, "--manifest").ok_or_else(|| {
         WatchdogError::InvalidInput("release inspect requires --manifest".to_owned())
     })?;
@@ -841,5 +861,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

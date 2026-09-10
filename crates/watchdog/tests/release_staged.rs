@@ -1,4 +1,6 @@
-use ascension_watchdog::config::{ComponentConfig, WatchdogConfig, hex_digest};
+use ascension_watchdog::config::{
+    ComponentConfig, ReleaseCatalogConfig, WatchdogConfig, hex_digest,
+};
 use ascension_watchdog::release::{
     Artifact, ArtifactRole, Compatibility, ReleaseManifest, Revision, StoreCompatibility,
 };
@@ -10,7 +12,7 @@ use ascension_watchdog::release_staged::{
 };
 use ascension_watchdog::release_staged::{ProtectedReleaseCatalog, ReleaseStagedCapability};
 use std::fs;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -35,10 +37,18 @@ fn fixture() -> Fixture {
     fs::create_dir(&release_root).expect("release root");
 
     let digest = hex_digest(ARTIFACT_BYTES);
+    #[cfg(unix)]
+    let owner_uid = u64::from(fs::metadata(&catalog_root).expect("catalog metadata").uid());
+    #[cfg(not(unix))]
+    let owner_uid = 0;
     let config = WatchdogConfig {
         database: temp.path().join("watchdog.sqlite3"),
         deployment_id: "staged-release-test".to_owned(),
         allow_synthetic_children: true,
+        release_catalog: Some(ReleaseCatalogConfig {
+            root: catalog_root.clone(),
+            owner_uid,
+        }),
         components: vec![
             component("gateway", &release_root.join("gateway"), &digest),
             component("harness", &release_root.join("harness"), &digest),
@@ -301,6 +311,56 @@ fn stages_exact_manifest_digest_six_roles_and_checked_component_bindings() {
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut handle, &mut bytes).expect("read gateway");
     assert_eq!(bytes, ARTIFACT_BYTES);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_catalog_inspection_returns_exact_digest_without_state_changes() {
+    let fixture = fixture();
+    let catalog = ProtectedReleaseCatalog::new_with_owner_policy(
+        &fixture.catalog_root,
+        approved_owner(&fixture),
+    )
+    .expect("approved owner catalog");
+    let inspection = catalog
+        .inspect("release-1", &fixture.config)
+        .expect("protected release inspection");
+    assert_eq!(inspection.release_id, "release-1");
+    assert_eq!(
+        inspection.manifest_digest,
+        hex_digest(&fixture.manifest_bytes)
+    );
+    assert_eq!(inspection.artifact_count, 6);
+    assert_eq!(inspection.total_bytes, 6 * ARTIFACT_BYTES.len() as u64);
+    assert!(inspection.compatible);
+    assert!(!fixture.config.database.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_catalog_inspection_rejects_artifact_tampering() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = fixture();
+    let catalog = ProtectedReleaseCatalog::new_with_owner_policy(
+        &fixture.catalog_root,
+        approved_owner(&fixture),
+    )
+    .expect("approved owner catalog");
+    catalog
+        .inspect("release-1", &fixture.config)
+        .expect("initial protected release inspection");
+
+    let artifact = fixture.release_root.join("gateway");
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o644))
+        .expect("reopen artifact for adversarial write");
+    fs::write(&artifact, b"tampered release bytes").expect("tamper artifact");
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o444))
+        .expect("restore artifact protection");
+    assert!(
+        catalog.inspect("release-1", &fixture.config).is_err(),
+        "tampered role must not produce inspection evidence"
+    );
 }
 
 #[cfg(target_os = "linux")]
