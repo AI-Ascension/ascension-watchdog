@@ -12,11 +12,11 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "38252ddfc5eb4f47233bad80f153739728a43742",
-      "latest_pr_head": "acd4976c88eab958f4b6dcae657ab83ffe2baa91",
+      "last_observed_pr_head": "acd4976c88eab958f4b6dcae657ab83ffe2baa91",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; source-tested-at-38252; latest-doc-head-acd4976; hosted-checks-pass; mergeable; not-merged"
+      "state": "open-draft; source-tested-at-38252; documentation-followups-after-captured-head; hosted-checks-pass-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "7272c17f07e1d7e79c82f498eac0855794d476f5",

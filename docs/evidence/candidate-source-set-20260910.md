@@ -8,10 +8,11 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 The pins were refreshed from remote PR metadata on 2026-09-10. The watchdog
 integration source pin is draft PR #9 at
 `38252ddfc5eb4f47233bad80f153739728a43742`, based on the `bootstrap` default
-branch. The latest PR head is
-`acd4976c88eab958f4b6dcae657ab83ffe2baa91`, a documentation-only follow-up;
-its Ubuntu, Windows, standards, and dependency workflows are green. Gateway
-draft PR #35 is current-main-based at
+branch. The last PR head observed when this candidate source set was captured
+was `acd4976c88eab958f4b6dcae657ab83ffe2baa91`, a documentation-only
+follow-up; its Ubuntu, Windows, standards, and dependency workflows were
+green. Subsequent documentation-only commits do not change the source pin.
+Gateway draft PR #35 is current-main-based at
 `7272c17f07e1d7e79c82f498eac0855794d476f5` with Rust-quality and policy checks
 green. The harness integration is draft PR #56 at
 `427176512eac67257a1b065f8508f37d2ed2255c`, combining the recovery and worker
