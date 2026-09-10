@@ -117,6 +117,18 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn read_bytes(path: &Path) -> Result<Vec<u8>> {
+    // Preserve the closed size contract before the protected-handle reader
+    // performs its Windows ACL admission.  This metadata check is only an
+    // early rejection hint; the exact protected handle is still opened and
+    // revalidated for every file that remains within the bound.
+    if std::fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.len() > MAX_CONFIG_BYTES as u64)
+    {
+        return Err(WatchdogError::InvalidInput(
+            "configuration exceeds 65536-byte limit".to_owned(),
+        ));
+    }
     ascension_platform_windows::read_protected_payload_file(path, MAX_CONFIG_BYTES).map_err(
         |error| {
             WatchdogError::InvalidInput(format!("protected configuration read failed: {error}"))

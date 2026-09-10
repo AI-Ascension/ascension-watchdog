@@ -214,34 +214,11 @@ mod tests {
             desired_mode: DesiredMode::Running,
             ..WatchdogConfig::default()
         };
-        let probe_database = directory.path().join("watchdog-probe.sqlite3");
-        let probe_lock =
-            crate::storage::SingletonLock::acquire(&probe_database).map_err(|error| {
-                WatchdogError::Conflict(format!("service test lock probe failed: {error:?}"))
-            })?;
-        let probe_store =
-            crate::storage::Store::initialize_for_owner(&probe_database, &config, &probe_lock)
-                .map_err(|error| {
-                    WatchdogError::Conflict(format!("service test store probe failed: {error:?}"))
-                })?;
-        probe_lock
-            .write_owner_hint("service-test-probe")
-            .map_err(|error| {
-                WatchdogError::Conflict(format!("service test hint probe failed: {error:?}"))
-            })?;
-        drop(probe_store);
-        drop(probe_lock);
-        let supervisor = Supervisor::initialize(config).map_err(|error| {
-            WatchdogError::Conflict(format!("service test initialize failed: {error:?}"))
-        })?;
+        let supervisor = Supervisor::initialize(config)?;
         let mut service = ServiceLoop::new(supervisor, Duration::from_millis(1))?;
         let stop = Arc::new(Mutex::new(true));
 
-        service
-            .run_until_stopped_with_scm_stop(&stop)
-            .map_err(|error| {
-                WatchdogError::Conflict(format!("service test run failed: {error:?}"))
-            })?;
+        service.run_until_stopped_with_scm_stop(&stop)?;
 
         assert_eq!(
             service.supervisor.status()?.desired_mode,
