@@ -31,12 +31,15 @@ targets fail closed for `--payload-file`; use inline `--payload` there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
-Status, lifecycle, job submission/inspection, and quarantine are wired into the
-real service loop.
-Retry, reconciliation, restore, and release-activation dispatcher operations
-remain unsupported pending integration; their transport types alone are not
-operational evidence. Windows native service execution and uninstall recovery
-remain unverified.
+Status, lifecycle, job submission/inspection, quarantine, and watchdog-local
+known-failure retry are wired into the real service loop. Retry only requeues
+the latest failed attempt when its job has no terminal result and no worker
+handoff; it preserves the original failure evidence, records an idempotent
+operator receipt, and rejects unknown, terminal, reconstruction, and
+worker-handoff paths. Reconciliation, restore, and release-activation
+dispatcher operations remain unsupported pending their owner-specific
+integration; their transport types alone are not operational evidence.
+Windows native service execution and uninstall recovery remain unverified.
 
 This sideband is a local operator control plane. It is an authenticated,
 bounded request queue into the watchdog reconciliation loop; it is not a game

@@ -48,7 +48,10 @@ The storage API intentionally does not execute the command or own transport
 authentication. The root admin dispatcher must validate the credential and
 command first, prepare a response that contains no credential, call this API,
 then perform the external effect only for `Accepted`. `Replayed` returns the
-retained response and must skip the effect.
+retained response and must skip the effect. The watchdog-local retry admission
+is narrower than generic command admission: it requeues only a latest known
+failure with no terminal result or worker-handoff row, preserves `last_error`,
+and retains the original attempt lineage.
 
 ## Bounded retention and availability tradeoff
 
@@ -76,10 +79,11 @@ start/resume key and then accept that key as new authority.
 `crates/watchdog/tests/storage_admin.rs` covers ordered lifecycle admission,
 restart and replay persistence, key/request/fingerprint/capability conflicts,
 read-only zero-write behavior, bounded response rejection, lifecycle reserve
-backpressure, owner-only additive migration, an injected SQLite insert fault
-with transaction rollback, and symlink database/lock aliases. The focused
-locked test command is:
+backpressure, known-failure retry and idempotent oversized-response replay,
+worker-handoff exclusion, owner-only additive migration, an injected SQLite
+insert fault with transaction rollback, and symlink database/lock aliases. The
+focused locked test command is:
 
 ```text
-cargo +1.97.1 test --locked --test storage_admin
+cargo +1.97.1 test --locked --offline -p ascension-watchdog --test storage_admin
 ```
