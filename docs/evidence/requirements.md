@@ -1,14 +1,14 @@
 # V32 requirements and evidence audit
 
 Classification: `partial` / `unverified` source-and-test audit at the integrated
-watchdog branch `8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4`. This audit does not
+watchdog branch `e91714c9028ebfc7012b2d5649997bb10a866233`. This audit does not
 declare an implementation or release complete.
 
 ## Scope and evidence boundary
 
 The audited worktree is an isolated branch from
 `codex/watchdog-implementation@dda3a915f7ea25bc291727f0e151b421344cc007`.
-The integrated source tip is `8c0f6a2` (draft PR #8). The root record reports:
+The integrated source tip is `e91714c` (draft PR #8). The root record reports:
 
 - `cargo +1.97.1 test --locked --offline --workspace --all-targets` exit 0;
   the watchdog library ran 200 cases (196 passed, 4 ignored), and all
@@ -162,7 +162,7 @@ fixture/process fact and never means native, live, reboot, or release proof.
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
 `SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
-`8c0f6a2`), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`e91714c`), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and

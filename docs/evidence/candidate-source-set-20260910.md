@@ -7,7 +7,7 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 
 The pins were read from remote PR metadata on 2026-09-10. The watchdog
 integration is draft PR #8 at
-`8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4`, based on
+`e91714c9028ebfc7012b2d5649997bb10a866233`, based on
 `codex/watchdog-implementation`; standards and the first Linux/Windows run
 were re-triggered after a Windows-only API repair, so the hosted checks are
 currently running. The gateway remains draft PR #35 at

@@ -4,8 +4,8 @@
   "classification": "confirmed-local-evidence-not-a-release",
   "supersedes_checkpoint": "transport-review-checkpoint.json",
   "watchdog": {
-    "tested_commit": "8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4",
-    "integrated_platform_commit": "8c0f6a2",
+    "tested_commit": "e91714c9028ebfc7012b2d5649997bb10a866233",
+    "integrated_platform_commit": "e91714c",
     "pull_request": 8,
     "root_test_command": "cargo +1.97.1 test --locked --offline --workspace --all-targets",
     "root_test_exit": 0,
