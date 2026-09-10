@@ -17,6 +17,10 @@ pub use config_worker::WorkerConfig;
 mod config_gateway_health;
 pub use config_gateway_health::GatewayHealthConfig;
 
+#[path = "config_linux_broker.rs"]
+mod config_linux_broker;
+pub use config_linux_broker::LinuxBrokerConfig;
+
 const MAX_COMPONENTS: usize = 16;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 8 * 1024;
@@ -312,6 +316,11 @@ pub struct WatchdogConfig {
     /// release inspection. Absence keeps that admin operation unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_catalog: Option<ReleaseCatalogConfig>,
+    /// Optional root-owned Linux launch broker.  When absent, Linux keeps using
+    /// the delegated-cgroup adapter.  The broker is never selected implicitly
+    /// from the platform or from a persisted process proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux_broker: Option<LinuxBrokerConfig>,
     /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
     /// its digest; native launch admission uses it only as a protected,
@@ -347,6 +356,7 @@ impl Default for WatchdogConfig {
             worker: None,
             gateway_health: None,
             release_catalog: None,
+            linux_broker: None,
             source_path: None,
         }
     }
@@ -394,6 +404,9 @@ impl WatchdogConfig {
         }
         if let Some(catalog) = &self.release_catalog {
             catalog.validate()?;
+        }
+        if let Some(broker) = &self.linux_broker {
+            broker.validate()?;
         }
         if self.schema_version != 1 {
             return Err(WatchdogError::InvalidInput(format!(
