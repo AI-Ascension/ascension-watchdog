@@ -51,8 +51,9 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetFileInformationByHandle,
-    GetFileSizeEx, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, GetFileInformationByHandle, GetFileSizeEx, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    READ_CONTROL, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -2898,14 +2899,19 @@ struct OwnedHandle(HANDLE);
 #[allow(dead_code)]
 pub struct ProtectedDirectoryHandle(OwnedHandle);
 
-/// Open one exact local directory with a no-write/no-delete share boundary.
+/// Open one exact local directory and validate its identity for the owner
+/// lifetime.  Child files still need to be created and atomically renamed
+/// beneath this directory during restore/release publication, so the directory
+/// handle shares child mutation and delete access.  The authoritative lock file
+/// itself remains opened without delete sharing; that handle is what prevents
+/// replacement/removal of the owner namespace while this guard is alive.
 pub fn open_protected_directory(path: &Path) -> Result<ProtectedDirectoryHandle, PlatformError> {
     let wide_path = wide_path(path)?;
     let raw = unsafe {
         CreateFileW(
             wide_path.as_ptr(),
             FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             null(),
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
