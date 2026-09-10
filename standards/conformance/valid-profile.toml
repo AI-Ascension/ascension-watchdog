@@ -1,0 +1,40 @@
+schema_version = 1
+profile_id = "fixture-profile"
+repository = "AI-Ascension/fixture"
+owner = "TEST"
+source_bundle = "AI-Ascension/.github"
+source_commit = "0000000000000000000000000000000000000000"
+source_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+distribution = "local"
+scopes = ["rust", "contracts"]
+
+[checks]
+fast = ["git-diff-check", "standards-validate"]
+required = ["repo-policy-strict"]
+extended = ["contract-conformance"]
+
+[evidence]
+runtime = "unverified"
+deployment = "unverified"
+provider = "unverified"
+
+[exceptions]
+file = ""
+status = "none"
+
+
+[checks.commands.git-diff-check]
+command = "git diff --check"
+target = "."
+
+[checks.commands.standards-validate]
+command = "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root ."
+target = "."
+
+[checks.commands.repo-policy-strict]
+command = "cargo +1.97.1 run --locked --package repo-policy -- --strict"
+target = "."
+
+[checks.commands.contract-conformance]
+command = "cargo test --locked --test contract"
+target = "."

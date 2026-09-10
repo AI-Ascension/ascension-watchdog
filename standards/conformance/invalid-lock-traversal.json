@@ -1,0 +1,23 @@
+{
+  "lock_version": 1,
+  "repository": "AI-Ascension/fixture",
+  "profile_id": "fixture-profile",
+  "source": {
+    "repository": "AI-Ascension/.github",
+    "commit": "0000000000000000000000000000000000000000",
+    "bundle_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "distribution": "local",
+    "published": false
+  },
+  "files": [
+    {
+      "path": "standards/../secrets.txt",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "protected_paths": [
+    "standards/schemas"
+  ],
+  "generated_by": "standards-sync/1",
+  "profile_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
