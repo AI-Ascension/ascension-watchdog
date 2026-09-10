@@ -280,6 +280,10 @@ impl RestoreStagingFile {
         }
         let file = OpenOptions::new().read(true).open(&self.path)?;
         file.sync_all()?;
+        // Close the staging handle before publishing.  Windows can reject a
+        // rename while any handle to the source lacks delete sharing, even
+        // though the database connection itself has already been dropped.
+        drop(file);
         fs::rename(&self.path, destination)?;
         self.committed = true;
         #[cfg(unix)]
