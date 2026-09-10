@@ -14,7 +14,7 @@ fn protect_config(path: &Path) {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            r#"
+            r"
 $ErrorActionPreference = 'Stop'
 $securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
 Import-Module -Name $securityModule -Force -ErrorAction Stop
@@ -25,7 +25,7 @@ $acl.SetAccessRuleProtection($true, $false)
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
 $acl.AddAccessRule($rule)
 Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
-            "#,
+            ",
         ])
         .env("ASCENSION_TEST_CONFIG_PATH", path)
         .status()
