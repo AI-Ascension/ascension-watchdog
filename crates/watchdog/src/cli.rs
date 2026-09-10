@@ -44,6 +44,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "doctor"
                 | "preflight"
                 | "release"
+                | "restore"
                 | "status"
                 | "start"
                 | "pause"
@@ -97,6 +98,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args, &config_path),
+        "restore" => restore_command(&mut args, &config_path),
         "status" | "start" | "pause" | "resume" | "drain" | "stop" | "retry" | "reconcile"
         | "backup" => operator_command(&command, &mut args, &config_path),
         "daemon" | "run" => daemon_command(&mut args, &config_path),
@@ -378,6 +380,41 @@ fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<
     )
     .map_err(WatchdogError::InvalidInput)?;
     Ok(Some(serde_json::to_string(&inspection)?))
+}
+
+/// Restore a verified owner-local snapshot into a new, explicitly rekeyed
+/// watchdog namespace.  This is intentionally an offline command: a running
+/// daemon must not have its store swapped underneath the reconciliation loop.
+fn restore_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
+    let backup = take_option(args, "--backup")
+        .ok_or_else(|| WatchdogError::InvalidInput("restore requires --backup PATH".to_owned()))?;
+    let destination = take_option(args, "--database");
+    if !take_flag(args, "--rekey") {
+        return Err(WatchdogError::InvalidInput(
+            "restore requires explicit --rekey".to_owned(),
+        ));
+    }
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected restore argument".to_owned(),
+        ));
+    }
+    let mut config = WatchdogConfig::from_file(config_path)?;
+    if let Some(destination) = destination {
+        config.database = PathBuf::from(destination);
+        config.validate()?;
+    }
+    let restored = Store::restore_from(&backup, &config.database, &config)?;
+    let status = restored.status()?;
+    Ok(Some(
+        json!({
+            "restored": true,
+            "rekeyed": true,
+            "blocked_until_fenced": true,
+            "status": status,
+        })
+        .to_string(),
+    ))
 }
 
 fn preflight_command(args: &mut Vec<String>) -> Result<Option<String>> {
@@ -861,5 +898,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

@@ -61,6 +61,22 @@ after the condition is corrected.
 
 ## Restore boundary
 
-This operation only creates and verifies a snapshot. Restore/rekey remains an
-explicit separately reviewed operation: a backup must not be treated as fresh
-mutation authority, and this command never activates a restored deployment.
+Restore is an offline, owner-local operation; do not run it while a daemon owns
+the destination store. Supply a configuration containing a fresh deployment
+identity and the destination database, then require the explicit rekey flag:
+
+```text
+watchdog restore --config /absolute/path/restored-watchdog.json \
+  --backup /absolute/path/backups/release-a.sqlite3 \
+  --database /absolute/path/restored/watchdog.sqlite3 --rekey
+```
+
+The command verifies the backup schema, integrity, compatibility digest and
+owner-local paths before copying. It refuses an existing destination or a
+configuration that reuses the backup deployment identity. The restored store
+is written stopped, increments the durable generation, marks running attempts
+unknown, quarantines queued/running/failed jobs and components, and reports
+`blocked_until_fenced=true`. It does not restore gateway/game leases, launch a
+process, activate a release, or infer that any old mutation did not execute.
+After independent review, establish fresh authority and explicitly change the
+desired mode through the normal authenticated admin path.
