@@ -304,7 +304,10 @@ impl RestoreStagingFile {
 fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        const ATTEMPTS: usize = 20;
+        // Antivirus/indexer handles on hosted Windows runners can outlive the
+        // SQLite close by more than a few scheduler ticks. Keep the handoff
+        // bounded while allowing the ordinary local publication race to settle.
+        const ATTEMPTS: usize = 200;
         for attempt in 0..ATTEMPTS {
             match fs::rename(staging, destination) {
                 Ok(()) => return Ok(()),
@@ -321,13 +324,23 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
                             "restore staging path changed during publication".to_owned(),
                         ));
                     }
-                    std::thread::sleep(Duration::from_millis(10));
+                    std::thread::sleep(Duration::from_millis(25));
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    return Err(WatchdogError::Io(std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "restore staging publication {} -> {}: {error}",
+                            staging.display(),
+                            destination.display()
+                        ),
+                    )));
+                }
             }
         }
         Err(WatchdogError::Conflict(
-            "restore staging publication remained unavailable after bounded retries".to_owned(),
+            "restore staging publication remained unavailable after 5 seconds of bounded retries"
+                .to_owned(),
         ))
     }
     #[cfg(not(windows))]
@@ -1290,14 +1303,29 @@ impl Store {
         // operator.  The final rename is the only point at which the new
         // namespace becomes addressable.
         let staging = RestoreStagingFile::create(&destination)?;
-        fs::copy(&backup, staging.path())?;
+        fs::copy(&backup, staging.path()).map_err(|error| {
+            WatchdogError::Io(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "restore backup copy {} -> {}: {error}",
+                    backup.display(),
+                    staging.path().display()
+                ),
+            ))
+        })?;
         let stable_staging = canonical_owner_path(staging.path(), "restore staging")?;
         if stable_staging != staging.path() {
             return Err(WatchdogError::Conflict(
                 "restore staging path changed while preparing copy".to_string(),
             ));
         }
-        let mut conn = open_connection(staging.path())?;
+        let mut conn = open_connection(staging.path()).map_err(|error| match error {
+            WatchdogError::Io(error) => WatchdogError::Io(std::io::Error::new(
+                error.kind(),
+                format!("open restore staging {}: {error}", staging.path().display()),
+            )),
+            other => other,
+        })?;
         // VACUUM INTO produces a standalone database using the source's
         // journal mode.  Re-establish the watchdog's required WAL/FULL
         // contract before any caller can reopen the restored state.
@@ -1348,8 +1376,19 @@ impl Store {
         // `Connection::close` finalizes every statement and surfaces a busy
         // close as an error while the staging guard still removes only the
         // newly-created temporary object.
-        conn.close().map_err(|(_, error)| error)?;
-        staging.commit(&destination)?;
+        conn.close()
+            .map_err(|(_, error)| WatchdogError::Sqlite(error))?;
+        let staging_path = staging.path().to_owned();
+        staging.commit(&destination).map_err(|error| match error {
+            WatchdogError::Io(error) => WatchdogError::Io(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "publish restore staging {}: {error}",
+                    staging_path.display()
+                ),
+            )),
+            other => other,
+        })?;
         Self::open(destination, &effective_config)
     }
 
