@@ -11,26 +11,26 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
-      "last_observed_pr_head": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+      "revision": "fa0787620e768266c683da178c81b5af7198bc39",
+      "last_observed_pr_head": "fa0787620e768266c683da178c81b5af7198bc39",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; protected release inspection, durable retry/scoped reconciliation, and explicit offline restore/rekey CLI; source-tested-at-1d83d02; hosted-checks-queued-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; atomic restore publication, explicit offline restore/rekey, and Linux install/uninstall idempotence test; source-tested-local-at-fa07876; hosted-checks-in-progress-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
-      "revision": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",
-      "ref": "codex/gateway-allocation-cleanup-integration",
+      "revision": "0524b67ec28791c007d2ea025e26860672358247",
+      "ref": "codex/gateway-host-lease-consumer-current-main",
       "remote": "AI-Ascension/sts2-gateway",
-      "pull_request": 35,
-      "state": "merged; merge-commit-2cf9127; hosted-checks-pass; current-main"
+      "pull_request": 37,
+      "state": "open-draft; malformed SETTLED receipt is durable UNKNOWN and exact retries replay without redispatch; source-tested-local; hosted-checks-pass; mergeable; not-merged; base-current-main-2cf9127"
     },
     "sts2-harness": {
-      "revision": "ed033f2681f8e0e01926e641524c7427af2cc2fd",
-      "ref": "codex/harness-worker-module-wiring-20260910",
+      "revision": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "ref": "codex/harness-pr58-regression-20260910",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 58,
-      "state": "open-draft; durable worker handoff/runtime wiring; source-tested-local; hosted-checks-queued; mergeable; not-merged; base-e5029f1"
+      "pull_request": 59,
+      "state": "open-draft; provider completion retries bind result metadata and payload and conflicting reuse is rejected; source-tested-local; hosted-checks-pass; mergeable; not-merged; follows-merged-pr58-4342789"
     },
     "sts2-mcp-server": {
       "revision": "a6b9215db1ddeeddabe4c111ed3b49476fb86e54",
@@ -51,21 +51,21 @@
       "ref": "codex/coop-native-current-main-20260910",
       "remote": "AI-Ascension/sts2-protocol",
       "pull_request": 33,
-      "state": "open-draft; rebased-on-current-main-997de2a; source-tested-local; hosted-checks-pending; mergeable; not-merged"
+      "state": "open-draft; rebased-on-current-main-997de2a; source-tested-local; hosted-checks-pass; mergeable; not-merged"
     },
     "sts2-game-core": {
-      "revision": "9a27a80c32dcadd8030cf42c861e9e5da4daed1c",
+      "revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
       "ref": "work/w04-presentation",
       "remote": "AI-Ascension/sts2-game-core",
       "pull_request": 9,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "state": "merged; merge-commit-f9db577; hosted-checks-pass"
     },
     "ai-agent-observability": {
       "revision": "a126715501d65a2d25f9d6ecf9c6bd142cc5f590",
       "ref": "codex/otel-native-health-probe",
       "remote": "AI-Ascension/ai-agent-observability",
       "pull_request": 16,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "state": "merged; hosted-checks-pass"
     }
   },
   "evidence_boundary": {

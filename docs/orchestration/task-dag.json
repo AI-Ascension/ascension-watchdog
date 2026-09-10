@@ -52,12 +52,12 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"1d83d02ff8ccca9ed7d5a268482671a3b91b1d10","pull_request":9,"status":"draft; retry/scoped reconciliation, protected release inspection, and offline restore/rekey CLI; local gates pass; hosted checks queued/in-progress"},
-    "harness": {"commit":"ed033f2681f8e0e01926e641524c7427af2cc2fd","pull_request":58,"status":"draft; durable worker handoff/runtime wiring and watchdog-worker-v1 artifacts; local gates pass; hosted checks queued"},
+    "watchdog": {"commit":"fa0787620e768266c683da178c81b5af7198bc39","pull_request":9,"status":"draft; atomic restore publication, offline restore/rekey, and Linux install/uninstall idempotence coverage; local gates pass; hosted Ubuntu/Windows/dependency rerun in progress"},
+    "harness": {"commit":"fcd1f6819fdd2672816a1b7e2235f7069aa93708","pull_request":59,"status":"draft; conflicting provider completion retries are rejected with result metadata/payload binding; local and hosted gates pass; not merged"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
-    "gateway": {"commit":"2cf9127bfe5b7f1f271dd1b2889d92a09f042f83","pull_request":35,"status":"merged current main; malformed post-write response repair; hosted Rust-quality and policy checks green"},
+    "gateway": {"commit":"0524b67ec28791c007d2ea025e26860672358247","pull_request":37,"status":"draft; malformed SETTLED receipt persists UNKNOWN and exact retry replays without redispatch; local and hosted gates green; not merged"},
     "game_mod": {"commit":"e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5","pull_request":70,"status":"merged current main; REST integration; hosted checks green; cross-repository rebuild pending"},
-    "protocol": {"commit":"09819e2216354136ab5a799413dcd98499f56580","pull_request":33,"status":"draft; coop-native-v1 rebased onto current main 997de2a; local gates pass; hosted checks pending; not merged"},
+    "protocol": {"commit":"09819e2216354136ab5a799413dcd98499f56580","pull_request":33,"status":"draft; coop-native-v1 rebased onto current main 997de2a; local and hosted gates pass; not merged"},
     "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"
   },
   "completion": "unverified"

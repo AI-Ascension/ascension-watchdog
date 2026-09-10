@@ -4,24 +4,26 @@
   "classification": "confirmed-local-evidence-not-a-release",
   "supersedes_checkpoint": "transport-review-checkpoint.json",
   "watchdog": {
-    "tested_commit": "38252ddfc5eb4f47233bad80f153739728a43742",
-    "integrated_platform_commit": "38252dd",
+    "tested_commit": "fa0787620e768266c683da178c81b5af7198bc39",
+    "integrated_platform_commit": "fa07876",
     "pull_request": 9,
     "root_test_command": "cargo test --workspace --all-targets --all-features --locked --no-fail-fast -- --test-threads=1",
     "root_test_exit": 0,
-    "watchdog_library_tests_passed": 197,
+    "watchdog_library_tests_passed": 200,
     "watchdog_library_tests_ignored": 4,
-    "workspace_test_note": "serial all-feature run passed; 201 watchdog library cases were scheduled (197 passed, 4 ignored); all workspace integration suites passed",
+    "workspace_test_note": "serial all-feature run passed; 204 watchdog library cases were scheduled (200 passed, 4 ignored); all workspace integration suites passed, including restore CLI and Linux installer tests",
     "native_linux_tests_ignored": 2,
-    "windows_cross_build": "cargo +1.97.1 check and strict Clippy passed for x86_64-pc-windows-gnu",
+    "windows_cross_build": "hosted Windows rerun for fa07876 in progress; predecessor failure was an Access denied rename while a restore staging handle remained open, fixed by closing that handle before publication",
     "windows_native_execution": "unverified",
     "scope": "watchdog, authenticated worker handoff, Gateway health binding, Linux broker lifecycle, release staging, backup, launch authority, full synthetic fault fixture",
-    "source_matches_tested_platform_commit": true
+    "source_matches_tested_platform_commit": true,
+    "hosted_runs": [34501110421, 34501117723],
+    "hosted_status_at_capture": "standards passed; Ubuntu, Windows, and dependency jobs in progress"
   },
   "companions": [
     {
       "repository": "sts2-game-mod",
-      "integration_commit": "152c555633672bddcfa8280b290f6bd67afd564c",
+      "integration_commit": "e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5",
       "pull_request": 70,
       "root_results": [
         "source-linked RecoveryTransportProbe build: zero warnings and errors",
@@ -33,22 +35,22 @@
     },
     {
       "repository": "sts2-harness",
-      "integration_commit": "427176512eac67257a1b065f8508f37d2ed2255c",
-      "pull_request": 56,
+      "integration_commit": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "pull_request": 59,
       "root_results": [
         "lifecycle suite: 28 passed",
         "recovery evidence suite: 3 passed",
         "full locked workspace report: 171 runtime passed, 1 ignored"
       ],
       "scope": "durable runtime-v3 recovery, raw catalog identity, provider accounting and synthetic subprocess tests",
-      "pending": "cross-repository release-set rebuild and native/live gateway-MCP-host recovery"
+      "pending": "cross-repository release-set rebuild and native/live gateway-MCP-host recovery; follows merged PR #58"
     },
     {
       "repository": "sts2-gateway",
-      "candidate_commit": "7272c17f07e1d7e79c82f498eac0855794d476f5",
+      "candidate_commit": "0524b67ec28791c007d2ea025e26860672358247",
       "integrated": false,
-      "pull_request": 35,
-      "pending": "actual recovery-dispatch catalog review and cross-repository rebuild"
+      "pull_request": 37,
+      "pending": "actual recovery-dispatch catalog review and cross-repository rebuild; follows merged PR #35"
     }
   ],
   "remaining_production_work": [
@@ -64,9 +66,9 @@
   "remote_delivery_completed": false,
   "remote_delivery": {
     "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/9",
-    "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/56",
+    "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/59",
     "game_mod_pr": "https://github.com/AI-Ascension/sts2-game-mod/pull/70",
-    "status": "draft PRs published; not merged"
+    "status": "follow-up draft PRs #9/#37/#59/#33 published; earlier gateway, harness, MCP, game-mod, game-core, and observability changes merged; protocol and follow-ups not merged"
   },
   "service_install_or_release_activation_this_checkpoint": false
 }

@@ -5,12 +5,12 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
-    "watchdog_source_tested_commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+    "watchdog_commit": "fa0787620e768266c683da178c81b5af7198bc39",
+    "watchdog_source_tested_commit": "fa0787620e768266c683da178c81b5af7198bc39",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
-    "hosted_runs": [34497675608, 34497673691],
-    "hosted_run_status_at_capture": "queued/in-progress; exact PR head 1d83d02; standards jobs observed; remaining validation jobs pending"
+    "watchdog_last_observed_pr_head": "fa0787620e768266c683da178c81b5af7198bc39",
+    "hosted_runs": [34501110421, 34501117723],
+    "hosted_run_status_at_capture": "in-progress; exact PR head fa07876; standards jobs passed; Ubuntu, Windows, and dependency jobs pending"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -29,34 +29,37 @@
   },
   "results": {
     "watchdog": {
-      "commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
-      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, and explicit offline restore/rekey CLI",
+      "commit": "fa0787620e768266c683da178c81b5af7198bc39",
+      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, and Linux install/uninstall idempotence coverage",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
+        "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .: pass",
         "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
-        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (204 watchdog library tests; release-staged/admin-control suites plus 2 CLI restore tests pass; 4 ignored)",
-        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (explicit rekey gate and stopped/quarantined restore)"
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (200 watchdog library tests; all workspace integration suites; 4 ignored)",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
+        "Windows hosted predecessor failed only on restore-handle publication; fa07876 closes the source handle before rename and its hosted rerun was in progress at capture"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is queued/in-progress for exact source head 1d83d02"
+      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is in progress for exact source head fa07876"
     },
     "gateway": {
-      "commit": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",
-      "branch": "codex/gateway-allocation-cleanup-integration",
-      "pr": 35,
-      "remote_head": "7272c17f07e1d7e79c82f498eac0855794d476f5",
-      "change": "post-write malformed/oversized/unauthenticated host-lease replies remain durable unknown",
-      "verification": "20 host-lease, 173 runtime, and 13 recovery safety tests passed; hosted Rust-quality and repository-policy checks passed in run 34482138328/34482138303",
-      "delivery": "merged into current main as 2cf9127; PR #35 no longer open"
+      "commit": "0524b67ec28791c007d2ea025e26860672358247",
+      "branch": "codex/gateway-host-lease-consumer-current-main",
+      "pr": 37,
+      "remote_head": "0524b67ec28791c007d2ea025e26860672358247",
+      "change": "durable Runtime-v3 UNKNOWN for malformed SETTLED receipts and replay without redispatch or catalog consultation",
+      "verification": "175 runtime tests, 11 control-plane tests, 7 recovery tests, and all workspace suites passed locally; hosted Rust-quality and repository-policy checks passed",
+      "delivery": "pushed as draft PR #37; mergeable; not merged; based on current main 2cf9127"
     },
     "harness": {
-      "commit": "ed033f2681f8e0e01926e641524c7427af2cc2fd",
-      "branch": "codex/harness-worker-module-wiring-20260910",
-      "pr": 58,
-      "remote_head": "ed033f2681f8e0e01926e641524c7427af2cc2fd",
-      "change": "wire durable worker handoff storage, completion/control/lookup fencing, authenticated command mapping, and watchdog-worker-v1 artifacts",
-      "verification": "local strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks queued",
-      "delivery": "pushed as draft PR #58; mergeable; not merged"
+      "commit": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "branch": "codex/harness-pr58-regression-20260910",
+      "pr": 59,
+      "remote_head": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "change": "provider completion retries bind result reference, digest metadata, and payload; conflicting reuse is rejected",
+      "verification": "strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
+      "delivery": "pushed as draft PR #59; mergeable; not merged; follows merged PR #58"
     },
     "protocol": {
       "commit": "09819e2216354136ab5a799413dcd98499f56580",
@@ -64,15 +67,14 @@
       "pr": 33,
       "remote_head": "09819e2216354136ab5a799413dcd98499f56580",
       "change": "rebase coop-native-v1 candidate artifact, producer/consumer evidence, and strict conformance onto protocol current main 997de2a",
-      "verification": "local strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks pending",
+      "verification": "local strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
       "delivery": "pushed as draft PR #33; mergeable; not merged"
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to tested watchdog commit 1d83d02ff8ccca9ed7d5a268482671a3b91b1d10 and update PR metadata only after the next docs reconciliation commit.",
-    "Rebuild the exact current-main companion release set from gateway 2cf9127, harness e5029f1, MCP a6b9215, game-mod e532f4d, and a rebased protocol candidate; run cross-consumer conformance before any runtime claim.",
-    "Run cross-consumer conformance against watchdog 1d83d02, harness ed033f2, gateway current main 2cf9127, game-mod current main e532f4d, MCP a6b9215, and protocol candidate 09819e2 before any runtime claim.",
-    "Do not claim cross-repository runtime integration until gateway, harness, MCP, mod, and protocol revisions build together.",
+    "Keep candidate manifest source-pinned to tested watchdog commit fa0787620e768266c683da178c81b5af7198bc39 and exact open follow-up heads 0524b67 and fcd1f68.",
+    "Rebuild the exact companion release set from watchdog fa07876, gateway PR37 0524b67, harness PR59 fcd1f68, MCP a6b9215, game-mod e532f4d, game-core f9db577, observability a126715, and protocol PR33 09819e2; run cross-consumer conformance before any runtime claim.",
+    "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]
 }

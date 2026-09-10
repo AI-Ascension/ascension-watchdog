@@ -163,21 +163,34 @@ fixture/process fact and never means native, live, reboot, or release proof.
 ## Current-wave addendum — 2026-09-10
 
 The historical matrix above remains intentionally conservative. The current
-watchdog source tip `0935c66ddf4befe7fe7c17f3ba785af02057b3aa` includes the
-missing-planned-containment uncertainty repair `156917b` and passed hosted run
-`34480654731` (Ubuntu/Windows format, strict Clippy, locked workspace tests,
-release builds, standards, and dependency checks). Gateway merge commit
-`7272c17` (including response repair `4c4d465`) was published after a
-non-rewriting merge of current main; its draft PR is clean with fresh
-Rust-quality and repository-policy checks green. Harness integration PR #56 at
-`4271765` combines the recovery and worker admission repairs on current main
-with fresh hosted Rust-quality and policy checks green; source PRs #54 and #55
-remain unchanged drafts. The nested
-delegation requirement remains unmet:
-the descendant contexts exposed no native spawn surface, so only depth 1 was
-observed and no depth-4 bypass was attempted. No cross-repository build,
-service installation, live host, cold boot, activation, rollback, or soak
-evidence is promoted by these source/component results.
+watchdog source tip `fa0787620e768266c683da178c81b5af7198bc39` includes atomic
+restore staging publication, explicit restore/rekey quarantine, and the Linux
+install/uninstall idempotence regression. Its local pinned-toolchain checks
+passed: standards validation, format, strict Clippy, 200 watchdog library
+tests, all workspace integration suites, the two restore CLI tests, and the
+namespace-isolated Linux installer test (4 expected tests ignored). The first
+hosted run at predecessor `cacb2b9` exposed a Windows-only `Access is denied`
+rename while a staging handle remained open; `fa07876` closes that handle
+before publication. The hosted rerun for `fa07876` was still in progress at
+capture, so Windows CI is not yet promoted to a completed gate.
+
+Gateway follow-up PR #37 at
+`0524b67ec28791c007d2ea025e26860672358247` adds the durable malformed-SETTLED
+receipt/UNKNOWN replay regression and has green hosted quality and policy
+checks. Harness follow-up PR #59 at
+`fcd1f6819fdd2672816a1b7e2235f7069aa93708` rejects conflicting provider
+completion retries and has green hosted quality and policy checks. Protocol PR
+#33 at `09819e2216354136ab5a799413dcd98499f56580` also has green hosted checks.
+These follow-ups remain draft and unmerged; gateway PR #35 and harness PR #58
+are the earlier merged bases. MCP #37, game-mod #70, game-core #9, and
+observability #16 are merged at the revisions pinned in the candidate
+manifest.
+
+The nested delegation requirement remains unmet: descendant contexts exposed no
+native spawn surface, so only depth 1 was observed and no depth-4 bypass was
+attempted. No cross-repository build, service installation, live host, cold
+boot, activation, rollback, or soak evidence is promoted by these
+source/component results.
 
 See `docs/orchestration/integration-wave-20260910.json` for the resumable task
 record and exact changed commits.
@@ -186,11 +199,11 @@ record and exact changed commits.
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
 `SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
-`10eac29`, with executable source unchanged from `e91714c`), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`fa07876`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = draft PRs published; not merged`. The exact next gate
+`REMOTE_DELIVERY_STATUS = watchdog/gateway/harness follow-up drafts published; earlier gateway, harness, MCP, game-mod, game-core, and observability changes merged; protocol remains draft`. The exact next gate
 is a clean cross-repository release-set rebuild after the gateway/harness/mod
 consumer work is integrated, followed by the independent native/live/reboot/
 soak matrix. No row above should be changed to complete from a source-only,

@@ -29,6 +29,18 @@ written; hosted Windows execution and service installation remain unverified.
 No SCM service, named-pipe production endpoint, game, provider, reboot, or
 live host was started.
 
+## Latest restore-publication follow-up
+
+The current watchdog source tip is `fa0787620e768266c683da178c81b5af7198bc39`.
+Its predecessor `cacb2b9` passed Ubuntu but exposed four Windows restore failures
+with `Access is denied`: the atomic staging publisher reopened the staging file
+for `sync_all` and attempted `rename` while that handle was still live. The
+follow-up closes the handle before the rename and passes the equivalent Linux
+restore, CLI, and full workspace suites locally. Hosted run IDs
+`34501110421` and `34501117723` were still in progress when this record was
+captured; until they complete, this remains source and pending hosted-CI
+evidence, not native Windows service verification.
+
 ## Exact hosted reruns
 
 After the source repair, PR #8 head `c472f3aab726fa2871b46aede6d1985be4e57dae`

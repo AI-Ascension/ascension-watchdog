@@ -95,3 +95,16 @@ absence as `AlreadyExited`. Focused and serialized workspace tests passed, and
 hosted watchdog run `34480654731` passed after publication. Native cgroup,
 Windows SCM/Job Object/WSL, service, live-host, reboot, and soak evidence remain
 unverified.
+
+## Restore publication follow-up, 2026-09-10
+
+Hosted Windows execution of watchdog predecessor `cacb2b9` found four restore
+tests failing with `Access is denied` during staging-file publication. The
+failure was a source-handle lifetime defect in the new atomic restore path: the
+publisher called `sync_all` and renamed the staging file before dropping the
+reopened handle. Commit `fa0787620e768266c683da178c81b5af7198bc39` now drops
+that handle before `rename`; local restore, CLI, Linux installer, full test,
+format, Clippy, and standards checks pass. Hosted reruns
+`34501110421`/`34501117723` were pending at capture. This repair closes the
+specific publication defect only; it does not establish native service,
+cross-repository, live-host, reboot, or soak evidence.
