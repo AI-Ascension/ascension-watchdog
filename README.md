@@ -33,6 +33,13 @@ and exact artifact bytes without activating them. Its reported manifest digest
 covers the original input bytes, including whitespace. It returns nonzero on
 tampering or malformed input; inspection alone grants no launch authority.
 
+Offline backup rekey is explicit and stopped by construction:
+`watchdog restore --config PATH --backup PATH [--database PATH] --rekey` verifies
+the owner-local snapshot, requires a fresh deployment identity, increments the
+durable generation, quarantines inherited work, and reports
+`blocked_until_fenced=true`. It never swaps a running daemon's store, restores
+old leases, launches a process, or activates a release.
+
 Core tests include synthetic subprocess restart and persisted stop, not native
 service recovery. Administrative IPC, platform containment, exact companion
 integration and protected release activation remain separate delivery gates.
