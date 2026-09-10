@@ -54,10 +54,10 @@
   "current_integration": {
     "watchdog": {"commit":"92619c4c85984256a64c7387e0949d7d737401e1","pull_request":9,"status":"open draft; source/docs head records implementation parent 5b235f9, current conformance and adversarial evidence; hosted Ubuntu/Windows/dependency/standards checks pass; service-session remains unverified"},
     "harness": {"commit":"5cc486a66b6f11930675af06f7426cd91c609983","pull_request":59,"status":"merged current main; conflicting provider completion retries are rejected with result metadata/payload binding"},
-    "mcp": {"commit":"8b6b73862494488fdd16fa5423fdf90a953260f4","pull_request":37,"status":"merged current main; dependent release rebuild pending"},
+    "mcp": {"commit":"9fa09faed351a27bfeaebc2344af7ffd12ac784d","pull_request":38,"status":"merged current main; native coop adapter component-tested; dependent release rebuild pending"},
     "gateway": {"commit":"de1fe72345ea972d56c05d30837da5327e5f1655","pull_request":38,"status":"merged current main; co-op host-lease consumer and durable UNKNOWN replay are present; component gates green"},
     "game_mod": {"commit":"a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b","pull_request":70,"status":"merged current main; REST integration; hosted checks green; cross-repository rebuild pending"},
-    "protocol": {"commit":"678885687e46a43f53b9eec108dfb160fc9a13bd","pull_request":33,"status":"merged current main; coop-native-v1 producer artifact present; MCP/harness/game-mod consumer surface absent"},
+    "protocol": {"commit":"678885687e46a43f53b9eec108dfb160fc9a13bd","pull_request":33,"status":"merged current main; coop-native-v1 producer artifact present; MCP adapter now component-tested, harness/game-mod native consumer surface absent"},
     "completion": "unverified: no unified cross-consumer build or conformance; native, live, cold-boot, activation/rollback and soak gates remain open"
   },
   "completion": "unverified"

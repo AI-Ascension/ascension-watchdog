@@ -25,7 +25,7 @@
     "game_mod_pull_request": 70,
     "protocol_commit": "678885687e46a43f53b9eec108dfb160fc9a13bd",
     "protocol_pull_request": 33,
-    "status": "watchdog PR9 92619c4 remains open draft with hosted checks green; gateway PR38, harness PR59, MCP PR37, game-mod PR70, protocol PR33, game-core PR9, and observability PR16 are merged; no activation, native service, live host, cold boot, or soak",
+    "status": "watchdog PR9 92619c4 remains open draft with hosted checks green; gateway PR38, harness PR59, MCP PR38, game-mod PR70, protocol PR33, game-core PR9, and observability PR16 are merged; no activation, native service, live host, cold boot, or soak",
     "observed_depth": 1,
     "current_wave": "integration-wave-20260910.json"
   },

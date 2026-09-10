@@ -12,7 +12,7 @@ cold-boot, or soak claim.
 | ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `92619c4c85984256a64c7387e0949d7d737401e1` | open draft; docs-only follow-on over implementation parent `5b235f9524ecbb9529392dafee2328545666f356` |
 | sts2-gateway | `main` / PR #38 | `de1fe72345ea972d56c05d30837da5327e5f1655` | merged; PR #37 included |
 | sts2-harness | `main` / PR #59 | `5cc486a66b6f11930675af06f7426cd91c609983` | merged |
-| sts2-mcp-server | `main` / PR #37 | `8b6b73862494488fdd16fa5423fdf90a953260f4` | merged |
+| sts2-mcp-server | `main` / PR #38 | `9fa09faed351a27bfeaebc2344af7ffd12ac784d` | merged; native coop adapter |
 | sts2-game-mod | `main` / PR #70 | `a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b` | merged |
 | sts2-protocol | `main` / PR #33 | `678885687e46a43f53b9eec108dfb160fc9a13bd` | merged |
 | sts2-game-core | `main` / PR #9 | `f9db577530a4d159b066d3facbd780d61c044eb0` | merged |
@@ -45,6 +45,13 @@ components with pinned locked dependencies:
   `34510597283` passed. A broader parallel local attempt exposed timing-sensitive
   fixture failures; the serial runtime/workspace results above are the accepted
   local gate and no production change was made for the flaky attempt.
+* MCP current `main` `9fa09fa` passed `cargo fmt --all -- --check`, locked
+  warnings-denied workspace Clippy, and locked all-target/all-feature workspace
+  tests in a clean detached worktree. Its native coop adapter tests cover the
+  seven-tool catalog, exact request/response relations, schema/checksum
+  fixtures, and fail-closed malformed/foreign identities. The executable
+  gateway-runtime test remains explicitly ignored because it requires an exact
+  reviewed gateway binary.
 
 These are source/component checks. They do not prove that a single clean build
 of all binaries can be installed or run together.
@@ -59,12 +66,16 @@ The worker schema digest is
 `bb13d15f6c0e4b8d0f58f7391fe4ba319ebc57a0a09effc06d73ea718bbff4cf`.
 Protocol and gateway now carry matching `coop-native-v1` producer artifacts.
 
-The artifact comparison is not consumer conformance. MCP, harness, and
-game-mod currently do not expose a `coop-native-v1` consumer or adapter
-surface. Therefore no exact cross-consumer build or coop-native conformance
-run can be truthfully reported from this source set. Existing REST/runtime-v3
-component paths remain separately tested; their actual watchdog-to-harness-
-to-MCP-to-gateway-to-mod host execution is still unverified.
+The artifact comparison is not consumer conformance. MCP `main` now exposes a
+source-level `coop-native-v1` adapter and its current-main component suite
+passed (17 library tests, 29 binary tests, and all listed integration suites;
+one native gateway runtime case remains explicitly ignored). The shared artifact's
+`consumer-conformance.json` still records the gateway/MCP/harness set as
+component-pending, and harness/game-mod do not expose a native coop consumer.
+Therefore no exact cross-consumer build or coop-native host conformance run can
+be truthfully reported from this source set. Existing REST/runtime-v3 component
+paths remain separately tested; their actual watchdog-to-harness-to-MCP-to-
+gateway-to-mod host execution is still unverified.
 
 ## Boundary decision
 

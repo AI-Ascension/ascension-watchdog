@@ -24,8 +24,8 @@
       "ref": "main"
     },
     "sts2-mcp-server": {
-      "selected_remote_revision": "8b6b73862494488fdd16fa5423fdf90a953260f4",
-      "remote_pr": 37,
+      "selected_remote_revision": "9fa09faed351a27bfeaebc2344af7ffd12ac784d",
+      "remote_pr": 38,
       "ref": "main"
     },
     "sts2-game-mod": {
@@ -139,11 +139,11 @@
         "consumer_conformance_sha256": "377be44add07fe780a710debc34f901e40e15a75078496335892875f492754fe"
       }
     },
-    "result": "byte-identical-across-compared-worktrees; coop-native-v1 byte equality is limited to protocol and gateway copies and does not establish consumer conformance"
+    "result": "byte-identical-across-compared-worktrees; current MCP main has a source-level coop-native-v1 adapter and component tests, but shared consumer-conformance remains component-pending and does not establish host conformance"
   },
   "release_boundary": {
     "cross_repository_clean_build": "not-run; component worktrees were checked independently and no unified consumer build exists",
-    "cross_consumer_conformance": "not-run; protocol/gateway coop-native-v1 producer exists, but MCP, harness, and game-mod do not expose that consumer surface",
+    "cross_consumer_conformance": "not-run; protocol/gateway and MCP expose source-level coop-native-v1 adapters, but harness/game-mod native consumer coverage and one unified clean release build are absent",
     "native_windows_service": "not-run; hosted service-session step unverified on runner session 2",
     "native_linux_service": "not-run",
     "live_host": "not-run",

@@ -76,7 +76,7 @@
   },
   "next_actions": [
     "Keep candidate manifest source-pinned to watchdog source/docs head 92619c4 (implementation parent 5b235f9) and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
-    "The current component set has no unified cross-consumer build: protocol/gateway expose coop-native-v1, while MCP, harness, and game-mod do not expose that consumer surface. Treat artifact-byte equality as component evidence only.",
+    "The current component set has no unified cross-consumer build: protocol/gateway and MCP expose source-level coop-native-v1 adapters, while harness and game-mod do not expose a native coop consumer. Treat artifact-byte equality and component adapter tests as component evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

@@ -17,7 +17,7 @@ source head. Hosted validation run `34514320447` and standards run
 The selected current-main companion revisions are gateway
 `de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including PR #37), harness
 `5cc486a66b6f11930675af06f7426cd91c609983` (PR #59), MCP
-`8b6b73862494488fdd16fa5423fdf90a953260f4`, game-mod
+`9fa09faed351a27bfeaebc2344af7ffd12ac784d`, game-mod
 `a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b`, protocol
 `678885687e46a43f53b9eec108dfb160fc9a13bd` (PR #33), game-core
 `f9db577530a4d159b066d3facbd780d61c044eb0`, and observability
@@ -25,9 +25,11 @@ The selected current-main companion revisions are gateway
 component gates and runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
 [`release-set-verification-20260910.json`](release-set-verification-20260910.json).
 These revisions remain independently built source components: protocol and
-gateway carry the coop-native-v1 producer/consumer artifact, but MCP, harness,
-and game-mod do not expose that consumer surface. No claim is made that the
-full set composes, installs, activates, or runs on a live host.
+gateway and MCP now carry a source-level coop-native-v1 producer/consumer
+surface; the shared artifact's consumer-conformance record remains
+component-pending for the gateway/MCP/harness set, and harness/game-mod do not
+expose a native coop consumer. No claim is made that the full set composes,
+installs, activates, or runs on a live host.
 
 Required next gate: rebuild and test this exact set together, verify immutable
 artifact digests, then run the separately authorized native Windows/Linux/WSL,

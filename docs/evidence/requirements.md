@@ -176,15 +176,16 @@ the session-0 tests did not execute.
 The refreshed current-main companion set is gateway
 `de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including #37), harness
 `5cc486a66b6f11930675af06f7426cd91c609983` (PR #59), MCP
-`8b6b73862494488fdd16fa5423fdf90a953260f4` (PR #37), game-mod
+`9fa09faed351a27bfeaebc2344af7ffd12ac784d` (PR #38), game-mod
 `a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b` (PR #70), protocol
 `678885687e46a43f53b9eec108dfb160fc9a13bd` (PR #33), game-core
 `f9db577530a4d159b066d3facbd780d61c044eb0` (PR #9), and observability
 `d7e79e1a9663601013e513048caea7063b0de9ae` (PR #16); all are merged. Current
 component gates pass in isolated worktrees, but the conformance audit found
-that only protocol and gateway expose the coop-native-v1 surface. MCP, harness,
-and game-mod have no matching consumer adapter, so a unified cross-consumer
-build remains unavailable.
+that protocol, gateway, and MCP expose source-level coop-native-v1 surfaces;
+harness and game-mod have no matching native coop consumer, and the shared
+consumer-conformance record remains component-pending. A unified
+cross-consumer build remains unavailable.
 
 The nested delegation requirement remains unmet: descendant contexts exposed no
 native spawn surface, so only depth 1 was observed and no depth-4 bypass was
@@ -207,7 +208,7 @@ ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `REMOTE_DELIVERY_STATUS = watchdog PR #9 remains open draft; gateway, harness,
 MCP, game-mod, game-core, protocol, and observability companion changes are
 merged`. The exact next gate is a clean cross-repository release-set rebuild
-after the missing consumer adapters are supplied (or the release is explicitly
-scoped to the existing REST contract), followed by the independent
+after the remaining consumer/release adapters are integrated (or the release is
+explicitly scoped to the existing REST contract), followed by the independent
 native/live/reboot/soak matrix. No row above should be changed to complete from
 a source-only, component, fake-host, cross-build, or ignored-test result.

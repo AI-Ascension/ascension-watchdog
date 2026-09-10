@@ -33,11 +33,11 @@
       "state": "merged; PR #59 head fcd1f68; provider completion retries bind result metadata and payload and conflicting reuse is rejected; hosted-checks-pass; current-main"
     },
     "sts2-mcp-server": {
-      "revision": "8b6b73862494488fdd16fa5423fdf90a953260f4",
+      "revision": "9fa09faed351a27bfeaebc2344af7ffd12ac784d",
       "ref": "main",
       "remote": "AI-Ascension/sts2-mcp-server",
-      "pull_request": 37,
-      "state": "merged; PR #37 merge a6b9215; hosted-checks-pass; current-main"
+      "pull_request": 38,
+      "state": "merged; PR #38 merge 9fa09fa; native coop component adapter and seven-tool catalog; hosted-checks-pass; current-main"
     },
     "sts2-game-mod": {
       "revision": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
