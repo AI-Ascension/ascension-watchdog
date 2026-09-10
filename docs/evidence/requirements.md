@@ -1,8 +1,9 @@
 # V32 requirements and evidence audit
 
-Classification: `partial` / `unverified` source-and-test audit at the integrated
-watchdog branch `10eac2975c6ad482cef31ee1b3d060db3757f4d7`. This audit does not
-declare an implementation or release complete.
+Classification: `partial` / `unverified` source-and-test audit. The historical
+entries below are retained for traceability; the current activation addendum at
+the end records the latest integrated watchdog source and test evidence. This
+audit does not declare an implementation or release complete.
 
 ## Scope and evidence boundary
 
@@ -81,8 +82,9 @@ fixture/process fact and never means native, live, reboot, or release proof.
    Job Object/pipe execution, WSL termination, and configured stop across those
    paths. (`CP`, `OR`, `RW`)
 4. Add bounded archival/tombstone semantics beyond the fixture's 64-entry
-   backpressure point, persistent telemetry integration, operational restore/
-   rekey and release activation/rollback, and a real long-running campaign.
+   backpressure point, persistent telemetry integration, and a real long-running
+   campaign. Durable watchdog release activation/rollback is now source-tested,
+   but the sealed cross-repository handoff and native campaign remain open.
    (`SL`, `SI`, `RW`)
 5. The requested three descendant Luna-Max layers were not observed. The
    registry records nine depth-1 descendants with requested/accepted
@@ -103,9 +105,9 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | S08 | **S08-a** fresh durable boot/fence/lease and invalidation; **S08-b** historical read/reconcile without old authority; **S08-c** restore/rekey and rollback protection; **S08-d** real gateway/host consumer | Fixture bootstrap/fence/lease/operation handlers and `tests/recovery.rs`, `runtime.rs`; watchdog `storage.rs` restore | `FF`; `RI`; `OR`; `CP` | partial | The fixture models protocol semantics and watchdog restore rekeys its own store, but no production gateway lease consumer or host handshake is integrated. Implement gateway-issued authority and managed host-fence consumers, then test restart/rollback/rekey on the exact release. |
 | S09 | **S09-a** actual v3 persist-before-send journal and uncertainty; **S09-b** host execution-time fence/witness; **S09-c** restricted broker and >64 archival/retention | Fixture operation/ticket/effect tables and fault tests; watchdog has no gameplay journal; companion gateway/mod heads are outside this source | `FF`; `FG`; `RI`; `OR`; `CP` | partial | Synthetic journal ordering and stale-fence tests pass, but the fixture is not the actual v3 path, host broker, or gateway consumer; 64 is backpressure, not archival. Wire and run the real harness→MCP→gateway→mod→host path and exceed receipt capacity with tombstones. |
 | S10 | **S10-a** harness explicit resume; **S10-b** MCP sole-owner bounded reconnect; **S10-c** provider identity/accounting; **S10-d** continuation/reconstruction/interrupted-unknown and replay divergence | Companion harness follow-up PR #54 at `5798e3d` is source/component tested but remains outside this watchdog checkout | `CP` records the follow-up's 171 runtime tests and recovery evidence, but no cross-repository release run | unverified | Do not count companion component tests as release proof. Integrate and independently verify the harness sideband/recovery source, named resume/reconstruction/divergence/provider tests, and cross-repo gates. |
-| S11 | **S11-a** persisted desired-state reconciler and separate component/attempt/deployment states; **S11-b** meaningful phase health/timers/budgets; **S11-c** authenticated full operator CLI/API; **S11-d** restart ownership and native service recovery | `crates/watchdog/src/{policy,runtime,service,cli,admin}.rs`; `tests/{core,health_policy,service_loop,admin_control,job_submission*}.rs` | `SL`; `SA`; `README` | partial | Synthetic daemon/IPC/health and core lifecycle tests pass, but dispatcher operations remain unsupported in places and no installed systemd/SCM recovery exists. Complete unsupported commands, native service lanes, and scheduler-to-harness handoff. |
+| S11 | **S11-a** persisted desired-state reconciler and separate component/attempt/deployment states; **S11-b** meaningful phase health/timers/budgets; **S11-c** authenticated full operator CLI/API; **S11-d** restart ownership and native service recovery | `crates/watchdog/src/{policy,runtime,service,cli,admin}.rs`; `tests/{core,health_policy,service_loop,admin_control,job_submission*}.rs`; release selector gate | `SL`; `SA`; `README`; `docs/evidence/release-activation.md` | partial | Synthetic daemon/IPC/health, lifecycle commands, and release activation dispatch pass source tests, but other dispatcher operations, scheduler-to-harness handoff, and installed systemd/SCM recovery remain open. |
 | S12 | **S12-a** Windows SCM/health checker/Job Object/named pipe/session; **S12-b** WSL exact distro/direct invocation/termination; **S12-c** Linux systemd notify/cgroup/protected state; **S12-d** native synthetic execution | `crates/platform-windows/src/{native,admin_pipe}.rs`; Windows tests; `crates/watchdog/src/platform/{linux,linux_launcher,linux_process,wsl}.rs`; `deploy/linux/ascension-watchdog.service` | `SI`; `SL`; `docs/platform.md`; `docs/evidence/{windows-p9-integration,native-integration-review}.md`; `CP` | partial | Linux portable/source tests and notifications are evidenced, but two cgroup tests are ignored and Windows-native execution is zero on Linux; no service install/WSL failure campaign. Run approved native Windows/Linux/WSL gates and retain skipped status until they execute. |
-| S13 | **S13-a** persistent telemetry collector queues/backends; **S13-b** immutable release-set activation/rollback; **S13-c** idempotent install/uninstall/log/disk operations; **S13-d** authenticated backup/restore/rekey | Watchdog `release.rs`, `release_staged.rs`, `storage_backup_admin.rs`, CLI; `deploy/linux/install.sh`, `uninstall.sh`; observability is external | `docs/evidence/{release-inspection,collector-recovery,platform-backup-integration}.md`; `docs/operations-backup.md`; `tests/cli_restore.rs` | partial | Protected release inspection, authenticated backup creation, and explicit offline restore/rekey are now source-tested. Collector backend durability, immutable activation/rollback, uninstall persistence, and native install tests remain open. |
+| S13 | **S13-a** persistent telemetry collector queues/backends; **S13-b** immutable release-set activation/rollback; **S13-c** idempotent install/uninstall/log/disk operations; **S13-d** authenticated backup/restore/rekey | Watchdog `release.rs`, `release_staged.rs`, `storage_release.rs`, `storage_backup_admin.rs`, CLI; `deploy/linux/install.sh`, `uninstall.sh`; observability is external | `docs/evidence/{release-inspection,release-activation,collector-recovery,platform-backup-integration}.md`; `docs/operations-backup.md`; `tests/{cli_restore,admin_control}.rs`; selector unit tests | partial | Protected inspection, durable prepared/active selector, exact previous-release rollback binding, authenticated activation receipt, backup creation, and restore/rekey are source-tested. A sealed cross-repository handoff, collector backend durability, uninstall persistence, and native install/activation tests remain open. |
 | S14 | **S14-a** threat model; **S14-b** local authenticated capability separation; **S14-c** closed/bounded/duplicate-safe contracts and path/digest checks; **S14-d** native ACL/reparse/secret controls | `docs/threat-model.md`; `admin/{auth,protocol,endpoint,server}.rs`; `release.rs`, config/path validators, platform boundary tests | `SA`; `docs/admin-control.md`; `docs/windows-process-integrity.md`; `OR` | partial | Watchdog local controls are substantially tested, but real gateway/harness/mod consumers and native Windows ACL/pipe behavior are not executed; known platform/auth review findings remain. Integrate and run native security matrix plus cross-consumer negative tests. |
 | S15 | **S15-a** every requirement has source, failure test, evidence class; **S15-b** synthetic fault host covers 24 scenarios; **S15-c** independent review/fix/rerun; **S15-d** native/live/reboot/soak evidence | Fixture recovery/runtime/schema suites, authenticated worker/Gateway-health tests, release-staging tests, platform tests, review docs; no single 24-case acceptance run | `CP`/`SI` current workspace suites; `FF`; `OR`; `RW`; `AR` | partial | Root has broad synthetic evidence and independent findings, but no complete 24-scenario matrix, no nested agent smoke, and no native/live/reboot/soak. Execute the missing named scenarios and record each result, including explicit skips. |
 | S16 | **S16-A** capability/baseline; **S16-B** contracts/failing tests; **S16-C** executable vertical slice; **S16-D** authority/journal; **S16-E** harness recovery; **S16-F** platform/operations; **S16-G** integrated verification; **S16-H** remote delivery | Root checkpoint/test commands, package tests, source checkpoints; companion heads explicitly marked unintegrated | `CP`; `TD`; `README`; `OR` | partial | A-D and portions of F have Linux/synthetic slices; E, G, H are not verified, and full release is false. Complete companion integration and independent review, rerun clean release-set gates, then record remote PR/merge/deployment state. |
@@ -126,7 +128,7 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | INV-09 | Store jobs/attempts/restart records; `tests/core.rs::claims_and_completion_are_atomic_and_idempotent`, `job_submission.rs::submission_replays_original_job_after_completion_and_stop`, admin control stop/replay tests | `SR`; `SA`; `SL` | partial | Watchdog records are tested; provider/episode completion, budgets, and attempt lineage require integrated evidence from the companion harness. Integrate and execute its provider/job crash and completion tests. |
 | INV-10 | Watchdog launch state `prepared/proof_recorded/active/cleaned`; fixture `runtime_releases_instance_barrier_only_after_authoritative_reconciliation` | `FG`; `RI`; `RW` | partial | The watchdog slice has no integrated harness evidence for in-place continuation vs reconstruction vs interrupted-unknown. Integrate the companion policy and execute divergence-stop tests. |
 | INV-11 | `service_loop.rs::persistence_failure_cannot_advance_completed_loop_health`; store transactional admission and `storage_admin.rs` rollback tests | `SL`; `SA` | partial | Watchdog persistence gating is synthetic/local; telemetry failure independence and gateway persistence admission are unproven. Add independent telemetry outage and real gateway-store failure tests. |
-| INV-12 | `release.rs` compatibility/tamper/path tests; `release_staged.rs` protected inspection; `Store::restore_from`; `cli_restore.rs` rekey/quarantine; config closed validation | `SR`; `docs/evidence/release-inspection.md`; `docs/operations-backup.md` | partial | Protected saves/consent/model/credentials/release selection across the companion runtime and immutable release activation are not exercised. Add cross-repo policy-preservation and activation tests. |
+| INV-12 | `release.rs` compatibility/tamper/path tests; `release_staged.rs` protected inspection; `storage_release.rs` prepared/active selector and rollback; `Store::restore_from`; `cli_restore.rs` rekey/quarantine; config closed validation | `SR`; `docs/evidence/{release-inspection,release-activation}.md`; `docs/operations-backup.md` | partial | Watchdog release selection, protected recheck, replay, rollback binding, and restore clearing are source-tested. Protected saves/consent/model/credential policy across companions and a sealed cross-repository/native activation handoff remain open. |
 | INV-13 | Queue/frame/output bounds in admin, platform, and fixture; `receipt_capacity_backpressures_the_sixty_fifth_operation`; runtime history backpressure | `FF`; `SA`; `docs/admin-control.md` | partial | Bounds exist in slices, but archival/tombstones beyond 64, provider/telemetry/log limits, and long-run growth are open. Execute capacity-plus-archival and soak tests. |
 | INV-14 | Authenticated admin queue/ledger; `admin_control.rs::real_service_dispatch_persists_stop_and_old_start_cannot_revive_it`, `job_submission_process.rs::actual_daemon_and_cli_processes...`, launch-stop tests | `SA`; `SL`; `docs/admin-control.md` | partial | Durable watchdog operator control is evidenced, but uninstall/native service restart and full command implementation are not. Complete unsupported dispatcher operations and native stop/pause/uninstall tests. |
 | INV-15 | Evidence classifications in `README`, `FF`, `SL`, `SI`, `CP`; separate test commands and explicit ignored/native labels | `CP`; `README` | partial | Classification discipline is present, but no live/reboot/soak axes exist to verify. Run and record each axis independently; never promote component or synthetic evidence. |
@@ -162,16 +164,18 @@ fixture/process fact and never means native, live, reboot, or release proof.
 
 ## Current-wave addendum — 2026-09-10
 
-The historical matrix above remains intentionally conservative. The current
-watchdog docs head is `92619c4c85984256a64c7387e0949d7d737401e1`, with the
-source-tested implementation parent at `5b235f9524ecbb9529392dafee2328545666f356`.
+The historical matrix above remains intentionally conservative. The earlier
+component snapshot at `92619c4c85984256a64c7387e0949d7d737401e1` and its
+implementation parent `5b235f9524ecbb9529392dafee2328545666f356` are retained
+for traceability; the current watchdog source-tested commit is `0542ab87f58d7aa38be35ccd407d202e224e2789`.
 Pinned-toolchain checks passed: standards validation, format, strict Clippy,
-200 watchdog library tests, all workspace integration suites, the two restore
-CLI tests, the namespace-isolated Linux installer test, and the current
-10-case adversarial suite (4 expected workspace tests ignored). Hosted
-validation run `34514320447` and standards run `34514322142` passed. The
-hosted service-session step remains explicitly `UNVERIFIED` on runner session 2;
-the session-0 tests did not execute.
+206 watchdog library tests, all workspace integration suites, the five selector
+tests, the two restore CLI tests, the namespace-isolated Linux installer test,
+and the current 10-case adversarial suite (4 expected workspace tests ignored).
+Hosted validation runs `34522351534` and `34522353025` passed on both Ubuntu
+and Windows; standards runs `34522351498` and `34522353092` passed. The hosted
+service-session step remains explicitly `UNVERIFIED` on runner session 2; the
+session-0 tests did not execute.
 
 The refreshed current-main companion set is gateway
 `de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including #37), harness
@@ -197,11 +201,37 @@ See `docs/orchestration/integration-wave-20260910.json` and
 `docs/evidence/current-source-conformance-20260910.md` for the resumable task
 record, exact current refs, component gates, artifact comparison, and boundary.
 
+### Activation addendum — source commit `0542ab8`
+
+The source working tree extends the prior current-main snapshot with a durable
+release selector and runtime admission fence. At source commit `0542ab8`,
+`storage_release.rs` persists a
+prepared marker before the final protected catalog check, retains the exact
+previous identity, atomically commits the active/previous selector with the
+authenticated operator receipt and audit row, replays the same idempotency key,
+and restricts rollback to the recorded previous release. `Store` validates the
+selector on owner and read-only opens, and restore/rekey clears it. The
+dispatcher and CLI expose authenticated `release activate` and `release
+rollback`; configured-catalog launches remain blocked until an active selector
+still matches protected bytes and configuration compatibility.
+
+Current source tests are `storage::storage_release::tests` (5 passed),
+`runtime::tests::configured_release_catalog_requires_explicit_activation_before_launch`
+(1 passed), and
+`admin_control.rs::real_service_read_credential_inspects_configured_release_without_store_writes`
+(1 passed). The complete locked workspace all-target/all-feature suite (206
+watchdog library tests passed, 4 ignored) and warnings-denied Clippy pass after
+this integration. This moves the watchdog portions of S11,
+S13, INV-12, and FAULT-21 from “not implemented” to confirmed source-tested
+partial evidence; it does not promote the wider rows because no sealed
+cross-repository handoff, native service activation, live host, reboot, or soak
+run has occurred.
+
 ## Delivery decision
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
 `SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
-`92619c4`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`0542ab8`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and

@@ -5,13 +5,13 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "92619c4c85984256a64c7387e0949d7d737401e1",
-    "watchdog_source_tested_commit": "92619c4c85984256a64c7387e0949d7d737401e1",
-    "watchdog_implementation_commit": "5b235f9524ecbb9529392dafee2328545666f356",
+    "watchdog_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+    "watchdog_source_tested_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+    "watchdog_implementation_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "92619c4c85984256a64c7387e0949d7d737401e1",
-    "hosted_runs": [34514320447, 34514322142],
-    "hosted_run_status_at_capture": "success; exact PR source/docs head 92619c4; implementation parent 5b235f9; bounded five-second restore publication retry, atomic no-replace hardlink fallback, operation diagnostics, and 10-case adversarial suite pass; Ubuntu, Windows, dependency, and standards jobs passed; Windows sharing_error_fails_closed_without_streaming_copy passed; Windows service-session step was UNVERIFIED on runner session 2"
+    "watchdog_last_observed_pr_head": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+    "hosted_runs": [34522351534, 34522353025, 34522351498, 34522353092],
+    "hosted_run_status_at_capture": "Rust/synthetic runs 34522351534 and 34522353025 passed on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed; native Windows service-session remains UNVERIFIED on runner session 2"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -30,21 +30,21 @@
   },
   "results": {
     "watchdog": {
-      "commit": "92619c4c85984256a64c7387e0949d7d737401e1",
-      "implementation_commit": "5b235f9524ecbb9529392dafee2328545666f356",
-      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, bounded five-second Windows publication retry with operation diagnostics, atomic no-replace hardlink fallback for transient sharing errors (streaming copy deliberately rejected), protected config fixtures, collision-safe Windows native fixture allocation, and Linux install/uninstall idempotence coverage",
+      "commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "implementation_commit": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "change": "durable retry/scoped reconciliation, protected release inspection, offline restore/rekey publication, plus exact-digest release activation/rollback with interrupted prepared-marker recovery, selector/receipt binding, and configured launch fencing",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
         "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .: pass",
         "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
-        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (200 watchdog library tests; all workspace integration suites; 4 ignored)",
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (206 watchdog library tests; all workspace integration suites; 4 ignored)",
         "Windows hosted unit test storage::restore_publication_tests::sharing_error_fails_closed_without_streaming_copy: pass (run 34514320447)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
-        "Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression; current source/docs head run 34514320447 passes, with service-session remaining UNVERIFIED"
+        "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Current source commit 0542ab8 adds release activation/rollback and strict selector/receipt binding; hosted validation runs 34522351534 and 34522353025 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; PR #9 source/docs head 92619c4; hosted validation run 34514320447 and standards run 34514322142 pass"
+      "remote": "pushed to codex/watchdog-integrated-20260910; PR #9 source head 0542ab8; hosted validation runs 34522351534 and 34522353025 passed on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed"
     },
     "gateway": {
       "commit": "de1fe72345ea972d56c05d30837da5327e5f1655",
@@ -75,7 +75,7 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to watchdog source/docs head 92619c4 (implementation parent 5b235f9) and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
+    "Keep candidate manifest source-pinned to watchdog source head 0542ab8 and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
     "The current component set has no unified cross-consumer build: protocol/gateway and MCP expose source-level coop-native-v1 adapters, while harness and game-mod do not expose a native coop consumer. Treat artifact-byte equality and component adapter tests as component evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."

@@ -108,6 +108,8 @@ does not start the service. `deploy/linux/uninstall.sh` stops an active unit,
 reads the same owner-local status through the installed watchdog binary, and
 removes the unit only after the durable desired mode is `stopped`; it accepts
 `--watchdog` and `--config` overrides for isolated installations and preserves
-state and releases. The watchdog's release activation path must still perform byte/hash verification,
-durable activation intent, atomic publication, interruption recovery and
-compatibility checks before this wrapper is called.
+state and releases. The watchdog's release activation path performs
+source-tested byte/hash verification, a durable prepared marker, atomic
+selector/receipt publication, interruption recovery and compatibility checks
+before this wrapper is called. Sealed cross-repository handoff and native
+activation remain unverified.

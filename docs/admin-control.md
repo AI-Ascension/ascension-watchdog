@@ -41,20 +41,31 @@ owning-loop pass; it never dispatches gateway/game work directly. Retry only
 requeues the latest failed attempt when its job has no terminal result and no
 worker handoff; it preserves the original failure evidence, records an
 idempotent operator receipt, and rejects unknown, terminal, reconstruction,
-and worker-handoff paths. Restore and release activation remain unsupported
-pending their owner-specific integration; their transport types alone are not
-operational evidence.
+and worker-handoff paths. Restore remains an offline, explicitly rekeyed
+operation. Release activation is now owner-integrated: it requires stopped
+mode, no owned children or unresolved handoffs, and two protected catalog
+inspections around a durable prepared marker and selector commit.
 Windows native service execution and uninstall recovery remain unverified.
 
 Set `release_catalog` to an owner-local protected directory and its explicitly
-approved Unix `owner_uid` to enable read-only inspection. Then
+approved Unix `owner_uid` to enable inspection and activation. Then
 `watchdog release inspect --config PATH --release-id ID` uses the read
 credential and the watchdog main loop to open that logical release through
 Linux no-follow directory and file handles. The result reports the exact
 manifest digest, configuration/path compatibility, and whether the digest
 matches the currently recorded approved release. All fixed roles are validated
 before that result is returned. It never
-selects, activates, launches, or writes an operator receipt. Missing catalog
+selects, activates, launches, or writes an operator receipt. To activate an
+inspected digest, use the authenticated admin command
+`watchdog release activate --config PATH --release-id ID
+--expected-release-digest DIGEST --idempotency-key KEY`. The command records a
+`prepared` selector marker before the final protected recheck and atomically
+publishes the active digest, previous-release rollback target, audit event, and
+replayable receipt. If the process dies after preparation, retrying the exact
+request key resumes the final check; a different release is blocked until that
+marker is resolved. `watchdog release rollback` uses the same exact-digest
+contract with `rollback: true` and can target only the durably recorded
+previous release. Restore/rekey clears all release selection. Missing catalog
 configuration and platforms without the protected descriptor proof remain
 unsupported; malformed, replaced, writable, or tampered release objects fail
 closed.

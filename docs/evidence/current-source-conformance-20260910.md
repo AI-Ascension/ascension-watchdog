@@ -9,7 +9,7 @@ cold-boot, or soak claim.
 
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
-| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `92619c4c85984256a64c7387e0949d7d737401e1` | open draft; docs-only follow-on over implementation parent `5b235f9524ecbb9529392dafee2328545666f356` |
+| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `0542ab87f58d7aa38be35ccd407d202e224e2789` | open draft; durable release activation/rollback, strict selector/receipt binding, request-collision rejection, and runtime launch fence source commit; hosted Ubuntu/Windows and standards validation passed |
 | sts2-gateway | `main` / PR #38 | `de1fe72345ea972d56c05d30837da5327e5f1655` | merged; PR #37 included |
 | sts2-harness | `main` / PR #59 | `5cc486a66b6f11930675af06f7426cd91c609983` | merged |
 | sts2-mcp-server | `main` / PR #38 | `9fa09faed351a27bfeaebc2344af7ffd12ac784d` | merged; native coop adapter |
@@ -21,8 +21,9 @@ cold-boot, or soak claim.
 The revisions were checked against the remote `main` refs and the listed PR
 metadata before this record was written. Open PR #9 is intentionally still
 separate from the merged companion revisions. The selected watchdog source
-was unchanged after `92619c4`; the follow-on commit only refreshes evidence
-and does not alter the tested implementation.
+commit `0542ab8` adds the durable release selector, strict selector/receipt
+binding, request-collision rejection, and authenticated activation boundary
+described in [`release-activation.md`](release-activation.md).
 
 ## Component gates
 
@@ -33,14 +34,15 @@ components with pinned locked dependencies:
   protocol, and game-core.
 * Warnings-denied locked workspace Clippy passed for those repositories.
 * Locked all-target/all-feature tests passed for those repositories.
-* The watchdog checkout passed
+* The watchdog checkout at `0542ab8` passed
   `cargo +1.97.1 test --locked --offline --workspace --all-targets
-  --all-features --no-fail-fast -- --test-threads=1`: 200 passed and 4
-  explicitly ignored. The restore CLI (2 tests) and namespace-isolated Linux
+  --all-features --no-fail-fast`: 206 watchdog library tests passed and 4
+  explicitly ignored, with all workspace integration suites passing. The
+  five selector tests, restore CLI (2 tests), and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 hosted validation run `34514320447` and standards run
-  `34514322142` passed for source head `92619c4`. The hosted service-session
-  step reported `UNVERIFIED` on runner session 2.
+* Watchdog PR #9 hosted validation runs `34522351534` and `34522353025` passed
+  on both Ubuntu and Windows; standards runs `34522351498` and `34522353092`
+  passed. Native service-session remains separately `UNVERIFIED`.
 * Gateway PR #38 hosted quality and policy runs `34510597219` and
   `34510597283` passed. A broader parallel local attempt exposed timing-sensitive
   fixture failures; the serial runtime/workspace results above are the accepted

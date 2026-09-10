@@ -1,7 +1,9 @@
 # Release inspection module validation
 
-Classification: confirmed module tests on Linux; integrated executable activation
-and Windows execution remain unverified.
+Classification: confirmed protected-inspection and source-tested activation
+building blocks on Linux; native executable activation and Windows execution
+remain unverified. See [`release-activation.md`](release-activation.md) for the
+durable selector evidence.
 
 The release inspector enforces six fixed artifact roles, required exact source
 revisions, runtime/recovery/config/provider digests, owner-local migration ranges,
@@ -34,7 +36,9 @@ candidate. This API requires authentic owner-reported schema versions; it does
 not discover database state or approve a release on its own.
 
 The inspector intentionally returns an inspection record, not launch authority.
-Immutable protected storage, durable activation intent, actual schema checks,
-draining, atomic selection and interrupted-activation recovery are additional
-requirements and are not proven by digest checking. A matching hash before launch
-alone does not prevent time-of-check/time-of-use replacement.
+The watchdog now adds a durable prepared/active selector, atomic operator
+receipt, interrupted-activation retry, exact previous-release rollback binding,
+and a runtime launch gate around this inspection boundary. Those source tests
+do not establish a sealed cross-repository executable handoff: descriptor
+handles are not transferred to every downstream consumer, and a matching hash
+before launch alone does not prevent time-of-check/time-of-use replacement.

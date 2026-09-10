@@ -52,7 +52,7 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"92619c4c85984256a64c7387e0949d7d737401e1","pull_request":9,"status":"open draft; source/docs head records implementation parent 5b235f9, current conformance and adversarial evidence; hosted Ubuntu/Windows/dependency/standards checks pass; service-session remains unverified"},
+    "watchdog": {"commit":"0542ab87f58d7aa38be35ccd407d202e224e2789","pull_request":9,"status":"open draft; durable exact-digest release activation/rollback, strict selector/receipt binding, and configured launch fence source-tested; hosted Ubuntu/Windows validation and standards checks passed; service-session remains unverified"},
     "harness": {"commit":"5cc486a66b6f11930675af06f7426cd91c609983","pull_request":59,"status":"merged current main; conflicting provider completion retries are rejected with result metadata/payload binding"},
     "mcp": {"commit":"9fa09faed351a27bfeaebc2344af7ffd12ac784d","pull_request":38,"status":"merged current main; native coop adapter component-tested; dependent release rebuild pending"},
     "gateway": {"commit":"de1fe72345ea972d56c05d30837da5327e5f1655","pull_request":38,"status":"merged current main; co-op host-lease consumer and durable UNKNOWN replay are present; component gates green"},

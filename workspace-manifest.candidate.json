@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "92619c4c85984256a64c7387e0949d7d737401e1",
-      "last_observed_pr_head": "92619c4c85984256a64c7387e0949d7d737401e1",
+      "revision": "0542ab87f58d7aa38be35ccd407d202e224e2789",
+      "last_observed_pr_head": "0542ab87f58d7aa38be35ccd407d202e224e2789",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; docs head 92619c4 records source-tested implementation 5b235f9, bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, atomic no-replace hardlink fallback for transient sharing errors (no streaming copy), current-source conformance and coop artifact comparison boundary; hosted-checks-pass-run-34514320447 and standards-run-34514322142; mergeable; not-merged"
+      "state": "open-draft; source head 0542ab8 adds durable exact-digest release activation/rollback, interrupted prepared-marker retry, selector/receipt and response binding, request-UUID collision rejection, and configured launch fencing on top of the prior restore/publication and conformance work; hosted runs for this source are tracked below; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
@@ -73,8 +73,8 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34514320447],
-    "hosted_watchdog_status_at_capture": "success-at-92619c4; Ubuntu, Windows, dependency, and standards jobs passed; Windows service-session step reported UNVERIFIED because the hosted runner used session 2",
+    "hosted_watchdog_runs": [34522351534, 34522353025],
+    "hosted_watchdog_status_at_capture": "passed-at-0542ab8 on Ubuntu and Windows; standards runs 34522351498 and 34522353092 passed; native service-session remains separately unverified",
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"

@@ -39,9 +39,11 @@ Caller-approved owner-policy integration on 2026-09-09:
   cross-compilation does not establish native Windows staging support.
 - `cargo fmt --all -- --check` and `git diff --check`: passed.
 
-The dormant release-selection prototype is deliberately not integrated into
-this change. No selector, CLI activation command, runtime activation consumer,
-or durable release-state transition is added here.
+The watchdog now integrates a durable release selector and authenticated
+activation/rollback consumer on top of this inspection boundary. See
+[`release-activation.md`](release-activation.md) for the selector tests and
+runtime launch gate. The retained staging capability remains a read-only
+building block; it is not itself a sealed cross-repository handoff.
 
 ## Remaining protection boundary
 

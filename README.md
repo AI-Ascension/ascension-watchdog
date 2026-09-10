@@ -41,8 +41,10 @@ durable generation, quarantines inherited work, and reports
 old leases, launches a process, or activates a release.
 
 Core tests include synthetic subprocess restart and persisted stop, not native
-service recovery. Administrative IPC, platform containment, exact companion
-integration and protected release activation remain separate delivery gates.
+service recovery. Administrative IPC, platform containment, and exact companion
+integration remain separate delivery gates. The watchdog now source-tests a
+durable protected release selector and authenticated activation/rollback, but
+that is not evidence of a sealed cross-repository or native release handoff.
 
 The moving companion PR heads captured for the next integration review are
 listed in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json)
