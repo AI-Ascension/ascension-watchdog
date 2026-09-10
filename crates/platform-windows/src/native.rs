@@ -2454,7 +2454,13 @@ impl SecurityDescriptor {
     }
 
     fn owner_only() -> Result<Self, PlatformError> {
-        let descriptor = wide("D:P(A;;GA;;;OW)")?;
+        // `OW` in the protected DACL grants access to the security
+        // descriptor owner, but omitting the descriptor owner lets Windows
+        // choose the token's default-owner SID. Bind it explicitly to the
+        // current token user so reopened named objects retain exact owner
+        // authority even when the service token is elevated.
+        let owner_sid = crate::admin_pipe::process_user_sid(unsafe { GetCurrentProcess() })?;
+        let descriptor = wide(&format!("O:{owner_sid}D:P(A;;GA;;;OW)"))?;
         let mut raw = null_mut();
         let mut size = 0_u32;
         let ok = unsafe {
@@ -3190,6 +3196,37 @@ mod tests {
     use super::*;
     use windows_service::service::ServiceConfig;
 
+    fn create_unverified_job(name: &str, max_processes: u32) -> Result<OwnedHandle, PlatformError> {
+        let wide_name = wide(name)?;
+        let raw = unsafe { CreateJobObjectW(null(), wide_name.as_ptr()) };
+        let job = OwnedHandle::new(raw, "CreateJobObjectW(test fixture)")?;
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            return Err(PlatformError::Unavailable(
+                "test Job Object unexpectedly already exists".to_owned(),
+            ));
+        }
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = max_processes;
+        let length =
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).map_err(|_| {
+                PlatformError::Invalid("test Job Object limit size overflow".to_owned())
+            })?;
+        if unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast::<c_void>(),
+                length,
+            )
+        } == 0
+        {
+            return Err(last_error("SetInformationJobObject(test fixture)"));
+        }
+        Ok(job)
+    }
+
     #[test]
     fn invalid_nonce_and_pipe_namespace_are_rejected() {
         assert!(validate_nonce("../old").is_err());
@@ -3333,7 +3370,10 @@ mod tests {
                 .map_or(0, |duration| duration.as_nanos())
         );
         let name = job_name(&nonce)?;
-        let job = create_job(&name, 7)?;
+        // This fixture is deliberately not created by the owner-verified
+        // production helper: recovery must reject a same-name object whose
+        // owner or configured process limit is not the current authority.
+        let job = create_unverified_job(&name, 7)?;
         let mut allowlisted_executables = BTreeMap::new();
         allowlisted_executables.insert(
             crate::contract::ComponentKind::Synthetic,

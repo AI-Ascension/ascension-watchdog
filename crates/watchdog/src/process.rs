@@ -28,6 +28,8 @@ use rustix::process::{
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 #[cfg(unix)]
 const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const PROCESS_IDENTITY_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Immutable launch identity.  It is persisted alongside the component state
 /// and is intentionally richer than a PID.
@@ -355,7 +357,7 @@ impl OwnedChild {
                 }
             }
         };
-        if still_running && let Err(error) = ensure_identity(&identity) {
+        if still_running && let Err(error) = ensure_spawn_identity(&mut child, &identity) {
             // The direct Child handle is still the exact object returned by
             // spawn, and the process group is the exact containment created
             // for that handle.  Cleanup does not fall back to a PID/name
@@ -554,6 +556,37 @@ impl OwnedChild {
             // An inherited pipe can remain open in a grandchild. Dropping an
             // unfinished JoinHandle detaches it instead of blocking teardown.
         }
+    }
+}
+
+/// The direct child handle is authoritative, but Linux briefly exposes the
+/// pre-exec image through `/proc/<pid>/exe` while the forked child is entering
+/// the approved executable. Wait for that kernel-visible image to settle, or
+/// observe the exact child exit, before treating a path mismatch as identity
+/// substitution.
+fn ensure_spawn_identity(child: &mut Child, identity: &ProcessIdentity) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let deadline = Instant::now() + PROCESS_IDENTITY_SETTLE_TIMEOUT;
+        loop {
+            if observe_child_exit(child)?.is_some() {
+                return Ok(());
+            }
+            match std::fs::canonicalize(format!("/proc/{}/exe", identity.pid)) {
+                Ok(actual) if actual == identity.executable => {
+                    return ensure_identity(identity);
+                }
+                Ok(_) | Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(_) | Err(_) => return ensure_identity(identity),
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = child;
+        ensure_identity(identity)
     }
 }
 

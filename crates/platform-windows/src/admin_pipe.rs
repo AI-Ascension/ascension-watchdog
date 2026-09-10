@@ -1301,7 +1301,7 @@ fn current_user_sid() -> Result<String, PlatformError> {
     token_user_sid(token.raw())
 }
 
-fn process_user_sid(process: HANDLE) -> Result<String, PlatformError> {
+pub(crate) fn process_user_sid(process: HANDLE) -> Result<String, PlatformError> {
     let mut token = null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 {
         return Err(last_error("OpenProcessToken(pipe peer)"));
