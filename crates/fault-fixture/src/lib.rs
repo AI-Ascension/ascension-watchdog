@@ -7,12 +7,13 @@
 //! Its `SQLite` state models the important crash window where a host effect is
 //! durable before the receipt is durable.  An absent witness remains unknown.
 
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod transport;
@@ -1151,7 +1152,31 @@ pub struct DurableHost {
     // page locks serialize writes, but do not establish which fixture process
     // owns mutation authority.  A separate file avoids interfering with
     // SQLite's WAL file locks and is released by the OS after a crash.
-    _lock: File,
+    _lock: SidecarLock,
+}
+
+/// `fs2` uses the operating system's advisory lock, but Windows permits
+/// multiple handles from one process to acquire the same byte-range lock.
+/// Keep a small in-process registry as well so the fixture's ownership
+/// contract is identical on every supported platform.  The OS lock remains
+/// authoritative for competing processes.
+struct SidecarLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl Drop for SidecarLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+        if let Ok(mut registry) = sidecar_lock_registry().lock() {
+            registry.remove(&self.path);
+        }
+    }
+}
+
+fn sidecar_lock_registry() -> &'static Mutex<HashSet<PathBuf>> {
+    static REGISTRY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 type OperationRow = (
@@ -1338,6 +1363,15 @@ impl DurableHost {
         let database_path = validate_database_path(path)?;
         let lock_path = database_path.with_extension("sqlite.lock");
         validate_lock_path(&lock_path)?;
+        // Hold the registry guard through OS-lock acquisition so two threads
+        // in this process cannot both pass the check on platforms whose file
+        // locking is process-scoped (notably Windows).
+        let mut registry = sidecar_lock_registry()
+            .lock()
+            .map_err(|_| FixtureError::Invalid("database lock registry poisoned".to_owned()))?;
+        if registry.contains(&lock_path) {
+            return Err(FixtureError::Busy);
+        }
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -1596,9 +1630,14 @@ impl DurableHost {
             .map_err(FixtureError::Sql)?;
         transaction.commit().map_err(FixtureError::Sql)?;
         validate_database_integrity(&connection)?;
+        registry.insert(lock_path.clone());
+        drop(registry);
         Ok(Self {
             connection,
-            _lock: lock,
+            _lock: SidecarLock {
+                file: lock,
+                path: lock_path,
+            },
         })
     }
 
