@@ -8,6 +8,45 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 77
 fi
 
+watchdog=/opt/ascension-watchdog/current/watchdog
+config=/etc/ascension-watchdog/watchdog.json
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --watchdog)
+            [ "$#" -ge 2 ] || { printf '%s\n' 'missing --watchdog value' >&2; exit 64; }
+            watchdog=$2
+            shift 2
+            ;;
+        --config)
+            [ "$#" -ge 2 ] || { printf '%s\n' 'missing --config value' >&2; exit 64; }
+            config=$2
+            shift 2
+            ;;
+        *)
+            printf 'usage: uninstall.sh [--watchdog PATH] [--config PATH]\n' >&2
+            exit 64
+            ;;
+    esac
+done
+
+# A manager stop is not, by itself, durable watchdog intent: a forced service
+# termination could leave the store in Running mode and a later reinstall
+# could revive work. Require an existing owner binary/config, stop an active
+# unit, then inspect the same owner-local store before removing the unit.
+[ -x "$watchdog" ] || { printf '%s\n' "watchdog executable is missing: $watchdog" >&2; exit 66; }
+[ -f "$config" ] || { printf '%s\n' "watchdog configuration is missing: $config" >&2; exit 66; }
+if systemctl is-active --quiet ascension-watchdog.service; then
+    systemctl stop ascension-watchdog.service
+fi
+status_json=$("$watchdog" status --config "$config") || {
+    printf '%s\n' 'watchdog status could not prove the owner-local store is readable' >&2
+    exit 1
+}
+printf '%s' "$status_json" | jq -e '.desired_mode == "stopped"' >/dev/null || {
+    printf '%s\n' 'watchdog desired mode is not durably stopped; service definition was preserved' >&2
+    exit 1
+}
+
 systemctl disable ascension-watchdog.service >/dev/null 2>&1 || :
 systemctl daemon-reload
 rm -f -- /etc/systemd/system/ascension-watchdog.service

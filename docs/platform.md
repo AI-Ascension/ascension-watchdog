@@ -104,7 +104,10 @@ capture.
 
 The Linux install wrapper only prepares an already validated release under
 `/opt/ascension-watchdog/releases`, refuses links, installs the fixed unit, and
-does not start the service. It preserves state and releases on uninstall. The
-watchdog's release activation path must still perform byte/hash verification,
+does not start the service. `deploy/linux/uninstall.sh` stops an active unit,
+reads the same owner-local status through the installed watchdog binary, and
+removes the unit only after the durable desired mode is `stopped`; it accepts
+`--watchdog` and `--config` overrides for isolated installations and preserves
+state and releases. The watchdog's release activation path must still perform byte/hash verification,
 durable activation intent, atomic publication, interruption recovery and
 compatibility checks before this wrapper is called.
