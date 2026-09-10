@@ -64,20 +64,24 @@ impl LinuxBrokerConfig {
                     .to_owned(),
             ));
         }
-        #[cfg(unix)]
-        if ["/dev", "/proc", "/sys"]
-            .iter()
-            .any(|root| self.socket == Path::new(root) || self.socket.starts_with(root))
+        #[cfg(target_os = "linux")]
         {
-            return Err(WatchdogError::InvalidInput(
-                "Linux broker socket must use a protected service path".to_owned(),
-            ));
+            if ["/dev", "/proc", "/sys"]
+                .iter()
+                .any(|root| self.socket == Path::new(root) || self.socket.starts_with(root))
+            {
+                return Err(WatchdogError::InvalidInput(
+                    "Linux broker socket must use a protected service path".to_owned(),
+                ));
+            }
+            Ok(())
         }
         #[cfg(not(target_os = "linux"))]
-        return Err(WatchdogError::Unsupported(
-            "Linux broker selection is available only on Linux".to_owned(),
-        ));
-        Ok(())
+        {
+            Err(WatchdogError::Unsupported(
+                "Linux broker selection is available only on Linux".to_owned(),
+            ))
+        }
     }
 
     /// Convert the validated bounded value to the broker client's deadline.
