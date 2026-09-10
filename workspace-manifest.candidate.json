@@ -24,11 +24,11 @@
       "state": "open-draft"
     },
     "sts2-harness": {
-      "revision": "8b3bd55af5b917e92f8ec7f06676acd364ae6246",
-      "ref": "codex/harness-integrated-full",
+      "revision": "6fcd059b420a1099ec225a907ee3aea5e799f0e7",
+      "ref": "codex/harness-catalog-recovery-repair",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 50,
-      "state": "merged-head; merge-commit/live-consumer-verification-separate"
+      "pull_request": 53,
+      "state": "open; hosted-checks-pass; not-merged"
     },
     "sts2-mcp-server": {
       "revision": "6ad97aeead88cdb2097675ddff076bc4bb97529d",

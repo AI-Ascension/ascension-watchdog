@@ -10,9 +10,11 @@ fault-fixture branch is at `9083ffd87bdd5f60364df83db860c3e0b6912555`; the
 preceding source commit `572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c` had green
 hosted dependency, Ubuntu, Windows, and standards checks, while the current
 documentation-only head is awaiting its replacement run. The
-companion set includes open draft PRs and one merged harness PR head. No claim
-is made that these moving heads compose, install, activate, or run on a live
-host.
+companion set includes open draft PRs, the merged harness PR head, and the
+unmerged harness recovery-catalog PR #53 at
+`6fcd059b420a1099ec225a907ee3aea5e799f0e7`; that PR's hosted Rust and policy
+checks pass. No claim is made that these moving heads compose, install,
+activate, or run on a live host.
 
 Required next gate: rebuild and test this exact set together, verify immutable
 artifact digests, then run the separately authorized native Windows/Linux/WSL,
