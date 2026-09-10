@@ -99,10 +99,14 @@ impl SingletonLock {
     /// Acquire `<database>.lock` without deleting another owner's lock file.
     #[allow(clippy::suspicious_open_options)]
     pub fn acquire(database: impl AsRef<Path>) -> Result<Self> {
+        #[cfg(test)]
+        eprintln!("singleton lock: canonical database");
         let database = canonical_owner_path(database.as_ref(), "database")?;
         let path = lock_path(&database);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
+                #[cfg(test)]
+                eprintln!("singleton lock: create parent");
                 std::fs::create_dir_all(parent)?;
             }
         }
@@ -110,12 +114,16 @@ impl SingletonLock {
         // path after it exists and reject any link/reparse substitution before
         // opening the lock file.  The owner directory must still be protected
         // from untrusted writers; path checks alone cannot close a TOCTOU race.
+        #[cfg(test)]
+        eprintln!("singleton lock: canonical stable database");
         let stable_database = canonical_owner_path(&database, "database")?;
         if stable_database != database {
             return Err(WatchdogError::Conflict(
                 "database path changed while preparing owner lock".to_string(),
             ));
         }
+        #[cfg(test)]
+        eprintln!("singleton lock: canonical stable lock");
         let stable_lock = canonical_owner_path(&path, "lock")?;
         if stable_lock != path {
             return Err(WatchdogError::Conflict(
@@ -123,9 +131,18 @@ impl SingletonLock {
             ));
         }
         #[cfg(windows)]
+        #[cfg(test)]
+        eprintln!("singleton lock: open protected parent");
+        #[cfg(windows)]
         let protected_parent = open_protected_owner_directory(database.parent())?;
+        #[cfg(test)]
+        eprintln!("singleton lock: open lock file");
         let file = open_lock_file(&path)?;
+        #[cfg(test)]
+        eprintln!("singleton lock: validate lock handle");
         validate_opened_lock_handle(&path, &file)?;
+        #[cfg(test)]
+        eprintln!("singleton lock: acquire fs lock");
         file.try_lock_exclusive().map_err(|error| {
             if is_lock_contention(&error) {
                 WatchdogError::Busy(path.clone())
