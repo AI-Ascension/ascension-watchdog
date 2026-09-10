@@ -81,11 +81,12 @@ is implied by this source evidence.
 ## Follow-up wave, 2026-09-10
 
 The gateway response-classification repair `4c4d465a6cda59dee97e9932444f557bb51c7028`
+is included in current-main merge commit `7272c17f07e1d7e79c82f498eac0855794d476f5` and
 now maps malformed, oversized, unauthenticated, or otherwise invalid
 post-write host-lease replies to the durable `unknown` outcome, with 20 host-
 lease tests, 173 runtime tests, and 13 recovery-safety tests passing in its
 isolated worktree. This closes only that response-classification defect; the
-branch remains dirty against current gateway main and the host-ticket,
+current-main-based branch is clean/open draft and the host-ticket,
 execution-witness, and asynchronous-settlement findings remain open.
 
 The Linux watchdog repair `156917bd52adb302ba0d51d008f0ae44f8c896fb` also

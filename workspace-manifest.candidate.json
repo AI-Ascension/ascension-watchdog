@@ -18,11 +18,11 @@
       "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "sts2-gateway": {
-      "revision": "8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711",
+      "revision": "7272c17f07e1d7e79c82f498eac0855794d476f5",
       "ref": "codex/gateway-allocation-cleanup-integration",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 35,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "state": "open-draft; current-main-merged; hosted-checks-pass; not-merged"
     },
     "sts2-harness": {
       "revision": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",

@@ -39,13 +39,13 @@
       "remote": "included in hosted run 34480654731; the documentation-only follow-up is green in 34481427907"
     },
     "gateway": {
-      "commit": "4c4d465a6cda59dee97e9932444f557bb51c7028",
+      "commit": "7272c17f07e1d7e79c82f498eac0855794d476f5",
       "branch": "codex/gateway-allocation-cleanup-integration",
       "pr": 35,
-      "remote_head": "4c4d465a6cda59dee97e9932444f557bb51c7028",
+      "remote_head": "7272c17f07e1d7e79c82f498eac0855794d476f5",
       "change": "post-write malformed/oversized/unauthenticated host-lease replies remain durable unknown",
-      "verification": "20 host-lease, 173 runtime, and 13 recovery safety tests passed",
-      "delivery": "published; PR remains dirty/conflicting against current main; no merge"
+      "verification": "20 host-lease, 173 runtime, and 13 recovery safety tests passed; hosted Rust-quality and repository-policy checks passed in run 34482138328/34482138303",
+      "delivery": "published; merged current main without rewriting history; PR clean/open draft; no merge"
     },
     "harness": {
       "commit": "e1e33ec27b9f44e20515c5112f3b2a81acba50c3",

@@ -10,8 +10,10 @@ integration is draft PR #8 at
 `0935c66ddf4befe7fe7c17f3ba785af02057b3aa`, based on
 `codex/watchdog-integrated-20260910`. The serial all-feature workspace gate and
 hosted run `34480654731` (Ubuntu, Windows, standards, dependency audit, and
-locked release builds) passed at this exact tip. The gateway remains draft PR #35 at
-`8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711`. The harness follow-up is draft PR
+locked release builds) passed at this exact tip. Gateway draft PR #35 is now
+current-main-based at `7272c17f07e1d7e79c82f498eac0855794d476f5` with fresh
+Rust-quality and repository-policy checks green. It remains open and unmerged.
+The harness follow-up is draft PR
 #54 at `5798e3d0ecd6e64cbd1b6d354311be64a12f8929`, with its hosted checks
 green; it follows merged PR #50. MCP PR #37 at
 `16ca0cb06dc93564c14963bc544bef282b38d26d` is now merged as
