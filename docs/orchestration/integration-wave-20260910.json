@@ -5,11 +5,11 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "38252ddfc5eb4f47233bad80f153739728a43742",
+    "watchdog_commit": "acd4976c88eab958f4b6dcae657ab83ffe2baa91",
     "watchdog_source_tested_commit": "38252ddfc5eb4f47233bad80f153739728a43742",
     "watchdog_pr": 9,
-    "hosted_run": 34488892883,
-    "hosted_run_status_at_capture": "in-progress; standards run 34488892750 completed-success"
+    "hosted_runs": [34490693036, 34490693764],
+    "hosted_run_status_at_capture": "completed-success; both Linux/Windows Rust-synthetic runs and standards/dependency checks green"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -36,7 +36,7 @@
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
         "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (197 watchdog library tests, 4 ignored)"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation run 34488892883 in progress at capture"
+      "remote": "pushed to codex/watchdog-integrated-20260910; latest docs head acd4976; hosted validation runs 34490693036 and 34490693764 completed-success"
     },
     "gateway": {
       "commit": "7272c17f07e1d7e79c82f498eac0855794d476f5",
@@ -58,7 +58,7 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest pinned to tested watchdog source 0d4983c41156e55b722e5fa03a07b1de5c7ed666 and record the exact hosted run before advancing the candidate.",
+    "Keep candidate manifest source-pinned to tested watchdog commit 38252ddfc5eb4f47233bad80f153739728a43742 and retain latest docs head acd4976c88eab958f4b6dcae657ab83ffe2baa91 as PR metadata.",
     "Rebuild the exact current-main companion release set from gateway PR35, harness PR56, MCP PR37, game-mod PR70, and protocol PR31; run cross-consumer conformance before any runtime claim.",
     "Do not claim cross-repository runtime integration until gateway, harness, MCP, mod, and protocol revisions build together.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
