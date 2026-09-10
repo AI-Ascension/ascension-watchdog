@@ -52,7 +52,7 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"e91714c9028ebfc7012b2d5649997bb10a866233","pull_request":8,"status":"draft; hosted checks rerun after Windows API and Linux test repairs"},
+    "watchdog": {"commit":"10eac2975c6ad482cef31ee1b3d060db3757f4d7","pull_request":8,"status":"draft; docs-only tip after serial all-feature gate; hosted checks rerun pending"},
     "harness": {"commit":"5798e3d0ecd6e64cbd1b6d354311be64a12f8929","pull_request":54,"status":"draft; hosted checks passed"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
     "gateway": {"commit":"8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711","pull_request":35,"status":"draft; hosted checks passed"},

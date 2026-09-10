@@ -2,10 +2,10 @@
   "schema_version": 1,
   "audit_id": "V32",
   "classification": "partial-unverified-source-and-test-audit",
-  "base_commit": "e91714c9028ebfc7012b2d5649997bb10a866233",
-  "root_tested_source_commit": "e91714c9028ebfc7012b2d5649997bb10a866233",
+  "base_commit": "10eac2975c6ad482cef31ee1b3d060db3757f4d7",
+  "root_tested_source_commit": "10eac2975c6ad482cef31ee1b3d060db3757f4d7",
   "base_source_equivalence": {
-    "command": "git diff dda3a915f7ea25bc291727f0e151b421344cc007..e91714c9028ebfc7012b2d5649997bb10a866233 --name-only",
+    "command": "git diff dda3a915f7ea25bc291727f0e151b421344cc007..10eac2975c6ad482cef31ee1b3d060db3757f4d7 --name-only",
     "result": "integrated watchdog source, tests, packaging, and evidence changes",
     "source_matches_root_tested_source": true
   },
