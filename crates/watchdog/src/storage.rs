@@ -319,13 +319,7 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
         for attempt in 0..ATTEMPTS {
             match fs::rename(staging, destination) {
                 Ok(()) => return Ok(()),
-                Err(error)
-                    if attempt + 1 < ATTEMPTS
-                        && matches!(
-                            error.kind(),
-                            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
-                        ) =>
-                {
+                Err(error) if attempt + 1 < ATTEMPTS && restore_publish_retryable(&error) => {
                     let stable = canonical_owner_path(staging, "restore staging")?;
                     if stable != staging {
                         return Err(WatchdogError::Conflict(
@@ -348,10 +342,7 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
                     // leave only an unvalidated file, and subsequent restore
                     // attempts refuse any existing destination so it cannot
                     // be mistaken for an admitted database or overwritten.
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
-                    ) {
+                    if restore_publish_retryable(&error) {
                         let rename_error = format!(
                             "restore staging publication {} -> {}: {error}",
                             staging.display(),
@@ -396,6 +387,14 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
         fs::rename(staging, destination)?;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn restore_publish_retryable(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+    ) || matches!(error.raw_os_error(), Some(5 | 32 | 33 | 1224))
 }
 
 #[cfg(windows)]
