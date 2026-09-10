@@ -29,12 +29,13 @@ written; hosted Windows execution and service installation remain unverified.
 No SCM service, named-pipe production endpoint, game, provider, reboot, or
 live host was started.
 
-## Exact hosted rerun
+## Exact hosted reruns
 
 After the source repair, PR #8 head `c472f3aab726fa2871b46aede6d1985be4e57dae`
 passed hosted run `34478258456`: Ubuntu and Windows formatting, strict Clippy,
 all-target/all-feature locked workspace tests, exact locked release builds,
 standards validation, and dependency/license checks all exited successfully.
-This is hosted CI evidence only; no Windows service, native SCM/Job Object
-execution, WSL run, game/provider launch, reboot, or live-host recovery was
-performed.
+The follow-up documentation-only head `8edd86d954f8246eeb14e1beeb7e839dab141ef1`
+also passed hosted run `34479326456` with the same required jobs. These are
+hosted CI results only; no Windows service, native SCM/Job Object execution,
+WSL run, game/provider launch, reboot, or live-host recovery was performed.
