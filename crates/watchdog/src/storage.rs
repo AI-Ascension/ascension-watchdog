@@ -284,7 +284,7 @@ impl RestoreStagingFile {
         // rename while any handle to the source lacks delete sharing, even
         // though the database connection itself has already been dropped.
         drop(file);
-        fs::rename(&self.path, destination)?;
+        publish_restore_staging(&self.path, destination)?;
         self.committed = true;
         #[cfg(unix)]
         if let Some(parent) = destination.parent()
@@ -292,6 +292,47 @@ impl RestoreStagingFile {
         {
             File::open(parent)?.sync_all()?;
         }
+        Ok(())
+    }
+}
+
+/// Publish a fully-validated restore database without widening the operation
+/// into an overwrite.  Windows security software and SQLite's last shared
+/// mapping can briefly retain a handle after the explicit close above.  A
+/// short, bounded retry handles that local handoff race while revalidating the
+/// exact staging path on every attempt; all other errors remain fail-closed.
+fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        const ATTEMPTS: usize = 20;
+        for attempt in 0..ATTEMPTS {
+            match fs::rename(staging, destination) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if attempt + 1 < ATTEMPTS
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    let stable = canonical_owner_path(staging, "restore staging")?;
+                    if stable != staging {
+                        return Err(WatchdogError::Conflict(
+                            "restore staging path changed during publication".to_owned(),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(WatchdogError::Conflict(
+            "restore staging publication remained unavailable after bounded retries".to_owned(),
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(staging, destination)?;
         Ok(())
     }
 }

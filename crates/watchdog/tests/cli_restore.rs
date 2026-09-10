@@ -2,7 +2,42 @@ use ascension_watchdog::cli;
 use ascension_watchdog::config::{DesiredMode, WatchdogConfig};
 use ascension_watchdog::storage::Store;
 use serde_json::Value;
+use std::path::Path;
+#[cfg(windows)]
+use std::process::Command;
 use tempfile::tempdir;
+
+#[cfg(windows)]
+fn protect_config(path: &Path) {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
+            "#,
+        ])
+        .env("ASCENSION_TEST_CONFIG_PATH", path)
+        .status()
+        .expect("apply protected config ACL");
+    assert!(
+        status.success(),
+        "PowerShell failed to apply protected config ACL"
+    );
+}
+
+#[cfg(not(windows))]
+fn protect_config(_path: &Path) {}
 
 #[test]
 fn restore_cli_requires_explicit_rekey_without_creating_destination() {
@@ -29,6 +64,7 @@ fn restore_cli_requires_explicit_rekey_without_creating_destination() {
     restore_config
         .to_file(&config_path)
         .expect("restore config");
+    protect_config(&config_path);
     let error = cli::execute(vec![
         "restore".to_owned(),
         "--config".to_owned(),
@@ -68,6 +104,7 @@ fn restore_cli_rekeys_and_keeps_restored_work_blocked() {
     restore_config
         .to_file(&config_path)
         .expect("restore config");
+    protect_config(&config_path);
     let output = cli::execute(vec![
         "restore".to_owned(),
         "--config".to_owned(),
