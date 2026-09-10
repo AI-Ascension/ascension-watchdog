@@ -28,9 +28,10 @@ pub use admin_pipe::{
 mod native;
 #[cfg(windows)]
 pub use native::{
-    ActiveSession, JobOwnedProcess, NamedPipePeer, NamedPipeServer, ScmHealthChecker,
-    ServiceBinding, ServiceInstallPlan, ServiceRuntime, StopOutcome, StoppedServiceWitness,
-    WindowsLaunchError, WindowsProcessLauncher, executable_sha256, select_active_session,
+    ActiveSession, JobOwnedProcess, NamedPipePeer, NamedPipeServer, ProtectedDirectoryHandle,
+    ScmHealthChecker, ServiceBinding, ServiceInstallPlan, ServiceRuntime, StopOutcome,
+    StoppedServiceWitness, WindowsLaunchError, WindowsProcessLauncher, executable_sha256,
+    open_protected_directory, select_active_session,
 };
 
 /// Report whether this crate's native Windows boundary is available.

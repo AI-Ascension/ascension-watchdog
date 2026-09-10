@@ -45,7 +45,8 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE,
+    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetFileInformationByHandle,
     GetFileSizeEx, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, ReadFile, WriteFile,
 };
@@ -2430,6 +2431,45 @@ fn service_entry(
 
 #[derive(Debug)]
 struct OwnedHandle(HANDLE);
+
+/// A retained handle to an owner-local directory. The watchdog storage layer
+/// keeps this opaque value alive while its lock file is authoritative.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ProtectedDirectoryHandle(OwnedHandle);
+
+/// Open one exact local directory with a no-write/no-delete share boundary.
+pub fn open_protected_directory(path: &Path) -> Result<ProtectedDirectoryHandle, PlatformError> {
+    let wide_path = wide_path(path)?;
+    let raw = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    let handle = OwnedHandle::new(raw, "CreateFileW(owner directory)")?;
+    let mut information =
+        windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(handle.raw(), &raw mut information) } == 0 {
+        return Err(last_error("GetFileInformationByHandle(owner directory)"));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(PlatformError::Invalid(
+            "owner lock parent must be a directory".to_owned(),
+        ));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(PlatformError::IdentityMismatch(
+            "owner lock parent must not be a reparse point".to_owned(),
+        ));
+    }
+    Ok(ProtectedDirectoryHandle(handle))
+}
 
 impl OwnedHandle {
     fn new(raw: HANDLE, operation: &str) -> Result<Self, PlatformError> {

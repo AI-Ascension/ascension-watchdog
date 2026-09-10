@@ -86,7 +86,7 @@ struct LockInner {
     // check rather than an unstable MetadataExt method.
     #[cfg(windows)]
     #[allow(dead_code)]
-    protected_parent: File,
+    protected_parent: ascension_platform_windows::ProtectedDirectoryHandle,
 }
 
 impl Drop for LockInner {
@@ -218,20 +218,14 @@ fn open_lock_file(path: &Path) -> Result<File> {
 }
 
 #[cfg(windows)]
-fn open_protected_owner_directory(path: Option<&Path>) -> Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+fn open_protected_owner_directory(
+    path: Option<&Path>,
+) -> Result<ascension_platform_windows::ProtectedDirectoryHandle> {
     let path = path.ok_or_else(|| {
         WatchdogError::InvalidInput("database path has no owner-local parent".to_string())
     })?;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
-    Ok(options.open(path)?)
+    ascension_platform_windows::open_protected_directory(path)
+        .map_err(|error| WatchdogError::Io(std::io::Error::other(error)))
 }
 
 fn ensure_owner_lock(database: &Path, owner: &SingletonLock) -> Result<()> {
