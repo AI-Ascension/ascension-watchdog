@@ -163,14 +163,15 @@ fixture/process fact and never means native, live, reboot, or release proof.
 ## Current-wave addendum — 2026-09-10
 
 The historical matrix above remains intentionally conservative. The current
-watchdog docs head is `c271f0a3284566af41f6c47ef6ebc21e52cf854c`, with the
-source-tested implementation at `5b235f9524ecbb9529392dafee2328545666f356`.
+watchdog docs head is `92619c4c85984256a64c7387e0949d7d737401e1`, with the
+source-tested implementation parent at `5b235f9524ecbb9529392dafee2328545666f356`.
 Pinned-toolchain checks passed: standards validation, format, strict Clippy,
 200 watchdog library tests, all workspace integration suites, the two restore
-CLI tests, and the namespace-isolated Linux installer test (4 expected tests
-ignored). Hosted validation and standards runs
-`34510904205`, `34510905823`, `34510904309`, and `34510905804` passed. The
-hosted service-session step remains explicitly `UNVERIFIED` on runner session 2.
+CLI tests, the namespace-isolated Linux installer test, and the current
+10-case adversarial suite (4 expected workspace tests ignored). Hosted
+validation run `34514320447` and standards run `34514322142` passed. The
+hosted service-session step remains explicitly `UNVERIFIED` on runner session 2;
+the session-0 tests did not execute.
 
 The refreshed current-main companion set is gateway
 `de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including #37), harness
@@ -199,7 +200,7 @@ record, exact current refs, component gates, artifact comparison, and boundary.
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
 `SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
-`c271f0a`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`92619c4`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and

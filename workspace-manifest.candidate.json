@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
-      "last_observed_pr_head": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+      "revision": "92619c4c85984256a64c7387e0949d7d737401e1",
+      "last_observed_pr_head": "92619c4c85984256a64c7387e0949d7d737401e1",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; docs head c271f0a records source-tested implementation 5b235f9, bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, and atomic no-replace hardlink fallback for transient sharing errors (no streaming copy); hosted-checks-pass-runs-34510904205-34510905823 and standards-runs-34510904309-34510905804; mergeable; not-merged"
+      "state": "open-draft; docs head 92619c4 records source-tested implementation 5b235f9, bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, atomic no-replace hardlink fallback for transient sharing errors (no streaming copy), current-source conformance and coop artifact comparison boundary; hosted-checks-pass-run-34514320447 and standards-run-34514322142; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
@@ -73,8 +73,8 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34510068432, 34510068442],
-    "hosted_watchdog_status_at_capture": "success-at-5b235f9; Ubuntu, Windows, dependency, and standards jobs passed; Windows service-session step reported UNVERIFIED because the hosted runner used session 2",
+    "hosted_watchdog_runs": [34514320447],
+    "hosted_watchdog_status_at_capture": "success-at-92619c4; Ubuntu, Windows, dependency, and standards jobs passed; Windows service-session step reported UNVERIFIED because the hosted runner used session 2",
     "live_host": "not-run",
     "cold_boot": "not-run",
     "soak": "not-run"

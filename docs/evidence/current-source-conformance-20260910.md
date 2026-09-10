@@ -9,7 +9,7 @@ cold-boot, or soak claim.
 
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
-| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `c271f0a3284566af41f6c47ef6ebc21e52cf854c` | open draft; implementation parent `5b235f9524ecbb9529392dafee2328545666f356` |
+| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `92619c4c85984256a64c7387e0949d7d737401e1` | open draft; docs-only follow-on over implementation parent `5b235f9524ecbb9529392dafee2328545666f356` |
 | sts2-gateway | `main` / PR #38 | `de1fe72345ea972d56c05d30837da5327e5f1655` | merged; PR #37 included |
 | sts2-harness | `main` / PR #59 | `5cc486a66b6f11930675af06f7426cd91c609983` | merged |
 | sts2-mcp-server | `main` / PR #37 | `8b6b73862494488fdd16fa5423fdf90a953260f4` | merged |
@@ -20,7 +20,9 @@ cold-boot, or soak claim.
 
 The revisions were checked against the remote `main` refs and the listed PR
 metadata before this record was written. Open PR #9 is intentionally still
-separate from the merged companion revisions.
+separate from the merged companion revisions. The selected watchdog source
+was unchanged after `92619c4`; the follow-on commit only refreshes evidence
+and does not alter the tested implementation.
 
 ## Component gates
 
@@ -36,9 +38,9 @@ components with pinned locked dependencies:
   --all-features --no-fail-fast -- --test-threads=1`: 200 passed and 4
   explicitly ignored. The restore CLI (2 tests) and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 hosted validation and standards runs
-  `34510904205`, `34510905823`, `34510904309`, and `34510905804` passed. The
-  hosted service-session step reported `UNVERIFIED` on runner session 2.
+* Watchdog PR #9 hosted validation run `34514320447` and standards run
+  `34514322142` passed for source head `92619c4`. The hosted service-session
+  step reported `UNVERIFIED` on runner session 2.
 * Gateway PR #38 hosted quality and policy runs `34510597219` and
   `34510597283` passed. A broader parallel local attempt exposed timing-sensitive
   fixture failures; the serial runtime/workspace results above are the accepted

@@ -70,3 +70,19 @@ The drop-based persisted-child test now passes because ordinary controller
 destruction cleans its child. This is **not** proof of abrupt owner-death
 recovery: destructor execution must not be assumed during a process kill.
 Native cgroup/Job owner-death tests remain required.
+
+## Current integrated rerun — 2026-09-10
+
+The complete adversarial regression target was rerun on the current integrated
+branch (`92619c4`) with the pinned toolchain:
+
+```text
+cargo +1.97.1 test --locked --offline -p ascension-watchdog --test adversarial_core -- --nocapture
+```
+
+Result: **10 passed, 0 failed, 0 ignored**. This includes the persisted-child,
+post-spawn failure, stale-health, wall-clock budget, read-only race, descendant
+containment, restore identity, corrupt-metadata, and exact-group cleanup cases.
+The result is deterministic Linux/synthetic process evidence only; it does not
+establish native Windows Job Object or Linux cgroup owner-death recovery,
+installed-service behavior, live-host recovery, reboot, or soak validation.

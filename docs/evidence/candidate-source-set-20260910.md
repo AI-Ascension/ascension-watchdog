@@ -7,12 +7,12 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 
 The pins were refreshed from remote PR and branch metadata on 2026-09-10. The
 watchdog integration branch is draft PR #9 at docs head
-`c271f0a3284566af41f6c47ef6ebc21e52cf854c` (source-tested implementation
+`92619c4c85984256a64c7387e0949d7d737401e1` (source-tested implementation
 `5b235f9524ecbb9529392dafee2328545666f356`); the root reran the locked
-workspace, restore, and Linux installer checks at the docs head. Hosted
-validation runs `34510904205`/`34510905823` and standards runs
-`34510904309`/`34510905804` passed. The hosted service-session step was
-explicitly `UNVERIFIED` on runner session 2; it is not native service proof.
+workspace, restore, Linux installer, and adversarial checks at the current
+source head. Hosted validation run `34514320447` and standards run
+`34514322142` passed. The hosted service-session step was explicitly
+`UNVERIFIED` on runner session 2; it is not native service proof.
 
 The selected current-main companion revisions are gateway
 `de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including PR #37), harness
