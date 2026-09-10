@@ -327,6 +327,46 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 Err(error) => {
+                    // Some Windows hosts keep the parent directory open
+                    // without FILE_SHARE_DELETE (for example a test
+                    // harness' temporary-directory guard).  In that case a
+                    // rename can remain denied even after every SQLite
+                    // handle has closed.  First try an atomic no-replace hard
+                    // link, which needs directory create permission but not
+                    // delete sharing.  If the filesystem does not support
+                    // that operation, use the bounded fixed-handle copy
+                    // fallback below.  CREATE_NEW prevents overwriting a
+                    // concurrent destination; a crash during that copy can
+                    // leave only an unvalidated file, and subsequent restore
+                    // attempts refuse any existing destination so it cannot
+                    // be mistaken for an admitted database or overwritten.
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+                    ) {
+                        let rename_error = format!(
+                            "restore staging publication {} -> {}: {error}",
+                            staging.display(),
+                            destination.display()
+                        );
+                        if let Ok(()) = fs::hard_link(staging, destination) {
+                            let _ = fs::remove_file(staging);
+                            return Ok(());
+                        }
+                        return match copy_restore_staging_without_rename(staging, destination) {
+                            Ok(()) => Ok(()),
+                            Err(copy_error) => {
+                                let detail = format!(
+                                    "{rename_error}; no-replace copy fallback: {copy_error}"
+                                );
+                                let kind = match copy_error {
+                                    WatchdogError::Io(error) => error.kind(),
+                                    _ => std::io::ErrorKind::Other,
+                                };
+                                Err(WatchdogError::Io(std::io::Error::new(kind, detail)))
+                            }
+                        };
+                    }
                     return Err(WatchdogError::Io(std::io::Error::new(
                         error.kind(),
                         format!(
@@ -348,6 +388,56 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
         fs::rename(staging, destination)?;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn copy_restore_staging_without_rename(staging: &Path, destination: &Path) -> Result<()> {
+    use std::io::copy;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+
+    // Keep the source identity bound to this open handle.  The path is only
+    // used for diagnostics; a replacement after this open cannot change the
+    // bytes copied below.
+    let mut source = OpenOptions::new().read(true).open(staging)?;
+    let source_metadata = source.metadata()?;
+    if !source_metadata.is_file() {
+        return Err(WatchdogError::Conflict(
+            "restore staging source is not a regular file".to_owned(),
+        ));
+    }
+    let expected_bytes = source_metadata.len();
+
+    // CREATE_NEW is the no-overwrite boundary.  Read/write sharing permits
+    // normal post-copy inspection while withholding delete sharing so a
+    // concurrent replacement cannot unlink the newly published destination.
+    let mut options = OpenOptions::new();
+    options
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    let mut target = options.open(destination)?;
+    copy(&mut source, &mut target)?;
+    target.sync_all()?;
+    let actual_bytes = target.metadata()?.len();
+    if actual_bytes != expected_bytes {
+        return Err(WatchdogError::Conflict(
+            "no-replace restore publication copied an unexpected byte length".to_owned(),
+        ));
+    }
+    drop(target);
+
+    // The source is disposable staging state.  Directory sharing may still
+    // deny its unlink on the same hosts that denied rename; leaving that
+    // uniquely named file is harmless and, importantly, never removes an
+    // operator-selected path.  The destination is already durable and the
+    // caller marks the staging guard committed only after this function
+    // returns.
+    let _ = fs::remove_file(staging);
+    Ok(())
 }
 
 impl Drop for RestoreStagingFile {
