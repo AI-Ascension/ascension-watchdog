@@ -3239,7 +3239,7 @@ mod tests {
         let mut service_config = service_config;
         service_config.executable_path = crate::service_command::render_service_command_line(
             executable.to_string_lossy().as_ref(),
-            expected_config.to_string_lossy().as_ref(),
+            expected_canonical.to_string_lossy().as_ref(),
         )
         .into();
         for start_type in [ServiceStartType::OnDemand, ServiceStartType::Disabled] {

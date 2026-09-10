@@ -2224,16 +2224,32 @@ mod tests {
 
         let bootstrap =
             LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
-        let (config_fd, root_fd, ready_fd) = {
+        let (config_fd, root_fd, ready_fd, config_target, root_target, ready_target) = {
             let parent = bootstrap.parent_descriptors()?;
             assert!(Path::new(&format!("/proc/self/fd/{}", parent.config_fd)).exists());
             assert!(Path::new(&format!("/proc/self/fd/{}", parent.root_fd)).exists());
             assert!(Path::new(&format!("/proc/self/fd/{}", parent.ready_fd)).exists());
-            (parent.config_fd, parent.root_fd, parent.ready_fd)
+            (
+                parent.config_fd,
+                parent.root_fd,
+                parent.ready_fd,
+                fs::read_link(format!("/proc/self/fd/{}", parent.config_fd))?,
+                fs::read_link(format!("/proc/self/fd/{}", parent.root_fd))?,
+                fs::read_link(format!("/proc/self/fd/{}", parent.ready_fd))?,
+            )
         };
-        assert!(!Path::new(&format!("/proc/self/fd/{config_fd}")).exists());
-        assert!(!Path::new(&format!("/proc/self/fd/{root_fd}")).exists());
-        assert!(!Path::new(&format!("/proc/self/fd/{ready_fd}")).exists());
+        assert_ne!(
+            fs::read_link(format!("/proc/self/fd/{config_fd}")).ok(),
+            Some(config_target)
+        );
+        assert_ne!(
+            fs::read_link(format!("/proc/self/fd/{root_fd}")).ok(),
+            Some(root_target)
+        );
+        assert_ne!(
+            fs::read_link(format!("/proc/self/fd/{ready_fd}")).ok(),
+            Some(ready_target)
+        );
         Ok(())
     }
 

@@ -68,9 +68,35 @@ fn digest(path: &Path) -> String {
     hex_digest(&hasher.finalize())
 }
 
+fn wait_for_peer_executable(pid: u32) -> PathBuf {
+    let expected = fs::canonicalize("/usr/bin/sleep").expect("peer fixture executable path");
+    let proc_executable = format!("/proc/{pid}/exe");
+    for _ in 0..1_000 {
+        if let Ok(executable) = fs::read_link(&proc_executable) {
+            if executable == expected {
+                return executable;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("peer fixture process did not reach its executable");
+}
+
+fn peer_fixture() -> (PathBuf, String) {
+    let mut child = std::process::Command::new("/usr/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("peer fixture process");
+    let executable = wait_for_peer_executable(child.id());
+    let executable_sha256 = digest(&executable);
+    let _ = child.kill();
+    let _ = child.wait();
+    (executable, executable_sha256)
+}
+
 fn policy() -> BrokerPolicy {
     let executable = fs::canonicalize("/usr/bin/true").expect("fixture executable path");
-    let peer_executable = fs::canonicalize("/usr/bin/sleep").expect("peer fixture executable path");
+    let (peer_executable, peer_executable_sha256) = peer_fixture();
     let peer_user_id = rustix::process::getuid().as_raw();
     let peer_group_id = rustix::process::getgid().as_raw();
     let distinct_nonzero = |value: u32| {
@@ -104,7 +130,7 @@ fn policy() -> BrokerPolicy {
         uid: peer_user_id,
         gid: peer_group_id,
         executable: peer_executable.clone(),
-        executable_sha256: digest(&peer_executable),
+        executable_sha256: peer_executable_sha256,
     };
     BrokerPolicy::new(peer, BTreeMap::from([(BrokerComponent::Synthetic, launch)]))
         .expect("valid fixture policy")
@@ -115,6 +141,7 @@ fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) 
         .arg("30")
         .spawn()
         .expect("peer fixture process");
+    assert_eq!(wait_for_peer_executable(child.id()), policy.peer.executable);
     (
         PeerCredentials {
             pid: child.id(),

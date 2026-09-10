@@ -784,7 +784,7 @@ fn open_protected_ancestors(path: &Path) -> Result<Vec<OwnedHandle>, PlatformErr
                 let raw = unsafe {
                     CreateFileW(
                         wide.as_ptr(),
-                        FILE_READ_ATTRIBUTES | READ_CONTROL,
+                        GENERIC_READ | READ_CONTROL,
                         // Retain read sharing only: write access could change
                         // reparse metadata after this ancestor was validated.
                         FILE_SHARE_READ,
