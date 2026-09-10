@@ -319,13 +319,18 @@ mod tests {
     use super::*;
 
     fn specification() -> LaunchSpec {
+        // `Path::is_absolute` follows the host platform's path grammar.  A
+        // direct launch specification is host-native, so use the test
+        // process itself instead of a Unix-only fixture path when this unit
+        // test runs on Windows.
+        let executable = std::env::current_exe().expect("test executable path");
         LaunchSpec {
             deployment_id: "deployment-1".to_owned(),
             instance_id: "instance-1".to_owned(),
             component: ComponentKind::Synthetic,
             incarnation: "incarnation-1".to_owned(),
             launch_nonce: "nonce-1".to_owned(),
-            executable: PathBuf::from("/bin/true"),
+            executable,
             executable_sha256: "a".repeat(64),
             arguments: Vec::new(),
             working_directory: None,

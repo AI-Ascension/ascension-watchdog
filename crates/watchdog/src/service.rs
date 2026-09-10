@@ -204,7 +204,11 @@ mod tests {
 
     #[test]
     fn scm_stop_is_persisted_before_a_stopped_reconciliation() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        // The Windows owner lock retains a directory handle.  Keep this
+        // fixture on the checked-out local volume rather than a runner's
+        // potentially redirected TEMP tree, whose parent can reject the
+        // backup-semantics handle with ERROR_INVALID_FUNCTION.
+        let directory = tempfile::tempdir_in(std::env::current_dir()?)?;
         let config = WatchdogConfig {
             database: directory.path().join("watchdog.sqlite3"),
             desired_mode: DesiredMode::Running,

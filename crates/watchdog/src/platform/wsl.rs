@@ -29,7 +29,12 @@ impl WslInvocation {
                 "distribution is invalid".to_owned(),
             ));
         }
-        if !self.executable.is_absolute() || self.executable.as_os_str().is_empty() {
+        // This path is interpreted inside the Linux WSL distribution, not by
+        // the Windows host.  `Path::is_absolute` would reject `/opt/...` on
+        // Windows because it applies Windows drive/UNC rules, so validate the
+        // WSL path grammar textually at this boundary.
+        let executable = self.executable.to_string_lossy();
+        if executable.is_empty() || !executable.starts_with('/') {
             return Err(WslInvocationError::Invalid(
                 "WSL executable must be an absolute path".to_owned(),
             ));

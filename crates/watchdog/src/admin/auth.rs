@@ -44,6 +44,21 @@ impl AuthReferences {
         Ok(references)
     }
 
+    /// Build references for transport-configuration unit tests without
+    /// requiring credential files.  Those tests exercise endpoint and worker
+    /// policy; authentication-file admission is covered by the integration
+    /// fixtures that create protected credentials.
+    #[cfg(all(test, windows))]
+    pub(crate) fn for_test(
+        read_token_path: impl Into<PathBuf>,
+        admin_token_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            read_token_path: read_token_path.into(),
+            admin_token_path: admin_token_path.into(),
+        }
+    }
+
     /// Read-only reference to the configured read token path for diagnostics.
     /// The path is not included in status responses by this module.
     #[must_use]

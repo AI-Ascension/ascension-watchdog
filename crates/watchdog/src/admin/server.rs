@@ -824,7 +824,11 @@ mod windows_config_tests {
 
     #[test]
     fn exclusive_endpoint_defaults_to_one_worker_and_rejects_more() -> Result<()> {
-        let auth = AuthReferences::new(r"C:\watchdog\read.token", r"C:\watchdog\admin.token")?;
+        let executable = std::env::current_exe()?;
+        let auth = AuthReferences::for_test(
+            executable.with_file_name("read.token"),
+            executable.with_file_name("admin.token"),
+        );
         let config = AdminServerConfig::new(r"\\.\pipe\ascension-watchdog-config-test", auth)?;
         assert_eq!(config.worker_count, 1);
         assert!(config.with_worker_count(2).is_err());
