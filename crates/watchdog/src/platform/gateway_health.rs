@@ -185,7 +185,6 @@ impl GatewayHealthBootstrap {
             ));
         }
         let expected = parse_canonical_nonce(&specification.launch_nonce)?;
-        specification.validate()?;
         if expected != self.launch_nonce {
             return Err(AdapterError::IdentityMismatch(
                 GatewayHealthBootstrapError::NonceMismatch.to_string(),
