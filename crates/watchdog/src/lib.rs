@@ -41,7 +41,7 @@ pub mod worker_client;
 pub mod worker_endpoint;
 pub mod worker_protocol;
 
-pub use config::{ComponentConfig, DesiredMode, WatchdogConfig};
+pub use config::{ComponentConfig, DesiredMode, ReleaseCatalogConfig, WatchdogConfig};
 pub use error::{Result, WatchdogError};
 pub use policy::{
     ComponentObservation, ComponentState, ReconcileAction, ReconcileDecision, SupervisorPolicy,

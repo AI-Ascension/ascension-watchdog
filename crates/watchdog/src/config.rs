@@ -4,7 +4,7 @@ use crate::error::{Result, WatchdogError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[path = "config_file.rs"]
 mod config_file;
@@ -177,6 +177,62 @@ impl AdminConfig {
     }
 }
 
+/// Explicit owner-local root for authenticated read-only release inspection.
+///
+/// The root is a configuration reference, not a filesystem proof. The
+/// release-inspection boundary opens it again with no-follow descriptors and
+/// checks this independently supplied owner UID before returning any result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseCatalogConfig {
+    /// Absolute, normalized directory containing logical release IDs.
+    pub root: PathBuf,
+    /// Unix owner approved by deployment policy for the catalog tree.
+    /// Windows rejects the protected inspection operation before using it.
+    pub owner_uid: u64,
+}
+
+impl ReleaseCatalogConfig {
+    /// Validate syntax and bounds without opening or creating filesystem state.
+    pub fn validate(&self) -> Result<()> {
+        validate_local_path(&self.root, "release catalog root")?;
+        if !self.root.is_absolute()
+            || self.root.as_os_str().is_empty()
+            || self.root.to_string_lossy().len() > 4 * 1024
+            || self.root.file_name().is_none()
+        {
+            return Err(WatchdogError::InvalidInput(
+                "release catalog root must be a bounded absolute directory path".to_owned(),
+            ));
+        }
+        let mut normalized = PathBuf::new();
+        for component in self.root.components() {
+            match component {
+                Component::CurDir | Component::ParentDir => {
+                    return Err(WatchdogError::InvalidInput(
+                        "release catalog root must be normalized without dot or traversal components"
+                            .to_owned(),
+                    ));
+                }
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                    normalized.push(component.as_os_str());
+                }
+            }
+        }
+        if normalized != self.root {
+            return Err(WatchdogError::InvalidInput(
+                "release catalog root must be normalized without aliases".to_owned(),
+            ));
+        }
+        if self.owner_uid > u64::from(u32::MAX) {
+            return Err(WatchdogError::InvalidInput(
+                "release catalog owner UID is outside the platform bound".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Top-level watchdog configuration.  Unknown fields are rejected so a typo
 /// cannot silently weaken an admission or process policy.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -252,6 +308,10 @@ pub struct WatchdogConfig {
     /// Approved gateway health binding; its key and nonce are generated per launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_health: Option<GatewayHealthConfig>,
+    /// Explicit owner-local release catalog used by authenticated read-only
+    /// release inspection. Absence keeps that admin operation unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_catalog: Option<ReleaseCatalogConfig>,
     /// Normalized absolute source path captured when this configuration was loaded from
     /// disk.  It is deliberately not part of the serialized configuration or
     /// its digest; native launch admission uses it only as a protected,
@@ -286,6 +346,7 @@ impl Default for WatchdogConfig {
             admin: None,
             worker: None,
             gateway_health: None,
+            release_catalog: None,
             source_path: None,
         }
     }
@@ -330,6 +391,9 @@ impl WatchdogConfig {
         }
         if let Some(health) = &self.gateway_health {
             health.validate(self)?;
+        }
+        if let Some(catalog) = &self.release_catalog {
+            catalog.validate()?;
         }
         if self.schema_version != 1 {
             return Err(WatchdogError::InvalidInput(format!(
@@ -539,7 +603,13 @@ fn validate_local_path(path: &Path, name: &str) -> Result<()> {
         .to_string_lossy()
         .replace('\\', "/")
         .to_ascii_lowercase();
-    if text.starts_with("/mnt/") || text.starts_with("//wsl") || text.contains("/proc/") {
+    if matches!(text.as_str(), "/mnt" | "/proc" | "/sys" | "/dev")
+        || text.starts_with("/mnt/")
+        || text.starts_with("//wsl")
+        || text.starts_with("/proc/")
+        || text.starts_with("/sys/")
+        || text.starts_with("/dev/")
+    {
         return Err(WatchdogError::InvalidInput(format!(
             "{name} must be owner-local, not a shared mount or proc path"
         )));

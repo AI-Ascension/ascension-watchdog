@@ -170,6 +170,29 @@ impl ReleaseRoleBinding {
     }
 }
 
+/// Read-only evidence returned by the protected catalog inspector.
+///
+/// The manifest digest is the SHA-256 of the exact bytes read from the fixed
+/// manifest handle. `compatible` means that the manifest is structurally
+/// valid, its fixed roles match the configured component bindings, and its
+/// configuration digest equals the current watchdog configuration digest. It
+/// does not approve activation or establish gateway, harness, provider, or
+/// game runtime readiness.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectedReleaseInspection {
+    /// Logical release identifier selected below the configured catalog root.
+    pub release_id: String,
+    /// SHA-256 of the exact on-disk manifest bytes, including whitespace.
+    pub manifest_digest: String,
+    /// Number of fixed executable roles in the validated manifest.
+    pub artifact_count: usize,
+    /// Sum of manifest-declared role byte lengths.
+    pub total_bytes: u64,
+    /// Whether the release's configuration identity and configured role paths
+    /// match the current watchdog configuration.
+    pub compatible: bool,
+}
+
 /// A protected release catalog.  The catalog root is a trusted deployment
 /// configuration input; callers select within it using only a logical release
 /// ID.  The root handle is retained so a later path replacement cannot turn a
@@ -262,6 +285,188 @@ impl ProtectedReleaseCatalog {
         }
         let expected_owner = self.owner_policy.map(CatalogOwnerPolicy::expected_unix_uid);
         validate_directory_identity(&self.root, expected_owner, "release catalog root")
+    }
+
+    /// Inspect one logical release through protected no-follow handles.
+    ///
+    /// This is deliberately separate from [`Self::stage`]: no independently
+    /// approved manifest digest, activation capability, selector, or process
+    /// handoff is produced. The returned digest and compatibility verdict are
+    /// evidence only. Every manifest and artifact handle is revalidated after
+    /// its bytes are read, and all retained directory identities are checked
+    /// again before the result is returned.
+    pub fn inspect(
+        &self,
+        release_id: &str,
+        config: &WatchdogConfig,
+    ) -> Result<ProtectedReleaseInspection, String> {
+        validate_release_id(release_id)?;
+        config
+            .validate()
+            .map_err(|error| format!("deployment configuration is invalid: {error}"))?;
+        let configured_catalog = config.release_catalog.as_ref().ok_or_else(|| {
+            "release inspection requires an explicit catalog configuration".to_owned()
+        })?;
+        let configured_root = normalized_absolute_directory(&configured_catalog.root)?;
+        if configured_root != self.root.path {
+            return Err(
+                "configured release catalog root differs from the opened catalog".to_owned(),
+            );
+        }
+        let configured_policy = CatalogOwnerPolicy::approved_unix_uid(configured_catalog.owner_uid);
+        if self.owner_policy != Some(configured_policy) {
+            return Err(
+                "opened release catalog does not carry the configured approved owner policy"
+                    .to_owned(),
+            );
+        }
+        self.verify_held()?;
+        let expected_owner = self
+            .owner_policy
+            .map(CatalogOwnerPolicy::expected_unix_uid)
+            .or(Some(self.root.identity.owner));
+
+        let release_path = self.root.path.join(release_id);
+        let release_file = open_directory_child(&self.root.file, &release_path, release_id)?;
+        let release_identity = validate_directory_handle(
+            &release_file,
+            &release_path,
+            expected_owner,
+            "selected release directory",
+        )?;
+        let release = HeldDirectory {
+            path: release_path,
+            file: release_file,
+            identity: release_identity,
+        };
+
+        let (manifest_name, manifest_file) = open_manifest(&release)?;
+        let manifest_path = release.path.join(manifest_name);
+        let manifest_identity = validate_file_handle(
+            &manifest_file,
+            &manifest_path,
+            None,
+            None,
+            expected_owner,
+            "release manifest",
+        )?;
+        let manifest_bytes = read_bounded(&manifest_file, MAX_MANIFEST_BYTES)?;
+        let manifest_digest = digest_hex(&manifest_bytes);
+        let manifest = ReleaseManifest::read(Cursor::new(&manifest_bytes))?;
+        if manifest.release_id != release_id {
+            return Err("manifest release id differs from selected release id".to_owned());
+        }
+        let manifest_bytes_len = u64::try_from(manifest_bytes.len())
+            .map_err(|_| "release manifest byte length overflows".to_owned())?;
+        let rechecked_manifest_identity = validate_file_handle(
+            &manifest_file,
+            &manifest_path,
+            Some(manifest_bytes_len),
+            Some(&manifest_digest),
+            expected_owner,
+            "release manifest",
+        )?;
+        if rechecked_manifest_identity != manifest_identity {
+            return Err("release manifest identity changed while inspecting".to_owned());
+        }
+
+        let mut artifacts = manifest.artifacts.clone();
+        artifacts.sort_by_key(|artifact| artifact.role);
+        let mut bindings = Vec::with_capacity(artifacts.len());
+        let mut held_directories = Vec::new();
+        let mut held_artifacts = Vec::with_capacity(artifacts.len());
+        #[cfg(unix)]
+        let mut artifact_identities = BTreeSet::new();
+        for artifact in artifacts {
+            let opened = open_relative_file(&release, &artifact.path)?;
+            let absolute_path = release.path.join(&artifact.path);
+            let identity = validate_file_handle(
+                &opened.file,
+                &absolute_path,
+                Some(artifact.bytes),
+                Some(&artifact.sha256),
+                expected_owner,
+                "release artifact",
+            )?;
+            #[cfg(unix)]
+            if !artifact_identities.insert((identity.device, identity.inode)) {
+                return Err(
+                    "selected release roles share one device/inode identity and cannot be inspected"
+                        .to_owned(),
+                );
+            }
+            held_directories.extend(opened.ancestors);
+            let binding = ReleaseRoleBinding {
+                role: artifact.role,
+                relative_path: artifact.path,
+                absolute_path,
+                sha256: artifact.sha256,
+                bytes: artifact.bytes,
+            };
+            held_artifacts.push(HeldArtifact {
+                binding: binding.clone(),
+                file: opened.file,
+                identity,
+            });
+            bindings.push(binding);
+        }
+
+        // Verify the directory and every retained handle again after all
+        // artifact reads. This closes replacement windows involving a nested
+        // artifact ancestor or the selected release directory.
+        validate_directory_identity(&release, expected_owner, "selected release directory")?;
+        for directory in &held_directories {
+            validate_directory_identity(directory, expected_owner, "release artifact ancestor")?;
+        }
+        let final_manifest_identity = validate_file_handle(
+            &manifest_file,
+            &manifest_path,
+            Some(manifest_bytes_len),
+            Some(&manifest_digest),
+            expected_owner,
+            "release manifest",
+        )?;
+        if final_manifest_identity != manifest_identity {
+            return Err("release manifest identity changed while inspecting".to_owned());
+        }
+        for artifact in &held_artifacts {
+            let final_identity = validate_file_handle(
+                &artifact.file,
+                &artifact.binding.absolute_path,
+                Some(artifact.binding.bytes),
+                Some(&artifact.binding.sha256),
+                expected_owner,
+                "release artifact",
+            )?;
+            if final_identity != artifact.identity {
+                return Err(format!(
+                    "release role {:?} identity changed while inspecting",
+                    artifact.binding.role
+                ));
+            }
+        }
+        self.verify_held()?;
+
+        let config_digest = config
+            .digest()
+            .map_err(|error| format!("deployment configuration digest failed: {error}"))?;
+        let compatible = config_digest == manifest.compatibility.configuration_sha256
+            && validate_config_bindings(config, &bindings).is_ok();
+        let total_bytes = manifest
+            .artifacts
+            .iter()
+            .try_fold(0_u64, |total, artifact| {
+                total
+                    .checked_add(artifact.bytes)
+                    .ok_or_else(|| "release byte count overflow".to_owned())
+            })?;
+        Ok(ProtectedReleaseInspection {
+            release_id: release_id.to_owned(),
+            manifest_digest,
+            artifact_count: manifest.artifacts.len(),
+            total_bytes,
+            compatible,
+        })
     }
 
     /// Validate and stage one release selected by its logical ID.

@@ -68,6 +68,260 @@ fn real_service_read_credential_inspects_jobs_without_private_payloads() {
     assert!(!encoded.contains("payload"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn release_inspection_without_explicit_catalog_is_unsupported() {
+    use ascension_watchdog::service::ServiceLoop;
+    use ascension_watchdog::{Supervisor, WatchdogConfig};
+
+    let fixture = Fixture::new();
+    let config = WatchdogConfig {
+        database: fixture.temp.path().join("state.sqlite"),
+        admin: Some(ascension_watchdog::config::AdminConfig {
+            endpoint: fixture.socket.clone(),
+            read_token_path: fixture.read_token.clone(),
+            admin_token_path: fixture.admin_token.clone(),
+            allowed_peer_sid: None,
+        }),
+        ..WatchdogConfig::default()
+    };
+    let mut service = ServiceLoop::new(
+        Supervisor::initialize(config.clone()).unwrap(),
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), service.health());
+    let client = fixture.client(Capability::Read, &fixture.read_token);
+    let request = thread::spawn(move || {
+        client
+            .execute(
+                "inspect-release-without-catalog",
+                AdminCommand::ReleaseInspect(ascension_watchdog::admin::ReleaseInspectRequest {
+                    release_id: "release-1".to_owned(),
+                }),
+            )
+            .unwrap()
+    });
+    wait_for_depth(&queue, 1);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    assert_eq!(request.join().unwrap().status, ReplyStatus::Unsupported);
+    drop(service);
+    drop(server);
+    let inspected =
+        ascension_watchdog::storage::Store::open_read_only(&config.database, &config).unwrap();
+    assert_eq!(inspected.operator_command_count().unwrap(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn real_service_read_credential_inspects_configured_release_without_store_writes() {
+    use ascension_watchdog::Supervisor;
+    use ascension_watchdog::config::{
+        ComponentConfig, ReleaseCatalogConfig, WatchdogConfig, hex_digest,
+    };
+    use ascension_watchdog::release::{
+        Artifact, ArtifactRole, Compatibility, ReleaseManifest, Revision, StoreCompatibility,
+    };
+    use ascension_watchdog::release_staged::ProtectedReleaseCatalog;
+    use ascension_watchdog::service::ServiceLoop;
+    use ascension_watchdog::storage::Store;
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let fixture = Fixture::new();
+    let catalog_root = fixture.temp.path().join("releases");
+    let release_root = catalog_root.join("release-1");
+    std::fs::create_dir(&catalog_root).unwrap();
+    std::fs::create_dir(&release_root).unwrap();
+    let artifact_bytes = b"admin release role bytes";
+    let artifact_digest = hex_digest(artifact_bytes);
+    let owner_uid = u64::from(std::fs::metadata(&catalog_root).unwrap().uid());
+    let component = |id: &str| ComponentConfig {
+        id: id.to_owned(),
+        executable: release_root.join(id),
+        args: Vec::new(),
+        cwd: None,
+        environment: BTreeMap::new(),
+        executable_sha256: Some(artifact_digest.clone()),
+        restart: true,
+    };
+    let config = WatchdogConfig {
+        database: fixture.temp.path().join("state.sqlite"),
+        allow_synthetic_children: true,
+        admin: Some(ascension_watchdog::config::AdminConfig {
+            endpoint: fixture.socket.clone(),
+            read_token_path: fixture.read_token.clone(),
+            admin_token_path: fixture.admin_token.clone(),
+            allowed_peer_sid: None,
+        }),
+        release_catalog: Some(ReleaseCatalogConfig {
+            root: catalog_root.clone(),
+            owner_uid,
+        }),
+        components: vec![component("gateway"), component("harness")],
+        ..WatchdogConfig::default()
+    };
+    let config_path = fixture.temp.path().join("watchdog.json");
+    config.to_file(&config_path).unwrap();
+    let compatibility = Compatibility {
+        game_build: "admin-test-build".to_owned(),
+        runtime_profile: "runtime-v3-gameplay".to_owned(),
+        runtime_profile_sha256: "a".repeat(64),
+        recovery_profile: "watchdog-recovery-v1".to_owned(),
+        recovery_profile_sha256: "b".repeat(64),
+        configuration_sha256: config.digest().unwrap(),
+        provider_adapter: "admin-test-provider".to_owned(),
+        provider_adapter_sha256: "c".repeat(64),
+        stores: ["watchdog", "gateway", "harness"]
+            .into_iter()
+            .map(|owner| StoreCompatibility {
+                owner: owner.to_owned(),
+                minimum_schema: 1,
+                maximum_schema: 1,
+            })
+            .collect(),
+    };
+    let manifest = ReleaseManifest {
+        schema_version: 1,
+        release_id: "release-1".to_owned(),
+        revisions: [
+            "ascension-watchdog",
+            "sts2-gateway",
+            "sts2-harness",
+            "sts2-mcp-server",
+            "sts2-game-mod",
+            "sts2-protocol",
+        ]
+        .into_iter()
+        .map(|repository| Revision {
+            repository: repository.to_owned(),
+            commit: "a".repeat(40),
+        })
+        .collect(),
+        artifacts: [
+            (ArtifactRole::Watchdog, "watchdog"),
+            (ArtifactRole::Gateway, "gateway"),
+            (ArtifactRole::Harness, "harness"),
+            (ArtifactRole::Mcp, "mcp"),
+            (ArtifactRole::Mod, "mod"),
+            (ArtifactRole::HostBroker, "broker"),
+        ]
+        .into_iter()
+        .map(|(role, path)| Artifact {
+            role,
+            path: path.into(),
+            sha256: artifact_digest.clone(),
+            bytes: artifact_bytes.len() as u64,
+        })
+        .collect(),
+        compatibility,
+    };
+    for artifact in &manifest.artifacts {
+        std::fs::write(release_root.join(&artifact.path), artifact_bytes).unwrap();
+    }
+    std::fs::write(
+        release_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&catalog_root, std::fs::Permissions::from_mode(0o555)).unwrap();
+    std::fs::set_permissions(&release_root, std::fs::Permissions::from_mode(0o555)).unwrap();
+    for artifact in &manifest.artifacts {
+        std::fs::set_permissions(
+            release_root.join(&artifact.path),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+    }
+    std::fs::set_permissions(
+        release_root.join("manifest.json"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+
+    let expected_manifest_digest =
+        hex_digest(&std::fs::read(release_root.join("manifest.json")).unwrap());
+    let protected = ProtectedReleaseCatalog::new_with_owner_policy(
+        &catalog_root,
+        ascension_watchdog::release_staged::CatalogOwnerPolicy::approved_unix_uid(owner_uid),
+    )
+    .unwrap();
+    let local_inspection = protected.inspect("release-1", &config).unwrap();
+    assert_eq!(local_inspection.manifest_digest, expected_manifest_digest);
+    assert!(local_inspection.compatible);
+
+    let mut service = ServiceLoop::new(
+        Supervisor::initialize(config.clone()).unwrap(),
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), service.health());
+    let config_path_for_request = config_path.clone();
+    let request = thread::spawn(move || {
+        ascension_watchdog::cli::execute(vec![
+            "release".to_owned(),
+            "inspect".to_owned(),
+            "--config".to_owned(),
+            config_path_for_request.to_string_lossy().into_owned(),
+            "--release-id".to_owned(),
+            "release-1".to_owned(),
+        ])
+    });
+    wait_for_depth(&queue, 1);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    let encoded = request.join().unwrap().unwrap().unwrap();
+    let response: ascension_watchdog::admin::AdminResponse =
+        serde_json::from_str(&encoded).unwrap();
+    assert_eq!(response.status, ReplyStatus::Ok);
+    let Some(AdminResult::ReleaseInspection(result)) = response.result else {
+        panic!("release inspection result missing");
+    };
+    assert_eq!(result.release_id, "release-1");
+    assert_eq!(result.release_digest, expected_manifest_digest);
+    assert!(result.compatible);
+    assert!(!result.active);
+    drop(service);
+    drop(server);
+    let inspected = Store::open_read_only(&config.database, &config).unwrap();
+    assert_eq!(inspected.operator_command_count().unwrap(), 0);
+    drop(inspected);
+
+    // A changed artifact remains non-authoritative and the authenticated
+    // operation fails closed without adding a durable operator receipt.
+    let tampered = release_root.join("gateway");
+    std::fs::set_permissions(&tampered, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(&tampered, b"tampered admin release bytes").unwrap();
+    std::fs::set_permissions(&tampered, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut service = ServiceLoop::new(
+        Supervisor::open(config.clone()).unwrap(),
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    let queue = AdminQueue::new(8).unwrap();
+    let server = fixture.server(queue.clone(), service.health());
+    let client = fixture.client(Capability::Read, &fixture.read_token);
+    let request = thread::spawn(move || {
+        client
+            .execute(
+                "inspect-release-tampered",
+                AdminCommand::ReleaseInspect(ascension_watchdog::admin::ReleaseInspectRequest {
+                    release_id: "release-1".to_owned(),
+                }),
+            )
+            .unwrap()
+    });
+    wait_for_depth(&queue, 1);
+    service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
+    assert_eq!(request.join().unwrap().status, ReplyStatus::Conflict);
+    drop(service);
+    drop(server);
+    let inspected = Store::open_read_only(&config.database, &config).unwrap();
+    assert_eq!(inspected.operator_command_count().unwrap(), 0);
+}
+
 #[test]
 fn real_service_dispatch_persists_stop_and_old_start_cannot_revive_it() {
     use ascension_watchdog::service::ServiceLoop;

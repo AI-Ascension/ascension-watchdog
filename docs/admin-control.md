@@ -44,6 +44,19 @@ activation remain unsupported pending their owner-specific integration; their
 transport types alone are not operational evidence.
 Windows native service execution and uninstall recovery remain unverified.
 
+Set `release_catalog` to an owner-local protected directory and its explicitly
+approved Unix `owner_uid` to enable read-only inspection. Then
+`watchdog release inspect --config PATH --release-id ID` uses the read
+credential and the watchdog main loop to open that logical release through
+Linux no-follow directory and file handles. The result reports the exact
+manifest digest, configuration/path compatibility, and whether the digest
+matches the currently recorded approved release. All fixed roles are validated
+before that result is returned. It never
+selects, activates, launches, or writes an operator receipt. Missing catalog
+configuration and platforms without the protected descriptor proof remain
+unsupported; malformed, replaced, writable, or tampered release objects fail
+closed.
+
 This sideband is a local operator control plane. It is an authenticated,
 bounded request queue into the watchdog reconciliation loop; it is not a game
 or gateway protocol. The package does not contain a gameplay dispatch,
