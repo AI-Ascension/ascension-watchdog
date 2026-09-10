@@ -5,10 +5,11 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "0935c66ddf4befe7fe7c17f3ba785af02057b3aa",
+    "watchdog_commit": "eedc4ff55ab5c988039231b99439990ac2e3ef6a",
+    "watchdog_source_tested_commit": "0935c66ddf4befe7fe7c17f3ba785af02057b3aa",
     "watchdog_pr": 8,
-    "hosted_run": 34480654731,
-    "hosted_run_status_at_capture": "in_progress"
+    "hosted_run": 34481427907,
+    "hosted_run_status_at_capture": "completed-success"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -35,7 +36,7 @@
         "locked/offline serialized workspace tests: pass",
         "hosted run 34479326456 at prior source tip: all four jobs pass"
       ],
-      "remote": "not yet included in a green hosted run at capture"
+      "remote": "included in hosted run 34480654731; the documentation-only follow-up is green in 34481427907"
     },
     "gateway": {
       "commit": "4c4d465a6cda59dee97e9932444f557bb51c7028",
