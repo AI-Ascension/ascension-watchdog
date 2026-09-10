@@ -106,7 +106,7 @@
       "sts2-game-mod",
       "sts2-protocol"
     ],
-    "comparison_method": "sha256sum of each artifact manifest.json and schema.json",
+    "comparison_method": "sha256sum of each artifact manifest.json and schema.json; coop-native-v1 also includes conformance.json and consumer-conformance.json",
     "artifacts": {
       "runtime-v3-gameplay": {
         "manifest_sha256": "92e5167a53000da7bcd068821ef7a7287b293640cd926b4100b9c725c86c8ab8",
@@ -131,9 +131,15 @@
       "runtime-v2": {
         "manifest_sha256": "3aa96568f6b810170862b95e262b65201f5568723cba410139f1c1cf1d154152",
         "schema_sha256": "f7963b19c8ed5bbdc02c08e83c7a2e16c4771ed5eb798b29a8208d7a917a86c2"
+      },
+      "coop-native-v1": {
+        "manifest_sha256": "50a7a2b5debcbdd092741445d649a71e4cbfb8f74caf6a18e9a2882387549d48",
+        "schema_sha256": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
+        "conformance_sha256": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
+        "consumer_conformance_sha256": "377be44add07fe780a710debc34f901e40e15a75078496335892875f492754fe"
       }
     },
-    "result": "byte-identical-across-compared-worktrees"
+    "result": "byte-identical-across-compared-worktrees; coop-native-v1 byte equality is limited to protocol and gateway copies and does not establish consumer conformance"
   },
   "release_boundary": {
     "cross_repository_clean_build": "not-run; component worktrees were checked independently and no unified consumer build exists",
