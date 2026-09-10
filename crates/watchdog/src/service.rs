@@ -214,11 +214,17 @@ mod tests {
             desired_mode: DesiredMode::Running,
             ..WatchdogConfig::default()
         };
-        let supervisor = Supervisor::initialize(config)?;
+        let supervisor = Supervisor::initialize(config).map_err(|error| {
+            WatchdogError::Conflict(format!("service test initialize failed: {error:?}"))
+        })?;
         let mut service = ServiceLoop::new(supervisor, Duration::from_millis(1))?;
         let stop = Arc::new(Mutex::new(true));
 
-        service.run_until_stopped_with_scm_stop(&stop)?;
+        service
+            .run_until_stopped_with_scm_stop(&stop)
+            .map_err(|error| {
+                WatchdogError::Conflict(format!("service test run failed: {error:?}"))
+            })?;
 
         assert_eq!(
             service.supervisor.status()?.desired_mode,
