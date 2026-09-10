@@ -71,14 +71,24 @@ fn digest(path: &Path) -> String {
 fn policy() -> BrokerPolicy {
     let executable = fs::canonicalize("/usr/bin/true").expect("fixture executable path");
     let peer_executable = fs::canonicalize("/usr/bin/sleep").expect("peer fixture executable path");
+    let peer_user_id = rustix::process::getuid().as_raw();
+    let peer_group_id = rustix::process::getgid().as_raw();
+    let distinct_nonzero = |value: u32| {
+        let candidate = value.saturating_add(1);
+        if candidate != 0 && candidate != value {
+            candidate
+        } else {
+            1
+        }
+    };
     let launch = LaunchPolicy {
         executable: executable.clone(),
         executable_sha256: digest(&executable),
         arguments: Vec::new(),
         working_directory: PathBuf::from("/"),
         environment: Vec::new(),
-        target_uid: 1001,
-        target_gid: 1001,
+        target_uid: distinct_nonzero(peer_user_id),
+        target_gid: distinct_nonzero(peer_group_id),
         capabilities: CapabilityPolicy {
             bounding_set: 0,
             ambient_set: 0,
@@ -91,8 +101,8 @@ fn policy() -> BrokerPolicy {
         timeout: Duration::from_secs(2),
     };
     let peer = PeerPolicy {
-        uid: rustix::process::getuid().as_raw(),
-        gid: rustix::process::getgid().as_raw(),
+        uid: peer_user_id,
+        gid: peer_group_id,
         executable: peer_executable.clone(),
         executable_sha256: digest(&peer_executable),
     };
