@@ -3,6 +3,36 @@ use ascension_watchdog::storage::SingletonLock;
 use ascension_watchdog::{DesiredMode, Store, WatchdogConfig};
 use uuid::Uuid;
 
+#[cfg(windows)]
+fn protect_config_for_native_read(
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_CONFIG_PATH", path)
+        .status()?;
+    if !status.success() {
+        return Err("PowerShell failed to protect the config fixture".into());
+    }
+    Ok(())
+}
+
 fn config(directory: &std::path::Path, mode: DesiredMode) -> WatchdogConfig {
     WatchdogConfig {
         database: directory.join("state.sqlite"),
@@ -18,6 +48,8 @@ fn offline_cli_migration_requires_stopped_exclusive_owner() -> Result<(), Box<dy
     let config = config(directory.path(), DesiredMode::Running);
     let path = directory.path().join("config.json");
     config.to_file(&path)?;
+    #[cfg(windows)]
+    protect_config_for_native_read(&path)?;
     let mut store = Store::initialize(&config.database, &config)?;
     let raw = rusqlite::Connection::open(&config.database)?;
     raw.execute_batch("DROP TRIGGER gateway_health_binding_immutable; DROP TABLE gateway_health_bindings; DELETE FROM metadata WHERE key='gateway_health_schema';")?;

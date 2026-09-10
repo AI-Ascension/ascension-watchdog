@@ -97,13 +97,17 @@ impl GatewayHealthBootstrap {
         key: [u8; KEY_BYTES],
     ) -> Result<Self, AdapterError> {
         let key = Zeroizing::new(key);
-        specification.validate()?;
         if specification.component != ComponentKind::Gateway {
             return Err(AdapterError::Unsupported(
                 "Gateway health bootstrap requires the Gateway role".to_owned(),
             ));
         }
         let launch_nonce = parse_canonical_nonce(&specification.launch_nonce)?;
+        // Identity errors are checked before platform-specific launch syntax,
+        // but no bootstrap is issued until the complete specification passes
+        // validation below. This keeps fail-closed diagnostics stable across
+        // Windows and Unix path semantics without weakening launch checks.
+        specification.validate()?;
         let bootstrap = Self::from_zeroizing_key(launch_nonce, key).map_err(|error| {
             AdapterError::Invalid(format!("Gateway health bootstrap is invalid: {error}"))
         })?;
@@ -175,7 +179,6 @@ impl GatewayHealthBootstrap {
 
     /// Verify the fixed Gateway role and exact canonical launch nonce.
     pub fn validate_for_launch(&self, specification: &LaunchSpec) -> Result<(), AdapterError> {
-        specification.validate()?;
         if specification.component != ComponentKind::Gateway {
             return Err(AdapterError::Unsupported(
                 GatewayHealthBootstrapError::WrongRole.to_string(),
@@ -187,6 +190,10 @@ impl GatewayHealthBootstrap {
                 GatewayHealthBootstrapError::NonceMismatch.to_string(),
             ));
         }
+        // Compare the persisted identity before platform-specific launch
+        // syntax so a changed nonce cannot be obscured by an unrelated path
+        // error. A matching identity still passes the complete validation.
+        specification.validate()?;
         Ok(())
     }
 }
