@@ -11,7 +11,7 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c",
+      "revision": "9083ffd87bdd5f60364df83db860c3e0b6912555",
       "ref": "codex/watchdog-ci-auth-fixture-fix",
       "remote": "AI-Ascension/ascension-watchdog",
       "state": "open-pr-source"
