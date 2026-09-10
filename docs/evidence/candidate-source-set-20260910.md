@@ -5,14 +5,13 @@ review. It is deliberately a candidate source set, not an activated release:
 the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
-The pins were read from the remote PR metadata on 2026-09-10. The watchdog
-fault-fixture branch's current documentation head is `715f12d933438be09a25faef32b1bdb2a26c2eca`;
-the candidate source pin in the manifest is the preceding implementation head
-`3ae1a22f685228420074e7703b9db492cc16b861`. The earlier hosted dependency,
-Ubuntu, Windows, and standards checks passed in runs `34466829755` and
-`34466829733`; the current documentation-only head is awaiting its replacement
-run. The preceding source commit `572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c`
-also had green hosted checks. The
+The pins were read from the remote PR metadata on 2026-09-10. The candidate
+source pin in the manifest is implementation head
+`3ae1a22f685228420074e7703b9db492cc16b861`. Its hosted dependency, Ubuntu,
+Windows, and standards checks passed in runs `34466829755` and `34466829733`;
+later documentation-only pin-alignment commits do not change that source
+candidate. The preceding source commit
+`572a62dd1bbc5bd39ca13b5f30455ba1e786ef8c` also had green hosted checks. The
 companion set includes open draft PRs, the merged harness PR head, and the
 unmerged harness recovery-catalog PR #53 at
 `6fcd059b420a1099ec225a907ee3aea5e799f0e7`; that PR's hosted Rust and policy
