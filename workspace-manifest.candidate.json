@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
-      "last_observed_pr_head": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
+      "revision": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+      "last_observed_pr_head": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; protected read-only release inspection plus durable retry and scoped reconciliation; source-tested-at-b27a6c4; hosted-checks-queued-at-captured-head; mergeable; not-merged"
+      "state": "open-draft; protected release inspection, durable retry/scoped reconciliation, and explicit offline restore/rekey CLI; source-tested-at-1d83d02; hosted-checks-queued-at-captured-head; mergeable; not-merged"
     },
     "sts2-gateway": {
       "revision": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",

@@ -5,12 +5,12 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
-    "watchdog_source_tested_commit": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
+    "watchdog_commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+    "watchdog_source_tested_commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
-    "hosted_runs": [34496623476, 34496624724, 34496623305, 34496624704],
-    "hosted_run_status_at_capture": "queued; exact PR head b27a6c4; eight Linux/Windows Rust-synthetic and standards/dependency jobs are pending"
+    "watchdog_last_observed_pr_head": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+    "hosted_runs": [34497675608, 34497673691],
+    "hosted_run_status_at_capture": "queued/in-progress; exact PR head 1d83d02; standards jobs observed; remaining validation jobs pending"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -29,16 +29,16 @@
   },
   "results": {
     "watchdog": {
-      "commit": "b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed",
-      "change": "durable known-failure retry admission, authenticated scoped reconciliation, and protected read-only catalog release inspection",
+      "commit": "1d83d02ff8ccca9ed7d5a268482671a3b91b1d10",
+      "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, and explicit offline restore/rekey CLI",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
         "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
-        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (204 watchdog library tests; release-staged and admin-control suites pass; 4 ignored)",
-        "cargo +1.97.1 test --locked --offline -p ascension-watchdog runtime_admin::tests release_staged -- --nocapture: pass (scoped reconciliation and protected release inspection tests)"
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (204 watchdog library tests; release-staged/admin-control suites plus 2 CLI restore tests pass; 4 ignored)",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (explicit rekey gate and stopped/quarantined restore)"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is queued for exact source head b27a6c4"
+      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation is queued/in-progress for exact source head 1d83d02"
     },
     "gateway": {
       "commit": "2cf9127bfe5b7f1f271dd1b2889d92a09f042f83",
@@ -69,9 +69,9 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to tested watchdog commit b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed and update PR metadata only after the next docs reconciliation commit.",
+    "Keep candidate manifest source-pinned to tested watchdog commit 1d83d02ff8ccca9ed7d5a268482671a3b91b1d10 and update PR metadata only after the next docs reconciliation commit.",
     "Rebuild the exact current-main companion release set from gateway 2cf9127, harness e5029f1, MCP a6b9215, game-mod e532f4d, and a rebased protocol candidate; run cross-consumer conformance before any runtime claim.",
-    "Run cross-consumer conformance against watchdog b27a6c4, harness ed033f2, gateway current main 2cf9127, game-mod current main e532f4d, MCP a6b9215, and protocol candidate 09819e2 before any runtime claim.",
+    "Run cross-consumer conformance against watchdog 1d83d02, harness ed033f2, gateway current main 2cf9127, game-mod current main e532f4d, MCP a6b9215, and protocol candidate 09819e2 before any runtime claim.",
     "Do not claim cross-repository runtime integration until gateway, harness, MCP, mod, and protocol revisions build together.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

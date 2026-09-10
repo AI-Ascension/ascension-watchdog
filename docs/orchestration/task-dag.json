@@ -52,7 +52,7 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"b27a6c4c4759c9778a2ef31feeeaaf3ebc9c43ed","pull_request":9,"status":"draft; durable retry, authenticated scoped reconciliation, and protected read-only release inspection; local full Linux/synthetic gates pass; hosted checks queued against exact PR head"},
+    "watchdog": {"commit":"1d83d02ff8ccca9ed7d5a268482671a3b91b1d10","pull_request":9,"status":"draft; retry/scoped reconciliation, protected release inspection, and offline restore/rekey CLI; local gates pass; hosted checks queued/in-progress"},
     "harness": {"commit":"ed033f2681f8e0e01926e641524c7427af2cc2fd","pull_request":58,"status":"draft; durable worker handoff/runtime wiring and watchdog-worker-v1 artifacts; local gates pass; hosted checks queued"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
     "gateway": {"commit":"2cf9127bfe5b7f1f271dd1b2889d92a09f042f83","pull_request":35,"status":"merged current main; malformed post-write response repair; hosted Rust-quality and policy checks green"},
