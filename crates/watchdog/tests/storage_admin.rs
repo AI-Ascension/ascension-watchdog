@@ -1,7 +1,7 @@
 use ascension_watchdog::config::{DesiredMode, WatchdogConfig};
 use ascension_watchdog::error::WatchdogError;
 use ascension_watchdog::storage::{
-    MAX_AUDIT_RECORDS, MAX_OPERATOR_COMMANDS, MAX_OPERATOR_COMMANDS_WITH_STOP_RESERVE,
+    JobStatus, MAX_AUDIT_RECORDS, MAX_OPERATOR_COMMANDS, MAX_OPERATOR_COMMANDS_WITH_STOP_RESERVE,
     OperatorCapability, OperatorCommand, OperatorCommandContext, OperatorCommandOutcome,
     RESERVED_CRITICAL_AUDIT_RECORDS, SingletonLock, Store,
 };
@@ -235,6 +235,165 @@ fn read_only_admission_writes_zero_and_response_is_bounded() {
     assert_eq!(store.operator_command_count().expect("count"), 0);
     drop(store);
     assert!(Store::open_read_only(&config.database, &config).is_ok());
+}
+
+#[test]
+fn retry_requeues_only_known_failure_and_replays_without_new_attempt() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (owner, mut store, _config) = owner_store(&temp, "admin-retry");
+    store
+        .set_desired_mode_at(DesiredMode::Running, 10)
+        .expect("running mode");
+    let job = store
+        .submit_job_at("episode", &json!({"seed": 7}), 20)
+        .expect("job");
+    let first_claim = store
+        .claim_next_job("worker-a", 20)
+        .expect("claim")
+        .expect("running claim");
+    store
+        .fail_job_at(
+            &job.id,
+            &first_claim.attempt_id,
+            "provider outage",
+            None,
+            30,
+        )
+        .expect("known failure");
+
+    let retry = context(
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "retry-once",
+        "operator-a",
+        OperatorCapability::Admin,
+    );
+    let response = json!({
+        "kind": "Accepted",
+        "value": {"command": "retry", "queued": true}
+    });
+    let accepted = store
+        .admit_operator_retry(
+            &owner,
+            &retry,
+            &first_claim.attempt_id,
+            false,
+            &response,
+            40,
+        )
+        .expect("retry admission");
+    assert!(matches!(accepted, OperatorCommandOutcome::Accepted(_)));
+    assert!(matches!(
+        store.get_job(&job.id).expect("job").unwrap().status,
+        JobStatus::Queued
+    ));
+
+    let replay = store
+        .admit_operator_retry(
+            &owner,
+            &retry,
+            &first_claim.attempt_id,
+            false,
+            &json!({"body": "x".repeat(9 * 1024)}),
+            41,
+        )
+        .expect("retry replay");
+    let replayed = match replay {
+        OperatorCommandOutcome::Replayed(receipt) => receipt,
+        other => panic!("unexpected retry replay: {other:?}"),
+    };
+    assert!(replayed.replayed);
+    assert_eq!(replayed.response, response);
+
+    let second_claim = store
+        .claim_next_job("worker-a", 100)
+        .expect("second claim")
+        .expect("requeued claim");
+    assert_ne!(second_claim.attempt_id, first_claim.attempt_id);
+    assert_eq!(second_claim.attempt_number, 2);
+    store
+        .quarantine_interrupted_jobs(110)
+        .expect("quarantine unknown");
+    let unknown_retry = context(
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "retry-unknown",
+        "operator-a",
+        OperatorCapability::Admin,
+    );
+    assert!(matches!(
+        store.admit_operator_retry(
+            &owner,
+            &unknown_retry,
+            &second_claim.attempt_id,
+            false,
+            &response,
+            120,
+        ),
+        Err(WatchdogError::Conflict(_))
+    ));
+}
+
+#[test]
+fn retry_rejects_worker_handoff_and_preserves_failure_evidence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (owner, mut store, config) = owner_store(&temp, "admin-retry-worker-handoff");
+    store
+        .set_desired_mode_at(DesiredMode::Running, 10)
+        .expect("running mode");
+    let job = store
+        .submit_job_at("episode", &json!({"seed": 11}), 20)
+        .expect("job");
+    let claim = store
+        .claim_next_job("worker-a", 20)
+        .expect("claim")
+        .expect("running claim");
+    store
+        .fail_job_at(&job.id, &claim.attempt_id, "provider outage", None, 30)
+        .expect("known failure");
+
+    // A worker handoff is an independent authority path.  Even a malformed
+    // or non-terminal handoff marker must prevent the generic retry from
+    // touching the job/attempt pair.
+    let raw = rusqlite::Connection::open(&config.database).expect("handoff connection");
+    raw.execute(
+        "INSERT INTO worker_handoffs (handoff_id, deployment_id, job_id, attempt_id, attempt_number, worker_owner_id, worker_profile_digest, run_id, episode_id, trajectory_id, payload_digest, watchdog_boot_id, worker_boot_id, mode_sequence, operation, parameters, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'runtime_v3_episode', '{}', 'prepared', 31, 31)",
+        rusqlite::params![
+            "handoff-retry-block",
+            config.deployment_id,
+            job.id,
+            claim.attempt_id,
+            "worker-a",
+            "a".repeat(64),
+            "run-retry-block",
+            "episode-retry-block",
+            "trajectory-retry-block",
+            "b".repeat(64),
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ],
+    )
+    .expect("insert handoff marker");
+    drop(raw);
+
+    let retry = context(
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "retry-worker-handoff",
+        "operator-a",
+        OperatorCapability::Admin,
+    );
+    assert!(matches!(
+        store.admit_operator_retry(
+            &owner,
+            &retry,
+            &claim.attempt_id,
+            false,
+            &json!({"accepted": true}),
+            40,
+        ),
+        Err(WatchdogError::Conflict(_))
+    ));
+    let unchanged = store.get_job(&job.id).expect("job").expect("job exists");
+    assert_eq!(unchanged.status, JobStatus::Quarantined);
+    assert_eq!(unchanged.last_error.as_deref(), Some("provider outage"));
 }
 
 #[test]

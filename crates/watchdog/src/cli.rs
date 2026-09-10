@@ -50,6 +50,8 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "resume"
                 | "drain"
                 | "stop"
+                | "retry"
+                | "reconcile"
                 | "backup"
                 | "daemon"
                 | "run"
@@ -95,9 +97,8 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "doctor" => doctor_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args),
-        "status" | "start" | "pause" | "resume" | "drain" | "stop" | "backup" => {
-            operator_command(&command, &mut args, &config_path)
-        }
+        "status" | "start" | "pause" | "resume" | "drain" | "stop" | "retry" | "reconcile"
+        | "backup" => operator_command(&command, &mut args, &config_path),
         "daemon" | "run" => daemon_command(&mut args, &config_path),
         #[cfg(windows)]
         "service" => crate::windows_service::service_command(&mut args, &config_path),
@@ -116,7 +117,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
 fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<Option<String>> {
     use crate::admin::{
         AdminClient, AdminClientConfig, AdminCommand, BackupRequest, Capability, EmptyParams,
-        ReplyStatus,
+        ReconcileRequest, ReconcileTarget, ReplyStatus, RetryPolicy, RetryRequest,
     };
     let key = take_option(args, "--idempotency-key");
     let backup_id =
@@ -127,6 +128,49 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         } else {
             None
         };
+    let retry_attempt_id =
+        if name == "retry" {
+            Some(take_option(args, "--attempt-id").ok_or_else(|| {
+                WatchdogError::InvalidInput("retry requires --attempt-id".to_owned())
+            })?)
+        } else {
+            None
+        };
+    let retry_policy = if name == "retry" {
+        match take_option(args, "--policy")
+            .as_deref()
+            .unwrap_or("requeue")
+        {
+            "requeue" => Some(RetryPolicy::Requeue),
+            "reconstruction" => Some(RetryPolicy::Reconstruction),
+            _ => {
+                return Err(WatchdogError::InvalidInput(
+                    "retry policy must be requeue or reconstruction".to_owned(),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let reconcile_target = if name == "reconcile" {
+        let target = match take_option(args, "--target")
+            .as_deref()
+            .unwrap_or("deployment")
+        {
+            "deployment" => ReconcileTarget::Deployment,
+            "component" => ReconcileTarget::Component,
+            "job" => ReconcileTarget::Job,
+            "attempt" => ReconcileTarget::Attempt,
+            _ => {
+                return Err(WatchdogError::InvalidInput(
+                    "reconcile target must be deployment, component, job, or attempt".to_owned(),
+                ));
+            }
+        };
+        Some((target, take_option(args, "--id")))
+    } else {
+        None
+    };
     if !args.is_empty() {
         return Err(WatchdogError::InvalidInput(
             "unexpected operator command argument".to_owned(),
@@ -167,6 +211,18 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         "pause" => AdminCommand::Pause(EmptyParams {}),
         "drain" => AdminCommand::Drain(EmptyParams {}),
         "stop" => AdminCommand::Stop(EmptyParams {}),
+        "retry" => AdminCommand::Retry(RetryRequest {
+            attempt_id: retry_attempt_id.ok_or_else(|| {
+                WatchdogError::InvalidInput("retry requires --attempt-id".to_owned())
+            })?,
+            policy: retry_policy.unwrap_or(RetryPolicy::Requeue),
+        }),
+        "reconcile" => {
+            let (target, id) = reconcile_target.ok_or_else(|| {
+                WatchdogError::InvalidInput("reconcile requires --target".to_owned())
+            })?;
+            AdminCommand::Reconcile(ReconcileRequest { target, id })
+        }
         "backup" => AdminCommand::Backup(BackupRequest {
             backup_id: backup_id.ok_or_else(|| {
                 WatchdogError::InvalidInput("backup requires --backup-id".to_owned())
@@ -780,5 +836,5 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
 }

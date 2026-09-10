@@ -3,7 +3,7 @@
 use super::Supervisor;
 use crate::admin::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminResult,
-    BackupView, Capability, CommandName, DispatchContext, MainLoopHealth, StatusView,
+    BackupView, Capability, CommandName, DispatchContext, MainLoopHealth, RetryPolicy, StatusView,
     command_fingerprint,
 };
 use crate::config::DesiredMode;
@@ -43,6 +43,7 @@ impl AdminDispatcher for Dispatcher<'_> {
             AdminCommand::JobSubmit(_) => OperatorCommand::JobSubmit,
             AdminCommand::Attempt(_) => OperatorCommand::Attempt,
             AdminCommand::Quarantine(_) => OperatorCommand::Quarantine,
+            AdminCommand::Retry(_) => OperatorCommand::Retry,
             AdminCommand::Backup(_) => OperatorCommand::Backup,
             _ => return Err(AdminDispatchError::Unsupported),
         };
@@ -139,6 +140,39 @@ impl AdminDispatcher for Dispatcher<'_> {
                     &durable_context,
                     &request.attempt_id,
                     &request.reason,
+                    &response,
+                    now_unix_ms(),
+                )
+                .map_err(|error| AdminDispatchError::from(&error))?;
+            return match receipt {
+                OperatorCommandOutcome::Accepted(receipt)
+                | OperatorCommandOutcome::Replayed(receipt) => {
+                    serde_json::from_value(receipt.response)
+                        .map_err(|_| AdminDispatchError::PersistenceUnavailable)
+                }
+                OperatorCommandOutcome::ReadOnly => Err(AdminDispatchError::Internal),
+            };
+        }
+        if let AdminCommand::Retry(request) = command {
+            let owner = self
+                .supervisor
+                .lock
+                .as_ref()
+                .ok_or(AdminDispatchError::Unauthorized)?;
+            let result = AdminResult::Accepted(AcceptedView {
+                command: CommandName::Retry,
+                queued: true,
+            });
+            let response =
+                serde_json::to_value(&result).map_err(|_| AdminDispatchError::Internal)?;
+            let receipt = self
+                .supervisor
+                .store
+                .admit_operator_retry(
+                    owner,
+                    &durable_context,
+                    &request.attempt_id,
+                    matches!(request.policy, RetryPolicy::Reconstruction),
                     &response,
                     now_unix_ms(),
                 )

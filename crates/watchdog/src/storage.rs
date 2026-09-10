@@ -29,6 +29,8 @@ mod storage_gateway_health;
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
 mod storage_queries;
+#[path = "storage_retry_admin.rs"]
+mod storage_retry_admin;
 #[path = "storage_worker_bootstrap.rs"]
 mod storage_worker_bootstrap;
 #[path = "storage_worker_handoff.rs"]
