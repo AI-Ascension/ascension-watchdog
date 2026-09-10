@@ -22,7 +22,7 @@
       "ref": "codex/gateway-allocation-cleanup-integration",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 35,
-      "state": "open-draft"
+      "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "sts2-harness": {
       "revision": "6fcd059b420a1099ec225a907ee3aea5e799f0e7",
@@ -43,28 +43,28 @@
       "ref": "fix/rest-catalog-completeness-bfca-20260908",
       "remote": "AI-Ascension/sts2-game-mod",
       "pull_request": 63,
-      "state": "open-draft"
+      "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "sts2-protocol": {
       "revision": "e9199f0706b1629b19efc6d7874d01662b1802b2",
       "ref": "recovery/protocol-rest-fixture-refresh-dc3a-20260909",
       "remote": "AI-Ascension/sts2-protocol",
       "pull_request": 24,
-      "state": "open-draft-dirty"
+      "state": "open-draft; conflicting-against-current-main; hosted-checks-pass; not-merged"
     },
     "sts2-game-core": {
       "revision": "9a27a80c32dcadd8030cf42c861e9e5da4daed1c",
       "ref": "work/w04-presentation",
       "remote": "AI-Ascension/sts2-game-core",
       "pull_request": 9,
-      "state": "open-draft"
+      "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "ai-agent-observability": {
       "revision": "a126715501d65a2d25f9d6ecf9c6bd142cc5f590",
       "ref": "codex/otel-native-health-probe",
       "remote": "AI-Ascension/ai-agent-observability",
       "pull_request": 16,
-      "state": "open-draft"
+      "state": "open-draft; hosted-checks-pass; not-merged"
     }
   },
   "evidence_boundary": {
