@@ -6,13 +6,14 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
 The pins were refreshed from authoritative remote PR and branch metadata on
-2026-09-10T23:40Z. The watchdog integration branch is draft PR #9 at
-`f5eaf5e35be025015a28da931aa973a0ade8f0ef`; its durable exact-digest release
+2026-09-10T23:48Z. The watchdog integration branch is draft PR #9 with source
+`f5eaf5e35be025015a28da931aa973a0ade8f0ef` and current docs/evidence head
+`e4728391cf66c3a3730c78439238598bb6e76769`; its durable exact-digest release
 selector, strict selector/receipt binding, request-collision rejection,
 authenticated activation/rollback boundary, and collision-safe Windows fixture
-allocation are source-tested. Hosted validation runs `34525217061` and
-`34525218190` passed on Ubuntu and Windows; standards runs `34525217025` and
-`34525218179` passed. Native service-session remains explicitly `UNVERIFIED`
+allocation are source-tested. Latest hosted validation runs `34543471080` and
+`34543471462` passed on Ubuntu and Windows; standards runs `34543471085` and
+`34543471421` passed. Native service-session remains explicitly `UNVERIFIED`
 and is not native service proof.
 
 The selected revisions are gateway `c8be3a72ba9e304392575a1b2bdbc262e392be21`,

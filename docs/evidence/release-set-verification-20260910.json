@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-10T23:00:00Z",
+  "captured_at": "2026-09-10T23:48:00Z",
   "classification": "component-build-and-artifact-audit-not-release-admission",
   "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
   "source_set": {
@@ -8,7 +8,7 @@
       "tested_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "implementation_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "remote_pr_head_at_capture": "e4728391cf66c3a3730c78439238598bb6e76769",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {
@@ -66,7 +66,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; hosted validation runs 34525217061 and 34525218190 passed on Ubuntu and Windows; standards runs 34525217025 and 34525218179 passed; native service-session remains unverified"
+      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34543471080 and 34543471462 passed on Ubuntu and Windows; standards runs 34543471085 and 34543471421 passed; native service-session remains unverified"
     },
     "sts2-gateway": {
       "commands": [

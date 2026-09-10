@@ -12,11 +12,11 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
-      "last_observed_pr_head": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "last_observed_pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; current PR head f5eaf5e adds collision-safe Windows fixture allocation and records the native Linux watchdog-to-harness worker smoke; hosted Ubuntu/Windows validation and standards checks pass; clean; not-merged"
+      "state": "open-draft; source commit f5eaf5e plus current docs/evidence head e472839; hosted Ubuntu/Windows validation and standards checks pass; clean; not-merged"
     },
     "sts2-gateway": {
       "revision": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
@@ -76,12 +76,13 @@
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10T23:40Z",
+    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10T23:48Z",
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34525217061, 34525218190],
-    "hosted_watchdog_status_at_capture": "passed-at-f5eaf5e on Ubuntu and Windows; standards runs 34525217025 and 34525218179 passed; native service-session remains separately unverified",
+    "hosted_watchdog_runs": [34543471080, 34543471462],
+    "hosted_watchdog_standards_runs": [34543471085, 34543471421],
+    "hosted_watchdog_status_at_capture": "passed-at-e472839 on Ubuntu and Windows; standards runs 34543471085 and 34543471421 passed; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,
       "harness_pr": 66,

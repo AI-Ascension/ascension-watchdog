@@ -9,7 +9,7 @@ cold-boot, or soak claim.
 
 | Repository | Ref / PR | Revision | Remote state |
 | --- | --- | --- | --- |
-| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | `f5eaf5e35be025015a28da931aa973a0ade8f0ef` | open draft; activation/rollback, launch fencing, collision-safe Windows fixtures, and native worker smoke evidence; hosted Ubuntu/Windows and standards validation passed |
+| ascension-watchdog | `codex/watchdog-integrated-20260910` / PR #9 | source `f5eaf5e35be025015a28da931aa973a0ade8f0ef`; PR head `e4728391cf66c3a3730c78439238598bb6e76769` | open draft; activation/rollback, launch fencing, collision-safe Windows fixtures, and native worker smoke evidence; latest hosted Ubuntu/Windows and standards validation passed |
 | sts2-gateway | `main` / PR #39 (follow-up PR #34) | `c8be3a72ba9e304392575a1b2bdbc262e392be21` (follow-up `87792cf3f6e2c3b6627d3a34bf380bb337c01373`) | merged main; restart guard follow-up open draft with hosted gates pass |
 | sts2-harness | `main` / PR #66 | `a0ace6712686cb30d6f0b556cb6814ad4c0721d1` (feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`) | merged automatically after green hosted checks; authenticated native Linux worker endpoint plus EOF/auth/deadline/ sealed-image hardening |
 | sts2-mcp-server | `main` / PR #40 | `037d10def1cbcb1c807e136d31b294355a92c010` | merged; native co-op adapter and pending-rejoin response fencing |
@@ -43,10 +43,10 @@ components with pinned locked dependencies:
   explicitly ignored, with all workspace integration suites passing. The
   five selector tests, restore CLI (2 tests), and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 hosted validation runs `34525217061` and `34525218190` passed
-  on both Ubuntu and Windows; standards runs `34524471775` and `34524473943`
-  passed. Native service-session remains separately `UNVERIFIED`.
-  (The standards runs for the latest head are `34525217025` and `34525218179`.)
+* Watchdog PR #9 latest hosted validation runs `34543471080` and
+  `34543471462` passed on both Ubuntu and Windows; standards runs
+  `34543471085` and `34543471421` passed. Native service-session remains
+  separately `UNVERIFIED`.
 * Gateway current `main` `c8be3a7`, MCP current `main` `037d10d`, game-mod
   current `main` `888b067`, protocol current `main` `f22dd72`, and observability
   current `main` `89539a6` are source-pinned. Their prior clean component gates

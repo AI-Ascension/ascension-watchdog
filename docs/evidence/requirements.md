@@ -7,11 +7,13 @@ does not declare an implementation or release complete.
 
 ## Wave 48 current refresh — 2026-09-10
 
-The authoritative watchdog source is PR #9 head `f5eaf5e35be025015a28da931aa973a0ade8f0ef`
-(open draft, hosted Ubuntu/Windows and standards checks passed). The exact
-Linux worker producer is harness PR #66 head
-`ef8c45e853d5f86c2653159a449826ffc20b5950`, based on harness main
-`63dc563690c93c575e75228f54672c1689d8a879`; its hosted Rust quality/policy
+The authoritative watchdog source is PR #9 source
+`f5eaf5e35be025015a28da931aa973a0ade8f0ef` with current docs/evidence head
+`e4728391cf66c3a3730c78439238598bb6e76769` (open draft, latest hosted
+Ubuntu/Windows and standards checks passed). The exact Linux worker producer is
+merged harness PR #66 feature head
+`58dede2eb661133d8910a1f785e8a90346efe8dd`, now harness main
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1`; its hosted Rust quality/policy
 checks passed. Current companion main pins are gateway `c8be3a7`, MCP `037d10d`,
 game-mod `888b067`, protocol `f22dd72`, game-core `f9db577`, and observability
 `89539a6`. See [`release-set-verification-20260910.json`](release-set-verification-20260910.json)

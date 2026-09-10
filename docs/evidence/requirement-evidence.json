@@ -5,6 +5,7 @@
   "current_activation_evidence": "docs/evidence/release-activation.md; source-tested durable selector and runtime launch fence; not a sealed cross-repository or native release admission",
   "base_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
   "root_tested_source_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+  "watchdog_pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
   "base_source_equivalence": {
     "command": "git diff b0b685484bbe6830275c98617be3823a2f21e7fb..f5eaf5e35be025015a28da931aa973a0ade8f0ef --name-only",
     "result": "durable release selector, authenticated activation/rollback, runtime launch fence, collision-safe Windows fixture tests, and native worker smoke evidence",
@@ -25,7 +26,7 @@
       "id": "root-full-workspace",
       "command": "cargo +1.97.1 test --locked --offline --workspace --all-targets",
       "exit": 0,
-    "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; explicit native worker smoke separately passed 1/1; two Linux cgroup tests remain ignored",
+      "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; explicit native worker smoke separately passed 1/1 in 25.33s; latest hosted runs 34543471080 and 34543471462 passed; two Linux cgroup tests remain ignored",
       "classification": "confirmed-linux-synthetic-source-at-root-tested-commit"
     },
     {
@@ -62,8 +63,9 @@
     "effect": "promotes the hardened Linux worker process-boundary evidence while source/component checks remain distinct from cross-repository proof"
   },
   "latest_source_set": {
-    "captured_at": "2026-09-10T23:40:00Z",
+    "captured_at": "2026-09-10T23:48:00Z",
     "watchdog": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "watchdog_pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
     "gateway": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
     "harness_worker_endpoint": "58dede2eb661133d8910a1f785e8a90346efe8dd",
     "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
