@@ -5,11 +5,11 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "eedc4ff55ab5c988039231b99439990ac2e3ef6a",
+    "watchdog_commit": "dfaef8d498eef4cbd866f06eb5ae6c430517d72d",
     "watchdog_source_tested_commit": "0935c66ddf4befe7fe7c17f3ba785af02057b3aa",
     "watchdog_pr": 8,
-    "hosted_run": 34481427907,
-    "hosted_run_status_at_capture": "completed-success"
+    "hosted_run": 34482882591,
+    "hosted_run_status_at_capture": "completed-success; standards run 34482882911 also completed-success"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -36,7 +36,7 @@
         "locked/offline serialized workspace tests: pass",
         "hosted run 34479326456 at prior source tip: all four jobs pass"
       ],
-      "remote": "included in hosted run 34480654731; the documentation-only follow-up is green in 34481427907"
+      "remote": "included in hosted run 34480654731; current branch tip dfaef8d passed hosted run 34482882591 and standards run 34482882911"
     },
     "gateway": {
       "commit": "7272c17f07e1d7e79c82f498eac0855794d476f5",
@@ -48,17 +48,17 @@
       "delivery": "published; merged current main without rewriting history; PR clean/open draft; no merge"
     },
     "harness": {
-      "commit": "e1e33ec27b9f44e20515c5112f3b2a81acba50c3",
-      "branch": "codex/harness-worker-auth-bridge",
-      "pr": 40,
-      "remote_head": "e1e33ec27b9f44e20515c5112f3b2a81acba50c3",
-      "change": "validate capability and worker/profile identity before Busy fast path",
-      "verification": "58 worker unit, 49 handoff/response/native/server integration, 171 MCP workspace tests passed; one MCP test ignored",
-      "delivery": "published; PR remains dirty/conflicting against current main; no merge"
+      "commit": "427176512eac67257a1b065f8508f37d2ed2255c",
+      "branch": "codex/harness-integrated-pr54-pr55-20260910",
+      "pr": 56,
+      "remote_head": "427176512eac67257a1b065f8508f37d2ed2255c",
+      "change": "combine durable recovery/catalog repair with capability and worker/profile identity validation before Busy fast path",
+      "verification": "full serial workspace tests passed; hosted Rust-quality and policy checks passed in run 34483057616/34483057869",
+      "delivery": "published; current-main-based clean/open draft; no merge; source PRs #54/#55 remain unchanged"
     }
   },
   "next_actions": [
-    "Finish watchdog hosted run 34480654731 and bind the candidate manifest to its exact green source tip.",
+    "Keep candidate manifest pinned to tested watchdog source 0935c66 and record current branch tip dfaef8d/run 34482882591 separately.",
     "Merge current main into gateway and harness branches without rewriting history, resolve conflicts, run fresh checks, and retain separate PR states.",
     "Do not claim cross-repository runtime integration until gateway, harness, MCP, mod, and protocol revisions build together.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."

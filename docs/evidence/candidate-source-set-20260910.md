@@ -13,9 +13,10 @@ hosted run `34480654731` (Ubuntu, Windows, standards, dependency audit, and
 locked release builds) passed at this exact tip. Gateway draft PR #35 is now
 current-main-based at `7272c17f07e1d7e79c82f498eac0855794d476f5` with fresh
 Rust-quality and repository-policy checks green. It remains open and unmerged.
-The harness follow-up is draft PR
-#54 at `5798e3d0ecd6e64cbd1b6d354311be64a12f8929`, with its hosted checks
-green; it follows merged PR #50. MCP PR #37 at
+The harness integration is draft PR #56 at
+`427176512eac67257a1b065f8508f37d2ed2255c`, combining the recovery and worker
+admission repairs on current main; Rust-quality and policy checks are green.
+PRs #54 and #55 remain open drafts with unchanged heads. MCP PR #37 at
 `16ca0cb06dc93564c14963bc544bef282b38d26d` is now merged as
 `a6b9215db1ddeeddabe4c111ed3b49476fb86e54`. The game-mod, protocol,
 game-core, and observability entries remain exact PR heads; protocol #24 is

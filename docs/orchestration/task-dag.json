@@ -53,7 +53,7 @@
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
     "watchdog": {"commit":"eedc4ff55ab5c988039231b99439990ac2e3ef6a","pull_request":8,"status":"draft; Linux cleanup uncertainty repair plus evidence wave; hosted run 34481427907 green"},
-    "harness": {"commit":"e1e33ec27b9f44e20515c5112f3b2a81acba50c3","pull_request":40,"status":"draft; worker identity repair published; branch remains dirty/conflicting; fresh checks pending"},
+    "harness": {"commit":"427176512eac67257a1b065f8508f37d2ed2255c","pull_request":56,"status":"draft; recovery plus worker identity repairs on current main; hosted Rust-quality and policy checks green"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
     "gateway": {"commit":"4c4d465a6cda59dee97e9932444f557bb51c7028","pull_request":35,"status":"draft; malformed post-write response repair published; branch remains dirty/conflicting; fresh checks pending"},
     "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"

@@ -169,9 +169,10 @@ missing-planned-containment uncertainty repair `156917b` and passed hosted run
 release builds, standards, and dependency checks). Gateway merge commit
 `7272c17` (including response repair `4c4d465`) was published after a
 non-rewriting merge of current main; its draft PR is clean with fresh
-Rust-quality and repository-policy checks green. Harness commit `e1e33ec` was
-published to its companion draft branch, but that PR remains dirty/conflicting
-against current main and has no fresh green checks at this wave. The nested
+Rust-quality and repository-policy checks green. Harness integration PR #56 at
+`4271765` combines the recovery and worker admission repairs on current main
+with fresh hosted Rust-quality and policy checks green; source PRs #54 and #55
+remain unchanged drafts. The nested
 delegation requirement remains unmet:
 the descendant contexts exposed no native spawn surface, so only depth 1 was
 observed and no depth-4 bypass was attempted. No cross-repository build,

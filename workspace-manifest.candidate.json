@@ -25,11 +25,11 @@
       "state": "open-draft; current-main-merged; hosted-checks-pass; not-merged"
     },
     "sts2-harness": {
-      "revision": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",
-      "ref": "codex/harness-integrated-full",
+      "revision": "427176512eac67257a1b065f8508f37d2ed2255c",
+      "ref": "codex/harness-integrated-pr54-pr55-20260910",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 54,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "pull_request": 56,
+      "state": "open-draft; current-main-based; hosted-checks-pass; not-merged"
     },
     "sts2-mcp-server": {
       "revision": "16ca0cb06dc93564c14963bc544bef282b38d26d",
