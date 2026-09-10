@@ -6,9 +6,16 @@
 set -eu
 
 repository=$1
-test_root=/tmp/ascension-watchdog-linux-install-test
+
+# Mount the private runtime scratch area before creating any fixture files;
+# nothing under the host's /tmp is used by this test.
+mount -t tmpfs tmpfs /run || {
+    printf '%s\n' 'skipping namespace installer test: tmpfs mount unavailable' >&2
+    exit 77
+}
 
 # Keep the namespace's /etc small but usable by dynamically linked utilities.
+test_root=/run/ascension-watchdog-linux-install-test
 mkdir -p "$test_root/etc-skel"
 for file in /etc/ld.so.cache /etc/ld.so.conf; do
     if [ -f "$file" ]; then
@@ -27,10 +34,6 @@ mount -t tmpfs tmpfs /opt || {
     exit 77
 }
 mount -t tmpfs tmpfs /var || {
-    printf '%s\n' 'skipping namespace installer test: tmpfs mount unavailable' >&2
-    exit 77
-}
-mount -t tmpfs tmpfs /run || {
     printf '%s\n' 'skipping namespace installer test: tmpfs mount unavailable' >&2
     exit 77
 }
