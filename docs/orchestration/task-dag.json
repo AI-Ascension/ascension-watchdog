@@ -52,10 +52,12 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"eedc4ff55ab5c988039231b99439990ac2e3ef6a","pull_request":8,"status":"draft; Linux cleanup uncertainty repair plus evidence wave; hosted run 34481427907 green"},
+    "watchdog": {"commit":"38252ddfc5eb4f47233bad80f153739728a43742","pull_request":9,"status":"draft; durable known-failure retry admission plus evidence wave; local Linux/Windows gates pass; hosted checks run against exact PR head"},
     "harness": {"commit":"427176512eac67257a1b065f8508f37d2ed2255c","pull_request":56,"status":"draft; recovery plus worker identity repairs on current main; hosted Rust-quality and policy checks green"},
     "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
-    "gateway": {"commit":"4c4d465a6cda59dee97e9932444f557bb51c7028","pull_request":35,"status":"draft; malformed post-write response repair published; branch remains dirty/conflicting; fresh checks pending"},
+    "gateway": {"commit":"7272c17f07e1d7e79c82f498eac0855794d476f5","pull_request":35,"status":"draft; malformed post-write response repair on current main; hosted Rust-quality and policy checks green"},
+    "game_mod": {"commit":"152c555633672bddcfa8280b290f6bd67afd564c","pull_request":70,"status":"draft; REST/current-main integration; hosted checks green; cross-repository rebuild pending"},
+    "protocol": {"commit":"5e43193cb5da17a5b772caa0f0fff49180cf716d","pull_request":31,"status":"draft; current-main co-op integration; hosted checks green; cross-repository rebuild pending"},
     "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"
   },
   "completion": "unverified"
