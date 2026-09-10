@@ -278,12 +278,20 @@ impl RestoreStagingFile {
                 "restore staging path changed before publication".to_owned(),
             ));
         }
-        let file = OpenOptions::new().read(true).open(&self.path)?;
-        file.sync_all()?;
+        #[cfg(not(windows))]
+        {
+            let file = OpenOptions::new().read(true).open(&self.path)?;
+            file.sync_all()?;
+        }
+        // On Windows the SQLite connection was closed with synchronous=FULL
+        // immediately before this method.  Re-opening the staging file just
+        // to call `FlushFileBuffers` can itself return ERROR_ACCESS_DENIED
+        // when a host scanner has a restrictive sharing handle; skipping that
+        // redundant open lets the bounded publication handoff below perform
+        // its no-replace link/copy fallback instead of failing before it.
         // Close the staging handle before publishing.  Windows can reject a
         // rename while any handle to the source lacks delete sharing, even
         // though the database connection itself has already been dropped.
-        drop(file);
         publish_restore_staging(&self.path, destination)?;
         self.committed = true;
         #[cfg(unix)]
