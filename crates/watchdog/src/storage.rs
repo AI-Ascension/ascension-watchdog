@@ -312,75 +312,7 @@ impl RestoreStagingFile {
 fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        // Antivirus/indexer handles on hosted Windows runners can outlive the
-        // SQLite close by more than a few scheduler ticks. Keep the handoff
-        // bounded while allowing the ordinary local publication race to settle.
-        const ATTEMPTS: usize = 200;
-        for attempt in 0..ATTEMPTS {
-            match fs::rename(staging, destination) {
-                Ok(()) => return Ok(()),
-                Err(error) if attempt + 1 < ATTEMPTS && restore_publish_retryable(&error) => {
-                    let stable = canonical_owner_path(staging, "restore staging")?;
-                    if stable != staging {
-                        return Err(WatchdogError::Conflict(
-                            "restore staging path changed during publication".to_owned(),
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(error) => {
-                    // Some Windows hosts keep the parent directory open
-                    // without FILE_SHARE_DELETE (for example a test
-                    // harness' temporary-directory guard).  In that case a
-                    // rename can remain denied even after every SQLite
-                    // handle has closed.  First try an atomic no-replace hard
-                    // link, which needs directory create permission but not
-                    // delete sharing.  If the filesystem does not support
-                    // that operation, use the bounded fixed-handle copy
-                    // fallback below.  CREATE_NEW prevents overwriting a
-                    // concurrent destination; a crash during that copy can
-                    // leave only an unvalidated file, and subsequent restore
-                    // attempts refuse any existing destination so it cannot
-                    // be mistaken for an admitted database or overwritten.
-                    if restore_publish_retryable(&error) {
-                        let rename_error = format!(
-                            "restore staging publication {} -> {}: {error}",
-                            staging.display(),
-                            destination.display()
-                        );
-                        if let Ok(()) = fs::hard_link(staging, destination) {
-                            let _ = fs::remove_file(staging);
-                            return Ok(());
-                        }
-                        return match copy_restore_staging_without_rename(staging, destination) {
-                            Ok(()) => Ok(()),
-                            Err(copy_error) => {
-                                let detail = format!(
-                                    "{rename_error}; no-replace copy fallback: {copy_error}"
-                                );
-                                let kind = match copy_error {
-                                    WatchdogError::Io(error) => error.kind(),
-                                    _ => std::io::ErrorKind::Other,
-                                };
-                                Err(WatchdogError::Io(std::io::Error::new(kind, detail)))
-                            }
-                        };
-                    }
-                    return Err(WatchdogError::Io(std::io::Error::new(
-                        error.kind(),
-                        format!(
-                            "restore staging publication {} -> {}: {error}",
-                            staging.display(),
-                            destination.display()
-                        ),
-                    )));
-                }
-            }
-        }
-        Err(WatchdogError::Conflict(
-            "restore staging publication remained unavailable after 5 seconds of bounded retries"
-                .to_owned(),
-        ))
+        publish_restore_staging_windows(staging, destination, 200)
     }
     #[cfg(not(windows))]
     {
@@ -390,61 +322,84 @@ fn publish_restore_staging(staging: &Path, destination: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
+fn publish_restore_staging_windows(
+    staging: &Path,
+    destination: &Path,
+    attempts: usize,
+) -> Result<()> {
+    if attempts == 0 {
+        return Err(WatchdogError::InvalidInput(
+            "restore publication requires at least one attempt".to_owned(),
+        ));
+    }
+    // Antivirus/indexer handles on hosted Windows runners can outlive the
+    // SQLite close by more than a few scheduler ticks. Keep the handoff
+    // bounded while allowing the ordinary local publication race to settle.
+    for attempt in 0..attempts {
+        match fs::rename(staging, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt + 1 < attempts && restore_publish_retryable(&error) => {
+                let stable = canonical_owner_path(staging, "restore staging")?;
+                if stable != staging {
+                    return Err(WatchdogError::Conflict(
+                        "restore staging path changed during publication".to_owned(),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                // Some Windows hosts keep the parent directory open
+                // without FILE_SHARE_DELETE (for example a test
+                // harness' temporary-directory guard).  In that case a
+                // rename can remain denied even after every SQLite
+                // handle has closed.  Try an atomic no-replace hard link,
+                // which needs directory create permission but not delete
+                // sharing.  There is deliberately no streaming-copy
+                // fallback: creating the destination before copying
+                // bytes would expose a partial database after a crash or
+                // I/O failure and would violate the publication contract.
+                if restore_publish_retryable(&error) {
+                    let rename_error = format!(
+                        "restore staging publication {} -> {}: {error}",
+                        staging.display(),
+                        destination.display()
+                    );
+                    return match fs::hard_link(staging, destination) {
+                        Ok(()) => {
+                            let _ = fs::remove_file(staging);
+                            Ok(())
+                        }
+                        Err(link_error) => Err(WatchdogError::Io(std::io::Error::new(
+                            link_error.kind(),
+                            format!(
+                                "{rename_error}; atomic no-replace hard-link publication: {link_error}"
+                            ),
+                        ))),
+                    };
+                }
+                return Err(WatchdogError::Io(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "restore staging publication {} -> {}: {error}",
+                        staging.display(),
+                        destination.display()
+                    ),
+                )));
+            }
+        }
+    }
+    Err(WatchdogError::Conflict(
+        "restore staging publication remained unavailable after 5 seconds of bounded retries"
+            .to_owned(),
+    ))
+}
+
+#[cfg(windows)]
 fn restore_publish_retryable(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
     ) || matches!(error.raw_os_error(), Some(5 | 32 | 33 | 1224))
-}
-
-#[cfg(windows)]
-fn copy_restore_staging_without_rename(staging: &Path, destination: &Path) -> Result<()> {
-    use std::io::copy;
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-
-    // Keep the source identity bound to this open handle.  The path is only
-    // used for diagnostics; a replacement after this open cannot change the
-    // bytes copied below.
-    let mut source = OpenOptions::new().read(true).open(staging)?;
-    let source_metadata = source.metadata()?;
-    if !source_metadata.is_file() {
-        return Err(WatchdogError::Conflict(
-            "restore staging source is not a regular file".to_owned(),
-        ));
-    }
-    let expected_bytes = source_metadata.len();
-
-    // CREATE_NEW is the no-overwrite boundary.  Read/write sharing permits
-    // normal post-copy inspection while withholding delete sharing so a
-    // concurrent replacement cannot unlink the newly published destination.
-    let mut options = OpenOptions::new();
-    options
-        .create_new(true)
-        .read(true)
-        .write(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-    let mut target = options.open(destination)?;
-    copy(&mut source, &mut target)?;
-    target.sync_all()?;
-    let actual_bytes = target.metadata()?.len();
-    if actual_bytes != expected_bytes {
-        return Err(WatchdogError::Conflict(
-            "no-replace restore publication copied an unexpected byte length".to_owned(),
-        ));
-    }
-    drop(target);
-
-    // The source is disposable staging state.  Directory sharing may still
-    // deny its unlink on the same hosts that denied rename; leaving that
-    // uniquely named file is harmless and, importantly, never removes an
-    // operator-selected path.  The destination is already durable and the
-    // caller marks the staging guard committed only after this function
-    // returns.
-    let _ = fs::remove_file(staging);
-    Ok(())
 }
 
 impl Drop for RestoreStagingFile {
@@ -3168,5 +3123,49 @@ fn component_state_parse(value: &str) -> Result<ComponentState> {
         other => Err(WatchdogError::Conflict(format!(
             "unknown component state {other}"
         ))),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod restore_publication_tests {
+    use super::{OpenOptions, fs, publish_restore_staging_windows};
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn sharing_error_fails_closed_without_streaming_copy() {
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+
+        let directory = tempfile::tempdir().expect("temporary restore directory");
+        let staging = directory.path().join("restore-staging.sqlite3");
+        let destination = directory.path().join("watchdog.sqlite3");
+        let staging_bytes = b"fully transformed restore bytes";
+        let destination_bytes = b"existing destination bytes";
+        fs::write(&staging, staging_bytes).expect("staging bytes");
+        fs::write(&destination, destination_bytes).expect("destination bytes");
+        let destination_guard = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&destination)
+            .expect("hold destination without delete sharing");
+
+        let error = publish_restore_staging_windows(&staging, &destination, 1)
+            .expect_err("sharing failure must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("atomic no-replace hard-link publication")
+                || message.contains("restore staging publication"),
+            "unexpected publication error: {message}"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("destination remains readable"),
+            destination_bytes
+        );
+        assert_eq!(
+            fs::read(&staging).expect("staging remains available"),
+            staging_bytes
+        );
+        drop(destination_guard);
     }
 }
