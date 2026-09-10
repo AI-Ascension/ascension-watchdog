@@ -7,9 +7,9 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 
 The pins were refreshed from remote PR metadata on 2026-09-10. The watchdog
 integration is draft PR #9 at
-`0d4983c41156e55b722e5fa03a07b1de5c7ed666`, based on the `bootstrap` default
+`38252ddfc5eb4f47233bad80f153739728a43742`, based on the `bootstrap` default
 branch; its fresh Ubuntu, Windows, standards, and dependency workflows were
-queued or running after the retry-admission update. Gateway draft PR #35 is current-main-based at
+running after the retry-admission update. Gateway draft PR #35 is current-main-based at
 `7272c17f07e1d7e79c82f498eac0855794d476f5` with Rust-quality and policy checks
 green. The harness integration is draft PR #56 at
 `427176512eac67257a1b065f8508f37d2ed2255c`, combining the recovery and worker
