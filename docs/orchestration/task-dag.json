@@ -52,13 +52,13 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"commit":"fa0787620e768266c683da178c81b5af7198bc39","pull_request":9,"status":"draft; atomic restore publication, offline restore/rekey, and Linux install/uninstall idempotence coverage; local gates pass; hosted Ubuntu/Windows/dependency rerun in progress"},
-    "harness": {"commit":"fcd1f6819fdd2672816a1b7e2235f7069aa93708","pull_request":59,"status":"draft; conflicting provider completion retries are rejected with result metadata/payload binding; local and hosted gates pass; not merged"},
-    "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
-    "gateway": {"commit":"0524b67ec28791c007d2ea025e26860672358247","pull_request":37,"status":"draft; malformed SETTLED receipt persists UNKNOWN and exact retry replays without redispatch; local and hosted gates green; not merged"},
-    "game_mod": {"commit":"e532f4d9186e367bd3dc045d2377a2bd3ac9e4e5","pull_request":70,"status":"merged current main; REST integration; hosted checks green; cross-repository rebuild pending"},
-    "protocol": {"commit":"09819e2216354136ab5a799413dcd98499f56580","pull_request":33,"status":"draft; coop-native-v1 rebased onto current main 997de2a; local and hosted gates pass; not merged"},
-    "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"
+    "watchdog": {"commit":"c271f0a3284566af41f6c47ef6ebc21e52cf854c","pull_request":9,"status":"open draft; docs head records source-tested 5b235f9; hosted Ubuntu/Windows/dependency/standards checks pass; service-session remains unverified"},
+    "harness": {"commit":"5cc486a66b6f11930675af06f7426cd91c609983","pull_request":59,"status":"merged current main; conflicting provider completion retries are rejected with result metadata/payload binding"},
+    "mcp": {"commit":"8b6b73862494488fdd16fa5423fdf90a953260f4","pull_request":37,"status":"merged current main; dependent release rebuild pending"},
+    "gateway": {"commit":"de1fe72345ea972d56c05d30837da5327e5f1655","pull_request":38,"status":"merged current main; co-op host-lease consumer and durable UNKNOWN replay are present; component gates green"},
+    "game_mod": {"commit":"a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b","pull_request":70,"status":"merged current main; REST integration; hosted checks green; cross-repository rebuild pending"},
+    "protocol": {"commit":"678885687e46a43f53b9eec108dfb160fc9a13bd","pull_request":33,"status":"merged current main; coop-native-v1 producer artifact present; MCP/harness/game-mod consumer surface absent"},
+    "completion": "unverified: no unified cross-consumer build or conformance; native, live, cold-boot, activation/rollback and soak gates remain open"
   },
   "completion": "unverified"
 }

@@ -5,19 +5,20 @@
   "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
   "source_set": {
     "ascension-watchdog": {
-      "tested_source": "5b235f9524ecbb9529392dafee2328545666f356",
+      "tested_source": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+      "implementation_source": "5b235f9524ecbb9529392dafee2328545666f356",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "5b235f9524ecbb9529392dafee2328545666f356",
+      "remote_pr_head_at_capture": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {
-      "tested_source": "0524b67ec28791c007d2ea025e26860672358247",
-      "selected_remote_revision": "5f3eadabede9954bc834a62e3c4c1003444826ca",
-      "remote_pr": 37,
+      "tested_source": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "selected_remote_revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "remote_pr": 38,
       "ref": "main"
     },
     "sts2-harness": {
-      "tested_source": "fcd1f6819fdd2672816a1b7e2235f7069aa93708",
+      "tested_source": "5cc486a66b6f11930675af06f7426cd91c609983",
       "selected_remote_revision": "5cc486a66b6f11930675af06f7426cd91c609983",
       "remote_pr": 59,
       "ref": "main"
@@ -28,19 +29,20 @@
       "ref": "main"
     },
     "sts2-game-mod": {
-      "tested_source": "152c555633672bddcfa8280b290f6bd67afd564c",
+      "tested_source": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
       "selected_remote_revision": "a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b",
       "remote_pr": 70,
       "ref": "main"
     },
     "sts2-protocol": {
-      "tested_source": "09819e2216354136ab5a799413dcd98499f56580",
-      "selected_remote_revision": "09819e2216354136ab5a799413dcd98499f56580",
+      "tested_source": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "selected_remote_revision": "678885687e46a43f53b9eec108dfb160fc9a13bd",
       "remote_pr": 33,
-      "ref": "codex/coop-native-current-main-20260910",
-      "state": "open-draft"
+      "ref": "main",
+      "state": "merged"
     },
     "sts2-game-core": {
+      "tested_source": "f9db577530a4d159b066d3facbd780d61c044eb0",
       "selected_remote_revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
       "remote_pr": 9,
       "ref": "main"
@@ -62,7 +64,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local; hosted-runs-34510068432-and-34510068442-pass; Windows unit test sharing_error_fails_closed_without_streaming_copy passed; service-session step unverified on runner session 2"
+      "result": "pass-local-at-c271-serial; hosted-runs-34510904205-and-34510905823-plus-standards-runs-34510904309-and-34510905804-pass; Windows unit test sharing_error_fails_closed_without_streaming_copy passed; service-session step unverified on runner session 2"
     },
     "sts2-gateway": {
       "commands": [
@@ -70,7 +72,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "pass-local-on-tested-source; hosted-checks-pass"
+      "result": "pass-local-current-main-serial-runtime-and-workspace-gates; hosted-checks-pass-runs-34510597219-and-34510597283; parallel workspace attempt exposed timing-sensitive fixture failures and was not used as a gate"
     },
     "sts2-harness": {
       "commands": [
@@ -78,7 +80,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "pass-local-on-tested-source; hosted-checks-pass"
+      "result": "pass-local-current-main; hosted-checks-pass"
     },
     "sts2-game-mod": {
       "commands": [
@@ -86,7 +88,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "pass-local-on-tested-source; hosted-checks-pass"
+      "result": "pass-local-current-main; hosted-checks-pass"
     },
     "sts2-protocol": {
       "commands": [
@@ -94,7 +96,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "pass-local-on-tested-source; hosted-checks-pass"
+      "result": "pass-local-current-main; hosted-checks-pass"
     }
   },
   "artifact_byte_comparison": {
@@ -134,8 +136,8 @@
     "result": "byte-identical-across-compared-worktrees"
   },
   "release_boundary": {
-    "cross_repository_clean_build": "not-run",
-    "cross_consumer_conformance": "not-run",
+    "cross_repository_clean_build": "not-run; component worktrees were checked independently and no unified consumer build exists",
+    "cross_consumer_conformance": "not-run; protocol/gateway coop-native-v1 producer exists, but MCP, harness, and game-mod do not expose that consumer surface",
     "native_windows_service": "not-run; hosted service-session step unverified on runner session 2",
     "native_linux_service": "not-run",
     "live_host": "not-run",

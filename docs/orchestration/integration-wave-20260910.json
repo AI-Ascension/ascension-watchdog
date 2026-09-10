@@ -5,12 +5,13 @@
   "root": {
     "thread": "01a078a4-d17d-7101-afa1-9e68655beedd",
     "watchdog_branch": "codex/watchdog-integrated-20260910",
-    "watchdog_commit": "5b235f9524ecbb9529392dafee2328545666f356",
-    "watchdog_source_tested_commit": "5b235f9524ecbb9529392dafee2328545666f356",
+    "watchdog_commit": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+    "watchdog_source_tested_commit": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+    "watchdog_implementation_commit": "5b235f9524ecbb9529392dafee2328545666f356",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "5b235f9524ecbb9529392dafee2328545666f356",
-    "hosted_runs": [34510068432, 34510068442],
-    "hosted_run_status_at_capture": "success; exact PR head 5b235f9; bounded five-second restore publication retry, atomic no-replace hardlink fallback, and operation diagnostics pass; Ubuntu, Windows, dependency, and standards jobs passed; Windows sharing_error_fails_closed_without_streaming_copy passed; Windows service-session step was UNVERIFIED on runner session 2 (copy fallback was removed before this source head)"
+    "watchdog_last_observed_pr_head": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+    "hosted_runs": [34510904205, 34510905823, 34510904309, 34510905804],
+    "hosted_run_status_at_capture": "success; exact PR docs head c271f0a; implementation parent 5b235f9; bounded five-second restore publication retry, atomic no-replace hardlink fallback, and operation diagnostics pass; Ubuntu, Windows, dependency, and standards jobs passed; Windows sharing_error_fails_closed_without_streaming_copy passed; Windows service-session step was UNVERIFIED on runner session 2"
   },
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -29,7 +30,8 @@
   },
   "results": {
     "watchdog": {
-      "commit": "5b235f9524ecbb9529392dafee2328545666f356",
+      "commit": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+      "implementation_commit": "5b235f9524ecbb9529392dafee2328545666f356",
       "change": "durable retry/scoped reconciliation, protected read-only catalog inspection, explicit offline restore/rekey CLI with atomic staging publication, bounded five-second Windows publication retry with operation diagnostics, atomic no-replace hardlink fallback for transient sharing errors (streaming copy deliberately rejected), protected config fixtures, collision-safe Windows native fixture allocation, and Linux install/uninstall idempotence coverage",
       "verification": [
         "cargo +1.97.1 fmt --all -- --check: pass",
@@ -37,21 +39,21 @@
         "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features: pass",
         "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings: pass",
         "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast: pass (200 watchdog library tests; all workspace integration suites; 4 ignored)",
-        "Windows hosted unit test storage::restore_publication_tests::sharing_error_fails_closed_without_streaming_copy: pass (run 34510068432)",
+        "Windows hosted unit test storage::restore_publication_tests::sharing_error_fails_closed_without_streaming_copy: pass (runs 34510904205 and 34510905823)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture: pass (2 restore/rekey tests)",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
-        "Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression; hosted runs 34510068432/34510068442 pass, with service-session remaining UNVERIFIED"
+        "Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression; docs-head runs 34510904205/34510905823 pass, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; hosted validation runs 34510068432/34510068442 pass for exact source head 5b235f9"
+      "remote": "pushed to codex/watchdog-integrated-20260910; PR #9 docs head c271f0a; hosted validation and standards runs 34510904205/34510905823/34510904309/34510905804 pass"
     },
     "gateway": {
-      "commit": "5f3eadabede9954bc834a62e3c4c1003444826ca",
+      "commit": "de1fe72345ea972d56c05d30837da5327e5f1655",
       "branch": "main",
-      "pr": 37,
-      "remote_head": "5f3eadabede9954bc834a62e3c4c1003444826ca",
-      "change": "durable Runtime-v3 UNKNOWN for malformed SETTLED receipts and replay without redispatch or catalog consultation",
-      "verification": "175 runtime tests, 11 control-plane tests, 7 recovery tests, and all workspace suites passed locally; hosted Rust-quality and repository-policy checks passed",
-      "delivery": "PR #37 merged; current main is 5f3eadab"
+      "pr": 38,
+      "remote_head": "de1fe72345ea972d56c05d30837da5327e5f1655",
+      "change": "merged co-op host-lease consumer on top of durable Runtime-v3 UNKNOWN handling and exact replay",
+      "verification": "current-main locked format, Clippy, workspace tests, and serial runtime suite passed in an isolated checkout; hosted Rust-quality and repository-policy checks passed (34510597219, 34510597283); a broader parallel attempt exposed timing-sensitive fixture failures and was not used as a gate",
+      "delivery": "PR #38 merged (PR #37 included); current main is de1fe723"
     },
     "harness": {
       "commit": "5cc486a66b6f11930675af06f7426cd91c609983",
@@ -59,22 +61,22 @@
       "pr": 59,
       "remote_head": "5cc486a66b6f11930675af06f7426cd91c609983",
       "change": "provider completion retries bind result reference, digest metadata, and payload; conflicting reuse is rejected",
-      "verification": "strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
+      "verification": "current-main strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
       "delivery": "PR #59 merged; current main is 5cc486a6"
     },
     "protocol": {
-      "commit": "09819e2216354136ab5a799413dcd98499f56580",
-      "branch": "codex/coop-native-current-main-20260910",
+      "commit": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "branch": "main",
       "pr": 33,
-      "remote_head": "09819e2216354136ab5a799413dcd98499f56580",
-      "change": "rebase coop-native-v1 candidate artifact, producer/consumer evidence, and strict conformance onto protocol current main 997de2a",
-      "verification": "local strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
-      "delivery": "pushed as draft PR #33; mergeable; not merged"
+      "remote_head": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "change": "merged coop-native-v1 artifact and producer/consumer evidence",
+      "verification": "current-main strict policy, format, warnings-denied workspace Clippy, and locked all-target/all-feature workspace tests passed; hosted checks passed",
+      "delivery": "PR #33 merged; current main is 6788856"
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to tested watchdog commit 5b235f9524ecbb9529392dafee2328545666f356 and protocol PR33 head 09819e2.",
-    "Use docs/evidence/release-set-verification-20260910.json for the exact merged companion revisions, isolated component gates, and artifact-byte comparison; run cross-consumer conformance before any runtime claim.",
+    "Keep candidate manifest source-pinned to watchdog docs head c271f0a (implementation parent 5b235f9) and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
+    "The current component set has no unified cross-consumer build: protocol/gateway expose coop-native-v1, while MCP, harness, and game-mod do not expose that consumer surface. Treat artifact-byte equality as component evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

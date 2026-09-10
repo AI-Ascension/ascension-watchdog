@@ -11,19 +11,19 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "5b235f9524ecbb9529392dafee2328545666f356",
-      "last_observed_pr_head": "5b235f9524ecbb9529392dafee2328545666f356",
+      "revision": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
+      "last_observed_pr_head": "c271f0a3284566af41f6c47ef6ebc21e52cf854c",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, and atomic no-replace hardlink fallback for transient sharing errors (no streaming copy); source-tested-local-at-5b235f9; hosted-checks-pass-runs-34510068432-34510068442; mergeable; not-merged"
+      "state": "open-draft; docs head c271f0a records source-tested implementation 5b235f9, bounded five-second Windows restore publication retry with operation diagnostics, protected config fixtures, collision-safe native fixture allocation, and atomic no-replace hardlink fallback for transient sharing errors (no streaming copy); hosted-checks-pass-runs-34510904205-34510905823 and standards-runs-34510904309-34510905804; mergeable; not-merged"
     },
     "sts2-gateway": {
-      "revision": "5f3eadabede9954bc834a62e3c4c1003444826ca",
+      "revision": "de1fe72345ea972d56c05d30837da5327e5f1655",
       "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 37,
-      "state": "merged; PR #37 head 0524b67; malformed SETTLED receipt is durable UNKNOWN and exact retries replay without redispatch; hosted-checks-pass; current-main"
+      "state": "merged; PR #38 head 9fc8eeb (PR #37 included); co-op host-lease consumer is on current main de1fe723; hosted-checks-pass (runs 34510597219, 34510597283)"
     },
     "sts2-harness": {
       "revision": "5cc486a66b6f11930675af06f7426cd91c609983",
@@ -47,11 +47,11 @@
       "state": "merged; PR #70 merge e532f4d; hosted-checks-pass; current-main"
     },
     "sts2-protocol": {
-      "revision": "09819e2216354136ab5a799413dcd98499f56580",
-      "ref": "codex/coop-native-current-main-20260910",
+      "revision": "678885687e46a43f53b9eec108dfb160fc9a13bd",
+      "ref": "main",
       "remote": "AI-Ascension/sts2-protocol",
       "pull_request": 33,
-      "state": "open-draft; rebased-on-current-main-997de2a; source-tested-local; hosted-checks-pass; mergeable; not-merged"
+      "state": "merged; PR #33 head 09819e2; coop-native-v1 producer artifact is on current main 6788856; hosted-checks-pass (runs 34497116746, 34497116947)"
     },
     "sts2-game-core": {
       "revision": "f9db577530a4d159b066d3facbd780d61c044eb0",

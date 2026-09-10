@@ -163,28 +163,27 @@ fixture/process fact and never means native, live, reboot, or release proof.
 ## Current-wave addendum — 2026-09-10
 
 The historical matrix above remains intentionally conservative. The current
-watchdog source tip `fa0787620e768266c683da178c81b5af7198bc39` includes atomic
-restore staging publication, explicit restore/rekey quarantine, and the Linux
-install/uninstall idempotence regression. Its local pinned-toolchain checks
-passed: standards validation, format, strict Clippy, 200 watchdog library
-tests, all workspace integration suites, the two restore CLI tests, and the
-namespace-isolated Linux installer test (4 expected tests ignored). The first
-hosted run at predecessor `cacb2b9` exposed a Windows-only `Access is denied`
-rename while a staging handle remained open; `fa07876` closes that handle
-before publication. The hosted rerun for `fa07876` was still in progress at
-capture, so Windows CI is not yet promoted to a completed gate.
+watchdog docs head is `c271f0a3284566af41f6c47ef6ebc21e52cf854c`, with the
+source-tested implementation at `5b235f9524ecbb9529392dafee2328545666f356`.
+Pinned-toolchain checks passed: standards validation, format, strict Clippy,
+200 watchdog library tests, all workspace integration suites, the two restore
+CLI tests, and the namespace-isolated Linux installer test (4 expected tests
+ignored). Hosted validation and standards runs
+`34510904205`, `34510905823`, `34510904309`, and `34510905804` passed. The
+hosted service-session step remains explicitly `UNVERIFIED` on runner session 2.
 
-Gateway follow-up PR #37 at
-`0524b67ec28791c007d2ea025e26860672358247` adds the durable malformed-SETTLED
-receipt/UNKNOWN replay regression and has green hosted quality and policy
-checks. Harness follow-up PR #59 at
-`fcd1f6819fdd2672816a1b7e2235f7069aa93708` rejects conflicting provider
-completion retries and has green hosted quality and policy checks. Protocol PR
-#33 at `09819e2216354136ab5a799413dcd98499f56580` also has green hosted checks.
-These follow-ups remain draft and unmerged; gateway PR #35 and harness PR #58
-are the earlier merged bases. MCP #37, game-mod #70, game-core #9, and
-observability #16 are merged at the revisions pinned in the candidate
-manifest.
+The refreshed current-main companion set is gateway
+`de1fe72345ea972d56c05d30837da5327e5f1655` (PR #38, including #37), harness
+`5cc486a66b6f11930675af06f7426cd91c609983` (PR #59), MCP
+`8b6b73862494488fdd16fa5423fdf90a953260f4` (PR #37), game-mod
+`a70a5e5bb2fa89fade7e16dbb4a58ed80e31355b` (PR #70), protocol
+`678885687e46a43f53b9eec108dfb160fc9a13bd` (PR #33), game-core
+`f9db577530a4d159b066d3facbd780d61c044eb0` (PR #9), and observability
+`d7e79e1a9663601013e513048caea7063b0de9ae` (PR #16); all are merged. Current
+component gates pass in isolated worktrees, but the conformance audit found
+that only protocol and gateway expose the coop-native-v1 surface. MCP, harness,
+and game-mod have no matching consumer adapter, so a unified cross-consumer
+build remains unavailable.
 
 The nested delegation requirement remains unmet: descendant contexts exposed no
 native spawn surface, so only depth 1 was observed and no depth-4 bypass was
@@ -192,19 +191,22 @@ attempted. No cross-repository build, service installation, live host, cold
 boot, activation, rollback, or soak evidence is promoted by these
 source/component results.
 
-See `docs/orchestration/integration-wave-20260910.json` for the resumable task
-record and exact changed commits.
+See `docs/orchestration/integration-wave-20260910.json` and
+`docs/evidence/current-source-conformance-20260910.md` for the resumable task
+record, exact current refs, component gates, artifact comparison, and boundary.
 
 ## Delivery decision
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
 `SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
-`fa07876`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`c271f0a`, with native Windows execution still pending), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = watchdog/gateway/harness follow-up drafts published; earlier gateway, harness, MCP, game-mod, game-core, and observability changes merged; protocol remains draft`. The exact next gate
-is a clean cross-repository release-set rebuild after the gateway/harness/mod
-consumer work is integrated, followed by the independent native/live/reboot/
-soak matrix. No row above should be changed to complete from a source-only,
-component, fake-host, cross-build, or ignored-test result.
+`REMOTE_DELIVERY_STATUS = watchdog PR #9 remains open draft; gateway, harness,
+MCP, game-mod, game-core, protocol, and observability companion changes are
+merged`. The exact next gate is a clean cross-repository release-set rebuild
+after the missing consumer adapters are supplied (or the release is explicitly
+scoped to the existing REST contract), followed by the independent
+native/live/reboot/soak matrix. No row above should be changed to complete from
+a source-only, component, fake-host, cross-build, or ignored-test result.
