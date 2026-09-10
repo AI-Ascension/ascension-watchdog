@@ -315,6 +315,17 @@ fn canonical_owner_path(path: &Path, name: &str) -> Result<PathBuf> {
 fn reject_existing_link_components(path: &Path, name: &str) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
+        // A Windows verbatim path reports its prefix (`\\?\C:`) and root as
+        // separate components.  Querying metadata for the prefix alone is an
+        // invalid Win32 operation; defer the first filesystem check until a
+        // complete root/normal path has been assembled.
+        if matches!(
+            component,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir
+        ) {
+            current.push(component.as_os_str());
+            continue;
+        }
         current.push(component.as_os_str());
         match fs::symlink_metadata(&current) {
             Ok(metadata) => reject_link_or_reparse(&metadata, name)?,
