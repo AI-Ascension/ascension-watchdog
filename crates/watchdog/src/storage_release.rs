@@ -20,6 +20,7 @@ use crate::config::DesiredMode;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 const STATE_KEY: &str = "release_selection_state";
 const ACTIVE_ID_KEY: &str = "active_release_id";
@@ -581,6 +582,17 @@ fn validate_activation_response(
     response: &Value,
     pending: &PendingReleaseActivation,
 ) -> Result<()> {
+    let response_keys = response
+        .as_object()
+        .map(|object| object.keys().map(String::as_str).collect::<BTreeSet<_>>())
+        .ok_or_else(|| {
+            WatchdogError::Conflict("release activation response must be an object".to_owned())
+        })?;
+    if response_keys != BTreeSet::from(["kind", "value"]) {
+        return Err(WatchdogError::Conflict(
+            "release activation response has unknown or missing fields".to_owned(),
+        ));
+    }
     let value = response
         .get("value")
         .and_then(Value::as_object)
@@ -589,6 +601,20 @@ fn validate_activation_response(
                 "release activation response is missing its typed value".to_owned(),
             )
         })?;
+    let value_keys = value.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if value_keys
+        != BTreeSet::from([
+            "release_id",
+            "release_digest",
+            "previous_release_id",
+            "previous_release_digest",
+            "rollback",
+        ])
+    {
+        return Err(WatchdogError::Conflict(
+            "release activation value has unknown or missing fields".to_owned(),
+        ));
+    }
     if response.get("kind").and_then(Value::as_str) != Some("ReleaseActivation")
         || value.get("release_id").and_then(Value::as_str)
             != Some(pending.release.release_id.as_str())
