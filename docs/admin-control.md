@@ -31,14 +31,17 @@ targets fail closed for `--payload-file`; use inline `--payload` there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
-Status, lifecycle, job submission/inspection, quarantine, and watchdog-local
-known-failure retry are wired into the real service loop. Retry only requeues
-the latest failed attempt when its job has no terminal result and no worker
-handoff; it preserves the original failure evidence, records an idempotent
-operator receipt, and rejects unknown, terminal, reconstruction, and
-worker-handoff paths. Reconciliation, restore, and release-activation
-dispatcher operations remain unsupported pending their owner-specific
-integration; their transport types alone are not operational evidence.
+Status, lifecycle, job submission/inspection, quarantine, watchdog-local
+known-failure retry, and scoped watchdog reconciliation are wired into the real
+service loop. Reconciliation validates the requested deployment, component,
+job, or attempt against the current owner-local inventory, then records one
+idempotent admin admission for the next owning-loop pass; it never dispatches
+gateway/game work directly. Retry only requeues the latest failed attempt when
+its job has no terminal result and no worker handoff; it preserves the original
+failure evidence, records an idempotent operator receipt, and rejects unknown,
+terminal, reconstruction, and worker-handoff paths. Restore and release
+activation remain unsupported pending their owner-specific integration; their
+transport types alone are not operational evidence.
 Windows native service execution and uninstall recovery remain unverified.
 
 This sideband is a local operator control plane. It is an authenticated,
@@ -140,6 +143,14 @@ not proof that a running harness is paused or terminated. A
 quarantine receipt confirms the durable watchdog disposition only. Use the
 separate exact-process stop authority when operational quiescence is required,
 and retain uncertainty if cleanup cannot be confirmed.
+
+`reconcile` takes `{ "target": "deployment|component|job|attempt", "id":
+"..." }`; deployment reconciliation omits `id`, while every other target
+requires one. The owner thread checks that the component, job, or attempt is
+currently present before recording the receipt. The accepted command is a
+durable request for the normal owning reconciliation loop, not permission to
+invoke a gateway or host mutation from the admin transport. Unknown scoped
+identifiers return `NOT_FOUND` without a ledger or audit row.
 
 Duplicate JSON member names are rejected recursively before typed decoding.
 Unknown fields, unknown command kinds, invalid UUIDs, unsafe identifiers,

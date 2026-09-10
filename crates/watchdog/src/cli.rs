@@ -186,6 +186,11 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         if name == "status" {
             return status_command(path);
         }
+        if name == "reconcile" {
+            return Err(WatchdogError::Unauthorized(
+                "reconcile requires authenticated admin configuration".to_owned(),
+            ));
+        }
         if !config.allow_synthetic_children {
             return Err(WatchdogError::Unauthorized(
                 "mutating commands require authenticated admin configuration".to_owned(),

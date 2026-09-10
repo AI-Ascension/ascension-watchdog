@@ -3,8 +3,8 @@
 use super::Supervisor;
 use crate::admin::{
     AcceptedView, AdminCommand, AdminDispatchError, AdminDispatcher, AdminMode, AdminResult,
-    BackupView, Capability, CommandName, DispatchContext, MainLoopHealth, RetryPolicy, StatusView,
-    command_fingerprint,
+    BackupView, Capability, CommandName, DispatchContext, MainLoopHealth, ReconcileRequest,
+    ReconcileTarget, RetryPolicy, StatusView, command_fingerprint,
 };
 use crate::config::DesiredMode;
 use crate::storage::{
@@ -44,6 +44,10 @@ impl AdminDispatcher for Dispatcher<'_> {
             AdminCommand::Attempt(_) => OperatorCommand::Attempt,
             AdminCommand::Quarantine(_) => OperatorCommand::Quarantine,
             AdminCommand::Retry(_) => OperatorCommand::Retry,
+            AdminCommand::Reconcile(request) => {
+                self.validate_reconcile_target(request)?;
+                OperatorCommand::Reconcile
+            }
             AdminCommand::Backup(_) => OperatorCommand::Backup,
             _ => return Err(AdminDispatchError::Unsupported),
         };
@@ -239,6 +243,61 @@ impl AdminDispatcher for Dispatcher<'_> {
 }
 
 impl Dispatcher<'_> {
+    /// Validate a scoped reconciliation request against the current durable
+    /// watchdog inventory before recording its idempotent admission.  The
+    /// reconciliation loop remains the only component that performs process
+    /// effects; this check prevents a successful receipt for an object that
+    /// cannot be addressed and keeps the target semantics explicit.
+    fn validate_reconcile_target(
+        &self,
+        request: &ReconcileRequest,
+    ) -> Result<(), AdminDispatchError> {
+        match request.target {
+            ReconcileTarget::Deployment => Ok(()),
+            ReconcileTarget::Component => {
+                let id = request.id.as_deref().ok_or(AdminDispatchError::Invalid)?;
+                if self
+                    .supervisor
+                    .config
+                    .components
+                    .iter()
+                    .any(|component| component.id == id)
+                {
+                    Ok(())
+                } else {
+                    Err(AdminDispatchError::NotFound)
+                }
+            }
+            ReconcileTarget::Job => {
+                let id = request.id.as_deref().ok_or(AdminDispatchError::Invalid)?;
+                if self
+                    .supervisor
+                    .store
+                    .job_exists(id)
+                    .map_err(|error| AdminDispatchError::from(&error))?
+                {
+                    Ok(())
+                } else {
+                    Err(AdminDispatchError::NotFound)
+                }
+            }
+            ReconcileTarget::Attempt => {
+                let id = request.id.as_deref().ok_or(AdminDispatchError::Invalid)?;
+                if self
+                    .supervisor
+                    .store
+                    .attempt_summary(id)
+                    .map_err(|error| AdminDispatchError::from(&error))?
+                    .is_some()
+                {
+                    Ok(())
+                } else {
+                    Err(AdminDispatchError::NotFound)
+                }
+            }
+        }
+    }
+
     fn inspect_work(&self, command: &AdminCommand) -> Result<AdminResult, AdminDispatchError> {
         match command {
             AdminCommand::Jobs(request) => {
@@ -287,5 +346,113 @@ impl Dispatcher<'_> {
 impl Supervisor {
     pub(crate) fn admin_configuration(&self) -> Option<crate::config::AdminConfig> {
         self.config.admin.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin::{AdminRequest, AuthenticatedPrincipalClass, ContractVersion};
+    use crate::config::WatchdogConfig;
+
+    fn supervisor() -> crate::Result<(tempfile::TempDir, Supervisor)> {
+        let directory = tempfile::tempdir()?;
+        let config = WatchdogConfig {
+            database: directory.path().join("watchdog.sqlite3"),
+            ..WatchdogConfig::default()
+        };
+        let supervisor = Supervisor::initialize(config)?;
+        Ok((directory, supervisor))
+    }
+
+    fn context(command: AdminCommand) -> crate::Result<(DispatchContext, AdminCommand)> {
+        let request = AdminRequest {
+            contract: ContractVersion::V1,
+            request_id: uuid::Uuid::new_v4().to_string(),
+            idempotency_key: "reconcile-test-key".to_owned(),
+            capability: Capability::Admin,
+            token: "test-token".to_owned(),
+            deadline_ms: 1_000,
+            command,
+        };
+        let context = request
+            .dispatch_context(AuthenticatedPrincipalClass::AdminToken)
+            .map_err(crate::WatchdogError::InvalidInput)?;
+        Ok((context, request.command))
+    }
+
+    #[test]
+    fn deployment_reconcile_is_durably_admitted_and_idempotent() -> crate::Result<()> {
+        let (_directory, mut supervisor) = supervisor()?;
+        let health = MainLoopHealth::new();
+        let command = AdminCommand::Reconcile(ReconcileRequest {
+            target: ReconcileTarget::Deployment,
+            id: None,
+        });
+        let (context, command) = context(command)?;
+        let mut dispatcher = Dispatcher {
+            supervisor: &mut supervisor,
+            health: &health,
+        };
+        let first = dispatcher
+            .dispatch(&context, &command)
+            .map_err(|_| crate::WatchdogError::Conflict("reconcile admission failed".to_owned()))?;
+        assert_eq!(
+            first,
+            AdminResult::Accepted(AcceptedView {
+                command: CommandName::Reconcile,
+                queued: true,
+            })
+        );
+        assert_eq!(dispatcher.supervisor.store.operator_command_count()?, 1);
+
+        let replay = dispatcher
+            .dispatch(&context, &command)
+            .map_err(|_| crate::WatchdogError::Conflict("reconcile replay failed".to_owned()))?;
+        assert_eq!(replay, first);
+        assert_eq!(dispatcher.supervisor.store.operator_command_count()?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_reconcile_rejects_unknown_job_before_receipt() -> crate::Result<()> {
+        let (_directory, mut supervisor) = supervisor()?;
+        let health = MainLoopHealth::new();
+        let command = AdminCommand::Reconcile(ReconcileRequest {
+            target: ReconcileTarget::Job,
+            id: Some("missing-job".to_owned()),
+        });
+        let (context, command) = context(command)?;
+        let mut dispatcher = Dispatcher {
+            supervisor: &mut supervisor,
+            health: &health,
+        };
+        assert_eq!(
+            dispatcher.dispatch(&context, &command),
+            Err(AdminDispatchError::NotFound)
+        );
+        assert_eq!(dispatcher.supervisor.store.operator_command_count()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_reconcile_requires_exact_existing_attempt() -> crate::Result<()> {
+        let (_directory, mut supervisor) = supervisor()?;
+        let health = MainLoopHealth::new();
+        let command = AdminCommand::Reconcile(ReconcileRequest {
+            target: ReconcileTarget::Attempt,
+            id: Some("missing-attempt".to_owned()),
+        });
+        let (context, command) = context(command)?;
+        let mut dispatcher = Dispatcher {
+            supervisor: &mut supervisor,
+            health: &health,
+        };
+        assert_eq!(
+            dispatcher.dispatch(&context, &command),
+            Err(AdminDispatchError::NotFound)
+        );
+        assert_eq!(dispatcher.supervisor.store.operator_command_count()?, 0);
+        Ok(())
     }
 }

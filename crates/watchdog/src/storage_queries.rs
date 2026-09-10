@@ -32,6 +32,23 @@ pub struct AttemptSummary {
 }
 
 impl Store {
+    /// Check one exact durable job identifier without loading its payload.
+    /// This is used by scoped administrative reconciliation admission so a
+    /// request cannot be acknowledged for an unknown job merely because a
+    /// bounded list projection omitted it.
+    pub fn job_exists(&self, job_id: &str) -> Result<bool> {
+        validate_name(job_id, "job id", 128)?;
+        let exists: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM jobs WHERE id=? LIMIT 1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
+    }
+
     /// Apply the filter before the bound; fetch one extra row to report truncation.
     pub fn job_summaries(&self, filter: Option<JobStatus>, limit: u16) -> Result<JobSummaryPage> {
         if limit == 0 || limit > 256 {
