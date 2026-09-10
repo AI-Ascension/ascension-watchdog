@@ -470,6 +470,21 @@ impl JobOwnedProcess {
                 "process handle PID differs from recorded identity".to_owned(),
             ));
         }
+        // A terminated process handle is still the exact launch authority,
+        // but Windows may reject image-path queries after teardown with a
+        // transient ERROR_GEN_FAILURE. The signaled handle is conclusive and
+        // must be observed before querying identity fields that no longer
+        // exist in the kernel process object.
+        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
+        if process_state == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        if process_state != WAIT_TIMEOUT {
+            return Err(PlatformError::Win32 {
+                operation: "WaitForSingleObject(identity)".to_owned(),
+                code: process_state,
+            });
+        }
         let creation = process_creation_time(self.process.raw())?;
         if creation != self.identity.creation_time_100ns {
             return Err(PlatformError::IdentityMismatch(
@@ -487,28 +502,20 @@ impl JobOwnedProcess {
                 "recorded executable digest differs from the immutable release handle".to_owned(),
             ));
         }
-        let process_state = unsafe { WaitForSingleObject(self.process.raw(), 0) };
-        if process_state == WAIT_TIMEOUT {
-            if process_session(pid)? != self.identity.session_id {
-                return Err(PlatformError::IdentityMismatch(
-                    "process session differs from recorded identity".to_owned(),
-                ));
-            }
-            let mut member = 0;
-            let ok = unsafe { IsProcessInJob(self.process.raw(), self.job.raw(), &raw mut member) };
-            if ok == 0 {
-                return Err(last_error("IsProcessInJob(identity)"));
-            }
-            if member == 0 {
-                return Err(PlatformError::IdentityMismatch(
-                    "process is not a member of its named Job Object".to_owned(),
-                ));
-            }
-        } else if process_state != WAIT_OBJECT_0 {
-            return Err(PlatformError::Win32 {
-                operation: "WaitForSingleObject(identity)".to_owned(),
-                code: process_state,
-            });
+        if process_session(pid)? != self.identity.session_id {
+            return Err(PlatformError::IdentityMismatch(
+                "process session differs from recorded identity".to_owned(),
+            ));
+        }
+        let mut member = 0;
+        let ok = unsafe { IsProcessInJob(self.process.raw(), self.job.raw(), &raw mut member) };
+        if ok == 0 {
+            return Err(last_error("IsProcessInJob(identity)"));
+        }
+        if member == 0 {
+            return Err(PlatformError::IdentityMismatch(
+                "process is not a member of its named Job Object".to_owned(),
+            ));
         }
         Ok(())
     }
