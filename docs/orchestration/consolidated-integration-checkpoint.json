@@ -1,17 +1,21 @@
 {
   "schema_version": 1,
-  "date": "2026-09-07",
+  "date": "2026-09-10",
   "classification": "confirmed-local-evidence-not-a-release",
   "supersedes_checkpoint": "transport-review-checkpoint.json",
   "watchdog": {
-    "tested_commit": "8ae0c9bc28811b2b697e062e8d8bf8d0bfb5e1c0",
-    "integrated_platform_commit": "4b0a87a",
-    "root_test_command": "cargo test --locked --offline --workspace --all-targets --all-features",
+    "tested_commit": "8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4",
+    "integrated_platform_commit": "8c0f6a2",
+    "pull_request": 8,
+    "root_test_command": "cargo +1.97.1 test --locked --offline --workspace --all-targets",
     "root_test_exit": 0,
-    "fixture_tests_passed": 49,
+    "watchdog_library_tests_passed": 196,
+    "watchdog_library_tests_ignored": 4,
+    "workspace_test_note": "all workspace integration suites passed; 200 watchdog library cases were scheduled",
     "native_linux_tests_ignored": 2,
+    "windows_cross_build": "cargo +1.97.1 check and strict Clippy passed for x86_64-pc-windows-gnu",
     "windows_native_execution": "unverified",
-    "scope": "watchdog, backup, launch authority, lease reference contract, full synthetic fault fixture",
+    "scope": "watchdog, authenticated worker handoff, Gateway health binding, Linux broker lifecycle, release staging, backup, launch authority, full synthetic fault fixture",
     "source_matches_tested_platform_commit": true
   },
   "companions": [
@@ -28,30 +32,39 @@
     },
     {
       "repository": "sts2-harness",
-      "integration_commit": "63a53a2",
+      "integration_commit": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",
+      "pull_request": 54,
       "root_results": [
-        "execution-store suite after bounded Rust payload copying: 10 passed",
-        "runtime suite after duplex test drain synchronization: 81 passed"
+        "lifecycle suite: 28 passed",
+        "recovery evidence suite: 3 passed",
+        "full locked workspace report: 171 runtime passed, 1 ignored"
       ],
-      "scope": "provider result persistence, completed resume and synthetic tests",
-      "pending": "H17 child-supervisor review and H18 duplex test review"
+      "scope": "durable runtime-v3 recovery, raw catalog identity, provider accounting and synthetic subprocess tests",
+      "pending": "cross-repository release-set rebuild and native/live gateway-MCP-host recovery"
     },
     {
       "repository": "sts2-gateway",
-      "candidate_commit": "195f2522338208b32f1b1830b8b1694cb0614a4e",
+      "candidate_commit": "8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711",
       "integrated": false,
-      "pending": "G19 actual recovery-dispatch catalog invalidation review"
+      "pull_request": 35,
+      "pending": "actual recovery-dispatch catalog review and cross-repository rebuild"
     }
   ],
   "remaining_production_work": [
     "P17 restricted Linux broker with distinct child identities",
     "host-lease control consumer implementation beyond the reference contract",
-    "reproducible cross-repository release integration and full acceptance audit"
+    "reproducible cross-repository release integration and full acceptance audit",
+    "native Windows/Linux service, live host, cold boot, and 24-hour soak evidence"
   ],
   "release_ready": false,
   "live_host_recovery_verified": false,
   "cold_boot_recovery_verified": false,
   "soak_verified": false,
   "remote_delivery_completed": false,
+  "remote_delivery": {
+    "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/8",
+    "harness_pr": "https://github.com/AI-Ascension/sts2-harness/pull/54",
+    "status": "draft PRs published; not merged"
+  },
   "service_install_or_release_activation_this_checkpoint": false
 }

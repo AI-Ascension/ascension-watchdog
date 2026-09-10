@@ -2,12 +2,23 @@
   "classification": "confirmed",
   "source": "native thread metadata and executed turn contexts, not agent self-description",
   "root_thread_id": "01a078a4-d17d-7101-afa1-9e68655beedd",
+  "last_reconciled": "2026-09-10",
   "maximum_reserved_descendants": 12,
   "current_wave": "evidence-binding-wave-20260907.json",
   "current_wave_note": "The resumed_wave below is historical. Current reservations and observed metadata are recorded in the referenced dated wave.",
   "observed_maximum_depth": 1,
   "required_depth": 3,
   "nested_status": "unmet: current platform reviewer reports no collaboration spawn or coordination tools in its schema; no depth-2 or depth-3 execution occurred",
+  "current_integration": {
+    "watchdog_branch": "codex/watchdog-integrated-20260910",
+    "watchdog_commit": "8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4",
+    "watchdog_pull_request": 8,
+    "harness_branch": "codex/harness-integrated-full",
+    "harness_commit": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",
+    "harness_pull_request": 54,
+    "status": "published draft PRs; source/component gates recorded; no merge, activation, native service, live host, cold boot, or soak",
+    "observed_depth": 1
+  },
   "resumed_wave": {
     "previous_handles": "all nine prior handles absent from native list_agents; preserved worktrees reconciled before four replacement assignments",
     "active_reserved_descendants": 9,

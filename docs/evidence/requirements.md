@@ -1,62 +1,58 @@
-# V31 requirements and evidence audit
+# V32 requirements and evidence audit
 
-Classification: `partial` / `unverified` source-and-test audit at watchdog
-`f51d9a33c893af2f49670347644dbb0bb12a60fe`. This audit does not declare an
-implementation or release complete.
+Classification: `partial` / `unverified` source-and-test audit at the integrated
+watchdog branch `8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4`. This audit does not
+declare an implementation or release complete.
 
 ## Scope and evidence boundary
 
-The audited worktree is an isolated branch from the exact source endpoint
-`f51d9a3` (`codex/watchdog-implementation`). The explicit comparison
-`git diff 8ae0c9bc28811b2b697e062e8d8bf8d0bfb5e1c0..f51d9a33c893af2f49670347644dbb0bb12a60fe`
-contains only `docs/orchestration/consolidated-integration-checkpoint.json`, so
-the source under audit is the source root tested at `8ae0c9b`; the later audit
-commit is documentation only. The root record
-reports:
+The audited worktree is an isolated branch from
+`codex/watchdog-implementation@dda3a915f7ea25bc291727f0e151b421344cc007`.
+The integrated source tip is `8c0f6a2` (draft PR #8). The root record reports:
 
-- `cargo test --locked --offline --workspace --all-targets --all-features` exit
-  0, including 49 fixture tests: 8 library, 8 host-lease reference, 13
-  recovery, 17 runtime, and 3 schema tests.
-- Two delegated Linux cgroup tests were ignored. Windows-native test binaries
-  had zero runnable tests on Linux. Windows GNU compilation is not native
-  execution evidence.
+- `cargo +1.97.1 test --locked --offline --workspace --all-targets` exit 0;
+  the watchdog library ran 200 cases (196 passed, 4 ignored), and all
+  watchdog, platform, fixture, recovery, runtime, host-lease, and schema
+  integration suites passed.
+- Pinned fmt, locked offline workspace check, and strict Clippy passed on Linux.
+  A Windows GNU all-target check and strict Clippy cross-build also passed;
+  that is compile evidence, not native Windows execution evidence. Two Linux
+  cgroup tests remain ignored.
+- Draft watchdog PR #8 re-ran standards, Ubuntu, Windows, and dependency jobs
+  after a Windows-only API repair; hosted checks were still running at this
+  record's capture time.
 - No service installation, release activation, game/provider launch, host
   reboot, live recovery, or soak was performed.
-- The fixture is a synthetic host/test tool. It is not a gateway, harness, MCP
-  server, game mod, watchdog production consumer, or live host.
+- The fault fixture is a synthetic host/test tool. The watchdog branch now has
+  authenticated worker and Gateway-health consumers plus release staging, but
+  the companion harness/gateway/MCP/mod PRs are still separate source pins;
+  this is not a cross-repository runtime or live-host claim.
 
-Out-of-scope later addendum: root reports that a later main revision
-`f18650f` adds the Draft 2020-12 host-lease validation cases (9 valid, 1 schema
-invalid, 3 semantic-invalid, shape and zero/u53 ACK boundaries) with strict
-Clippy passing. That later test count is not retroactively counted in this
-`f51d9a3` audit; the root checkpoint's 49-test claim remains the correct base
-claim. The same addendum reports a G19 `195f252` gateway review as NO-GO after
-reproducing a settled witness followed by old-catalog admission, with G22 repair
-active. This reinforces, rather than closes, the production host-lease and
-catalog-consumer gaps below.
-
-Later companion/workstream note outside this audit base: the root later reports
-harness owner head `bc937ab` with 81 runtime and 10 execution-store tests, but
-the source/tests remain unintegrated here; H19/H20 repairs and G20/G21/P17 are
-active. This note does not promote any matrix row: the audit remains 49
-`partial` and 7 `unverified`.
+Historical review context: the earlier host-lease and gateway catalog findings
+remain open at the production-consumer boundary. The current watchdog branch
+adds authenticated worker/Gateway-health storage and release-staging checks,
+while the companion harness follow-up is now draft PR #54 at `5798e3d` and the
+gateway remains draft PR #35 at `8ce3f78`. Those source/component results do
+not constitute a cross-repository runtime proof. The current matrix remains
+conservative: 49 `partial` and 7 `unverified`.
 
 Evidence abbreviations used below:
 
 | Ref | Evidence record or owned boundary |
 | --- | --- |
-| `CP` | `docs/orchestration/consolidated-integration-checkpoint.json` at `f51d9a3`; exact root-tested source/evidence boundary and companion heads |
+| `CP` | `docs/orchestration/consolidated-integration-checkpoint.json`; exact integrated source/evidence boundary and companion heads |
 | `AR` | `docs/orchestration/agent-registry.json`; requested/accepted/observed model and depth evidence |
 | `TD` | `docs/orchestration/task-dag.json`; ownership and open integration tasks |
 | `FF` | `docs/evidence/fault-fixture.md`; synthetic recovery fixture boundaries and fault controls |
 | `FG` | `docs/evidence/fixture-instance-guard.md`; synthetic instance-wide uncertainty guard |
-| `SI` | `docs/evidence/platform-backup-integration.md`; root integration and 49-test breakdown |
+| `SI` | `docs/evidence/platform-backup-integration.md`; root integration and current platform/test boundary |
 | `SL` | `docs/evidence/service-loop.md`; real daemon subprocess and notification-path evidence |
 | `SR` | `docs/evidence/storage-review.md`; owner-local SQLite, restore, lock and clock evidence |
 | `SA` | `docs/evidence/storage-admin.md`; authenticated operator ledger and bounded admission |
 | `RI` | `docs/evidence/recovery-baseline.md`; source-derived companion baseline and contract-only limits |
 | `OR` | `docs/evidence/open-review-findings.md`; confirmed independent blockers and missing consumer proof |
 | `RW` | `docs/evidence/review-repair-wave.md`; current companion/fixture/platform gaps |
+| `WI` | `docs/evidence/windows-integration-20260910.md`; repaired Windows cross-build boundary and hosted-CI classification |
 | `README` | `README.md`; explicit implementation-in-progress and unclaimed runtime axes |
 
 Status meanings: `partial` means an owned source/test slice is evidenced but
@@ -70,9 +66,9 @@ fixture/process fact and never means native, live, reboot, or release proof.
    fixture and host-lease schema do not implement gateway-issued install,
    renew, revoke, host-fence, operation, or managed-mod consumers. Rebuild the
    exact gateway/harness/mod/protocol release set and run cross-consumer
-   conformance, including the pending gateway `195f2522338208b32f1b1830b8b1694cb0614a4e`,
-   harness `63a53a2`, and mod `4d391ab` work rather than assuming those heads are
-   integrated. (`CP`, `OR`, `RW`)
+   conformance, including the pending gateway PR #35, harness PR #54, and
+   game-mod PR #63 rather than assuming those heads are integrated. (`CP`, `OR`,
+   `RW`)
 2. Integrate and verify the existing harness recovery-sideband implementation:
    durable canonical payload/context, current-authority reconciliation, explicit
    continuation vs reconstruction vs interrupted-unknown, provider accounting,
@@ -104,12 +100,12 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | S07 | **S07-a** owner-local SQLite WAL/FULL, lock, migrations, integrity/backup/restore; **S07-b** watchdog jobs/attempts/budgets/operator records; **S07-c** gateway/harness stores and stable identity namespaces; **S07-d** bounded archival without silent reset | `crates/watchdog/src/storage.rs`, `storage_admin.rs`, `storage_backup_admin.rs`; `tests/core.rs`, `storage_*`, `admin_backup.rs`, `job_submission*`; fixture SQLite rows in `crates/fault-fixture/src/lib.rs` | `SR`; `SA`; `FF`; `CP` | partial | Watchdog and synthetic fixture stores are tested, but harness/gateway owner stores are not integrated here; watchdog archival and fixture tombstones remain incomplete. Add owner-specific migrations/identity tests, explicit archival/tombstone protocol, and cross-owner release tests. |
 | S08 | **S08-a** fresh durable boot/fence/lease and invalidation; **S08-b** historical read/reconcile without old authority; **S08-c** restore/rekey and rollback protection; **S08-d** real gateway/host consumer | Fixture bootstrap/fence/lease/operation handlers and `tests/recovery.rs`, `runtime.rs`; watchdog `storage.rs` restore | `FF`; `RI`; `OR`; `CP` | partial | The fixture models protocol semantics and watchdog restore rekeys its own store, but no production gateway lease consumer or host handshake is integrated. Implement gateway-issued authority and managed host-fence consumers, then test restart/rollback/rekey on the exact release. |
 | S09 | **S09-a** actual v3 persist-before-send journal and uncertainty; **S09-b** host execution-time fence/witness; **S09-c** restricted broker and >64 archival/retention | Fixture operation/ticket/effect tables and fault tests; watchdog has no gameplay journal; companion gateway/mod heads are outside this source | `FF`; `FG`; `RI`; `OR`; `CP` | partial | Synthetic journal ordering and stale-fence tests pass, but the fixture is not the actual v3 path, host broker, or gateway consumer; 64 is backpressure, not archival. Wire and run the real harness→MCP→gateway→mod→host path and exceed receipt capacity with tombstones. |
-| S10 | **S10-a** harness explicit resume; **S10-b** MCP sole-owner bounded reconnect; **S10-c** provider identity/accounting; **S10-d** continuation/reconstruction/interrupted-unknown and replay divergence | Companion harness source/tests at `63a53a2` (later root-reported owner head `bc937ab`) are outside the integrated root source; the watchdog audit owns no harness files | `CP` reports 81 harness runtime and 10 execution-store tests at the companion head but marks them unintegrated; later H19/H20 repairs are active | unverified | Do not count companion component tests as release proof. Integrate and independently verify the existing harness sideband/recovery source, named resume/reconstruction/divergence/provider tests, and cross-repo gates. |
+| S10 | **S10-a** harness explicit resume; **S10-b** MCP sole-owner bounded reconnect; **S10-c** provider identity/accounting; **S10-d** continuation/reconstruction/interrupted-unknown and replay divergence | Companion harness follow-up PR #54 at `5798e3d` is source/component tested but remains outside this watchdog checkout | `CP` records the follow-up's 171 runtime tests and recovery evidence, but no cross-repository release run | unverified | Do not count companion component tests as release proof. Integrate and independently verify the harness sideband/recovery source, named resume/reconstruction/divergence/provider tests, and cross-repo gates. |
 | S11 | **S11-a** persisted desired-state reconciler and separate component/attempt/deployment states; **S11-b** meaningful phase health/timers/budgets; **S11-c** authenticated full operator CLI/API; **S11-d** restart ownership and native service recovery | `crates/watchdog/src/{policy,runtime,service,cli,admin}.rs`; `tests/{core,health_policy,service_loop,admin_control,job_submission*}.rs` | `SL`; `SA`; `README` | partial | Synthetic daemon/IPC/health and core lifecycle tests pass, but dispatcher operations remain unsupported in places and no installed systemd/SCM recovery exists. Complete unsupported commands, native service lanes, and scheduler-to-harness handoff. |
 | S12 | **S12-a** Windows SCM/health checker/Job Object/named pipe/session; **S12-b** WSL exact distro/direct invocation/termination; **S12-c** Linux systemd notify/cgroup/protected state; **S12-d** native synthetic execution | `crates/platform-windows/src/{native,admin_pipe}.rs`; Windows tests; `crates/watchdog/src/platform/{linux,linux_launcher,linux_process,wsl}.rs`; `deploy/linux/ascension-watchdog.service` | `SI`; `SL`; `docs/platform.md`; `docs/evidence/{windows-p9-integration,native-integration-review}.md`; `CP` | partial | Linux portable/source tests and notifications are evidenced, but two cgroup tests are ignored and Windows-native execution is zero on Linux; no service install/WSL failure campaign. Run approved native Windows/Linux/WSL gates and retain skipped status until they execute. |
 | S13 | **S13-a** persistent telemetry collector queues/backends; **S13-b** immutable release-set activation/rollback; **S13-c** idempotent install/uninstall/log/disk operations; **S13-d** authenticated backup/restore/rekey | Watchdog `release.rs`, `storage_backup_admin.rs`, CLI; `deploy/linux/install.sh`, `uninstall.sh`; observability is external | `docs/evidence/{release-inspection,collector-recovery,platform-backup-integration}.md`; `docs/operations-backup.md` | partial | Release inspection, synthetic collector replacement, and backup creation are component evidence only. Collector backend durability, activation/rollback, uninstall persistence, and restore/rekey remain open. Integrate observability, implement/execute activation and restore flows, and run native install tests. |
 | S14 | **S14-a** threat model; **S14-b** local authenticated capability separation; **S14-c** closed/bounded/duplicate-safe contracts and path/digest checks; **S14-d** native ACL/reparse/secret controls | `docs/threat-model.md`; `admin/{auth,protocol,endpoint,server}.rs`; `release.rs`, config/path validators, platform boundary tests | `SA`; `docs/admin-control.md`; `docs/windows-process-integrity.md`; `OR` | partial | Watchdog local controls are substantially tested, but real gateway/harness/mod consumers and native Windows ACL/pipe behavior are not executed; known platform/auth review findings remain. Integrate and run native security matrix plus cross-consumer negative tests. |
-| S15 | **S15-a** every requirement has source, failure test, evidence class; **S15-b** synthetic fault host covers 24 scenarios; **S15-c** independent review/fix/rerun; **S15-d** native/live/reboot/soak evidence | Fixture recovery/runtime/schema suites, watchdog tests, platform tests, review docs; no single 24-case acceptance run | `CP`/`SI` 49 fixture tests; `FF`; `OR`; `RW`; `AR` | partial | Root has broad synthetic evidence and independent findings, but no complete 24-scenario matrix, no nested agent smoke, and no native/live/reboot/soak. Execute the missing named scenarios and record each result, including explicit skips. |
+| S15 | **S15-a** every requirement has source, failure test, evidence class; **S15-b** synthetic fault host covers 24 scenarios; **S15-c** independent review/fix/rerun; **S15-d** native/live/reboot/soak evidence | Fixture recovery/runtime/schema suites, authenticated worker/Gateway-health tests, release-staging tests, platform tests, review docs; no single 24-case acceptance run | `CP`/`SI` current workspace suites; `FF`; `OR`; `RW`; `AR` | partial | Root has broad synthetic evidence and independent findings, but no complete 24-scenario matrix, no nested agent smoke, and no native/live/reboot/soak. Execute the missing named scenarios and record each result, including explicit skips. |
 | S16 | **S16-A** capability/baseline; **S16-B** contracts/failing tests; **S16-C** executable vertical slice; **S16-D** authority/journal; **S16-E** harness recovery; **S16-F** platform/operations; **S16-G** integrated verification; **S16-H** remote delivery | Root checkpoint/test commands, package tests, source checkpoints; companion heads explicitly marked unintegrated | `CP`; `TD`; `README`; `OR` | partial | A-D and portions of F have Linux/synthetic slices; E, G, H are not verified, and full release is false. Complete companion integration and independent review, rerun clean release-set gates, then record remote PR/merge/deployment state. |
 | S17 | **S17-a** separate completion axes; **S17-b** exact revisions/PRs/artifacts/digests/commands; **S17-c** install/start/status/stop/uninstall/recovery and measured soak; **S17-d** blockers and actual action status | `README`, `docs/evidence/*.md`, `CP`, `workspace-manifest.json`, orchestration records | `CP` explicitly marks release/live/cold-boot/soak/remote delivery false; evidence docs preserve classifications | partial | Evidence axes and blockers are documented, but the final handoff cannot be complete until companion commits, native/live/reboot/soak runs, release artifacts, and remote delivery are verified. |
 
@@ -144,7 +140,7 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | FAULT-05 | Fixture `conflicting_expected_boundary_reuse_is_rejected`; runtime replay; watchdog job idempotency/conflict tests | partial | Integrate operation identity into gateway/harness and test same payload retained result, conflicting payload rejection, and no second dispatch across reconnect/restart. |
 | FAULT-06 | Fixture stale queued fence, revoked ticket, lease epoch history, runtime old-lease rejection, host-lease reference lifecycle | partial | Execute old boot/lease/session/incarnation proofs through actual gateway/managed host queues after replacement, including pre-crash queued work. |
 | FAULT-07 | Fixture `lookup_rejects_a_reference_with_the_wrong_original_context`, `reconcile_rejects_a_reference_with_the_wrong_original_context`, historical lookup mutation flag | partial | Wire current `recovery_read`/`recovery_reconcile` credentials in real gateway and prove old authority/receipt cannot mutate or rewrite identity. |
-| FAULT-08 | Fixture `malformed-response` is host-side only; companion harness source/tests at `63a53a2`/later `bc937ab` are unintegrated | unverified | Verify MCP death, inference stall, invalid credentials, quota, outage, timeout, cancellation, and conservative billing tests at the existing harness/provider boundary. |
+| FAULT-08 | Fixture `malformed-response` is host-side only; harness follow-up PR #54 at `5798e3d` is source/component tested but not cross-repository integrated | unverified | Verify MCP death, inference stall, invalid credentials, quota, outage, timeout, cancellation, and conservative billing tests at the harness/provider boundary in the exact release set. |
 | FAULT-09 | Watchdog completed-job replay tests (`job_submission*`); provider/episode ownership is in the companion harness, not this watchdog checkout | partial | Integrate and execute companion harness crash-after-provider-result and crash-after-completed-episode tests with durable result fingerprint and no duplicate inference/job completion. |
 | FAULT-10 | Fixture crash/restart and authority rotation tests model a synthetic host; the production gateway path is not integrated at this endpoint | unverified | Kill/restart the real gateway while host/broker survives; require fresh boot/fence, retain UNKNOWN, and verify no mutation before reconciliation. |
 | FAULT-11 | Watchdog synthetic subprocess crash/cleanup, Linux adapter source/tests, WSL argument validator; `CP` says native tests/host absent | partial | Run approved game/broker/watchdog/service-manager/WSL failure campaign with exact child ownership and uncertainty postconditions; install no service until authorized. |
@@ -165,13 +161,13 @@ fixture/process fact and never means native, live, reboot, or release proof.
 ## Delivery decision
 
 This audit supports `IMPLEMENTATION_COMPLETE = unverified`,
-`SYNTHETIC_INTEGRATION_VERIFIED = partial` (root-recorded Linux/synthetic
-source at `8ae0c9b`), `WINDOWS_SERVICE_VERIFIED = unverified`,
+`SYNTHETIC_INTEGRATION_VERIFIED = partial` (Linux/synthetic source and tests at
+`8c0f6a2`), `WINDOWS_SERVICE_VERIFIED = unverified`,
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial` (portable/source tests with two
 ignored cgroup cases), `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = unverified/not completed`. The exact next gate is a
-clean cross-repository release-set rebuild after the gateway/harness/mod
+`REMOTE_DELIVERY_STATUS = draft PRs published; not merged`. The exact next gate
+is a clean cross-repository release-set rebuild after the gateway/harness/mod
 consumer work is integrated, followed by the independent native/live/reboot/
 soak matrix. No row above should be changed to complete from a source-only,
 component, fake-host, cross-build, or ignored-test result.

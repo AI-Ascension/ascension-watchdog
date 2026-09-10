@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "last_reconciled": "2026-09-10",
   "descendant_limit": 12,
   "maximum_descendant_depth": 3,
   "model": "gpt-5.6-luna",
@@ -50,5 +51,12 @@
   ],
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
+  "current_integration": {
+    "watchdog": {"commit":"8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4","pull_request":8,"status":"draft; hosted checks rerun after Windows API repair"},
+    "harness": {"commit":"5798e3d0ecd6e64cbd1b6d354311be64a12f8929","pull_request":54,"status":"draft; hosted checks passed"},
+    "mcp": {"pull_request":37,"status":"merged; dependent release rebuild pending"},
+    "gateway": {"commit":"8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711","pull_request":35,"status":"draft; hosted checks passed"},
+    "completion": "unverified: cross-repository, native, live, cold-boot and soak gates remain open"
+  },
   "completion": "unverified"
 }

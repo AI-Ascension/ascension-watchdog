@@ -11,11 +11,11 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "dda3a915f7ea25bc291727f0e151b421344cc007",
-      "ref": "codex/watchdog-implementation",
+      "revision": "8c0f6a26d2c4b1ed6e0669dea91ca15f917ac0b4",
+      "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
-      "pull_request": 2,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "pull_request": 8,
+      "state": "open-draft; hosted-checks-running; not-merged"
     },
     "sts2-gateway": {
       "revision": "8ce3f78bf8b0f0970b5c6a47f7d46e5010c05711",
@@ -25,18 +25,18 @@
       "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "sts2-harness": {
-      "revision": "6fcd059b420a1099ec225a907ee3aea5e799f0e7",
-      "ref": "codex/harness-catalog-recovery-repair",
+      "revision": "5798e3d0ecd6e64cbd1b6d354311be64a12f8929",
+      "ref": "codex/harness-integrated-full",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 53,
-      "state": "open; hosted-checks-pass; not-merged"
+      "pull_request": 54,
+      "state": "open-draft; hosted-checks-pass; not-merged"
     },
     "sts2-mcp-server": {
       "revision": "16ca0cb06dc93564c14963bc544bef282b38d26d",
       "ref": "codex/workflow-authority-mapping",
       "remote": "AI-Ascension/sts2-mcp-server",
       "pull_request": 37,
-      "state": "open-draft; hosted-checks-pass; not-merged"
+      "state": "merged; hosted-checks-pass; merge-commit-a6b9215"
     },
     "sts2-game-mod": {
       "revision": "ad9278512563d4a319177d4c10654ceec696c78c",
