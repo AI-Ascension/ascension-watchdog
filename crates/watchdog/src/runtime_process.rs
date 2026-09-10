@@ -150,6 +150,7 @@ impl RuntimeProcessManager {
     /// tests. This hook is compiled out of production binaries so the runtime
     /// process manager always delegates to the real owned-child authority.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn inject_stop_result(
         &mut self,
         result: std::result::Result<RuntimeStopOutcome, String>,

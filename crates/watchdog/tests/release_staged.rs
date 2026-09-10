@@ -18,6 +18,7 @@ use tempfile::TempDir;
 const ARTIFACT_BYTES: &[u8] = b"immutable release role bytes";
 
 struct Fixture {
+    #[allow(dead_code)]
     temp: TempDir,
     catalog_root: PathBuf,
     release_root: PathBuf,

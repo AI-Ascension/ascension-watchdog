@@ -175,6 +175,19 @@ const SHA256_K: [u32; 64] = [
     0xc671_78f2,
 ];
 
+/// Check a caller-owned absolute deadline at each native identity boundary.
+/// Win32 calls below are synchronous, so this guard cannot interrupt an
+/// individual kernel operation; it prevents additional work once the caller's
+/// deadline has elapsed and records the timeout as a typed platform error.
+fn check_image_deadline(deadline: Option<Instant>) -> Result<(), PlatformError> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(PlatformError::Timeout(
+            "Windows image identity deadline elapsed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 type ReconcileCallback =
     dyn Fn(Arc<Mutex<bool>>) -> Result<(), PlatformError> + Send + Sync + 'static;
 type ReadinessCallback = dyn Fn() -> Result<(), PlatformError> + Send + Sync + 'static;
@@ -234,7 +247,7 @@ impl From<PlatformError> for WindowsLaunchError {
 /// running process.  The directory handle protects the directory object from
 /// removal or rename; it does not hash or pin dependent DLL contents.
 #[derive(Debug)]
-struct IntegrityGuards {
+pub(crate) struct IntegrityGuards {
     // These handles are retained for their no-share lifetime; the fields are
     // intentionally not otherwise read after the initial hash.
     #[allow(dead_code)]
@@ -257,6 +270,18 @@ struct FileIdentity {
 }
 
 impl IntegrityGuards {
+    /// Open and hash an immutable image while honoring the surrounding
+    /// identity-capture deadline before and after the synchronous operation.
+    pub(crate) fn open_until(
+        path: &Path,
+        deadline: Option<Instant>,
+    ) -> Result<Self, PlatformError> {
+        check_image_deadline(deadline)?;
+        let guard = Self::open(path)?;
+        check_image_deadline(deadline)?;
+        Ok(guard)
+    }
+
     fn open(path: &Path) -> Result<Self, PlatformError> {
         let parent = path.parent().ok_or_else(|| {
             PlatformError::Invalid("approved executable has no release directory".to_owned())
@@ -289,11 +314,11 @@ impl IntegrityGuards {
         })
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    fn digest(&self) -> &str {
+    pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
 
@@ -332,6 +357,14 @@ impl std::fmt::Debug for JobOwnedProcess {
 }
 
 impl JobOwnedProcess {
+    /// Capture account/session policy from this supervisor-owned process
+    /// handle. This is not an observation of an untrusted IPC endpoint.
+    pub fn account_identity(&self) -> Result<(String, u32), PlatformError> {
+        self.verify_identity()?;
+        let account = crate::admin_pipe::process_user_sid(self.process.raw())?;
+        Ok((account, self.identity.session_id))
+    }
+
     /// Return the immutable creation identity.
     #[must_use]
     pub fn identity(&self) -> &ProcessIdentity {

@@ -35,9 +35,9 @@ mod native;
 #[cfg(windows)]
 pub use native::{
     ActiveSession, CurrentControllerIdentity, JobOwnedProcess, NamedPipePeer, NamedPipeServer,
-    ScmHealthChecker, ServiceBinding, ServiceInstallPlan, ServiceRuntime, StopOutcome,
-    StoppedServiceWitness, WindowsLaunchError, WindowsProcessLauncher, capture_current_controller,
-    executable_sha256, open_protected_directory, select_active_session,
+    ProtectedDirectoryHandle, ScmHealthChecker, ServiceBinding, ServiceInstallPlan, ServiceRuntime,
+    StopOutcome, StoppedServiceWitness, WindowsLaunchError, WindowsProcessLauncher,
+    capture_current_controller, executable_sha256, open_protected_directory, select_active_session,
 };
 
 /// Report whether this crate's native Windows boundary is available.

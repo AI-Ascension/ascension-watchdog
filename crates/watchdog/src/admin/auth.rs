@@ -49,6 +49,7 @@ impl AuthReferences {
     /// policy; authentication-file admission is covered by the integration
     /// fixtures that create protected credentials.
     #[cfg(all(test, windows))]
+    #[allow(dead_code)]
     pub(crate) fn for_test(
         read_token_path: impl Into<PathBuf>,
         admin_token_path: impl Into<PathBuf>,
