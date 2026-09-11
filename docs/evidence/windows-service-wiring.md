@@ -36,7 +36,8 @@ or SCM installation succeeded on a host.
 The package preflight is also available as:
 
 ```text
-pwsh -NoProfile -NonInteractive -File deploy/windows/test-install-uninstall.ps1 \
+pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+  -File deploy/windows/test-install-uninstall.ps1 \
   -RepositoryPath .
 ```
 

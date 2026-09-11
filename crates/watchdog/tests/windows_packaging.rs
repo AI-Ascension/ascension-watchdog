@@ -14,6 +14,8 @@ fn packaging_preflight_runs_without_scm_mutation() {
         .args([
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
             script.to_string_lossy().as_ref(),
             "-RepositoryPath",
