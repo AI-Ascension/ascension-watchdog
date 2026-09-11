@@ -1,7 +1,7 @@
 # Current source set and verification boundary — 2026-09-11
 
-Captured at `2026-09-11T08:53:40Z`; root verification was refreshed at the
-same source-set wave. This is a resumable integration record, not an
+Captured at `2026-09-11T09:07:47Z`; root verification and gateway main were
+refreshed at this source-set wave. This is a resumable integration record, not an
 activated release. Every revision below is an exact local source revision; a
 component passing its own gates does not establish cross-consumer, service,
 live-host, reboot, or soak evidence.
@@ -10,8 +10,8 @@ live-host, reboot, or soak evidence.
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | open; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass |
-| `sts2-gateway` | `main` | `5f531f602298de674bd31ed3f28a88359b02ca9d` | current remote main; component gates pass |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | selected implementation pin; PR head `03fa0e2` contains the evidence refresh; local and exact-head hosted gates pass |
+| `sts2-gateway` | `main` | `f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b` | current remote main after PR #42 merge; merged host-lease safety changes included |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
 | `sts2-game-mod` | `main` | `bd8e90542dfc89366f820150c5c755e32716b1b0` | current remote main; component gates pass |
@@ -19,26 +19,27 @@ live-host, reboot, or soak evidence.
 | `sts2-game-core` | `main` | `f5daf69f4f2c43fddbb04e7799d32503f7066110` | current remote main; component gates pass |
 | `ai-agent-observability` | `main` / merged PR [#20](https://github.com/AI-Ascension/ai-agent-observability/pull/20), [#22](https://github.com/AI-Ascension/ai-agent-observability/pull/22) | `630431716ebfbf86280f9fd56f19d6016ad7aeb2` | current remote main; persistent Collector queue/WAL, materialization repairs, and static-probe portability merged |
 
-A gateway safety follow-up was opened after this source-set capture: PR
-[#42](https://github.com/AI-Ascension/sts2-gateway/pull/42), current commit
-`9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f`, is based on gateway main
-`5f531f602298de674bd31ed3f28a88359b02ca9d`. It checks that durable host
-install and renewal transitions change exactly one row before exposing a
-host-effect candidate, and invalidates restored host bindings during rekey
-before a fresh fence. Its local component gates and exact-head hosted Rust
-quality and repository-policy checks pass (workflow runs `34580441918` and
-`34580442118`). This pending branch is not part of the exact source set or
-release admission until the owning repository reviews and merges it.
+A gateway safety follow-up was merged as PR
+[#42](https://github.com/AI-Ascension/sts2-gateway/pull/42). The selected gateway
+main commit is the merge commit `f4d1409`; its branch tip was
+`9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f`. It checks that durable host install
+and renewal transitions change exactly one row before exposing a host-effect
+candidate, and invalidates restored host bindings during rekey before a fresh
+fence. The branch's exact-head hosted Rust quality and repository-policy checks
+passed (workflow runs `34580441918` and `34580442118`); the merged main source
+also receives a local gate below.
 
 A harness safety follow-up is also open: PR
 [#84](https://github.com/AI-Ascension/sts2-harness/pull/84), current commit
 `a1027614ba8f459a05cdf798ac8e3122a1917065`, rejects `--resume` when the
 durable episode is missing instead of creating a fresh episode. Its local
 format, strict Clippy, and serial locked workspace gates pass; the hosted
-policy run `34581376023` passes and the hosted Rust run is pending at this
-capture. This branch is likewise excluded from the exact source set.
+policy run `34581376023` and hosted Rust rerun `34581375902` pass (rerun job
+`103206721619`). This branch is likewise excluded from the exact source set.
 
-The source set was fetched into isolated worktrees. No changes were made to
+The source set was fetched into isolated worktrees. The root source pin was
+verified from a clean detached worktree at `538346e`; the candidate manifest
+itself is committed in the newer documentation head. No changes were made to
 the companion `main` worktrees. The earlier observability review branch PR #21
 was closed as superseded by merged PR #20; its persistence work is represented
 by current observability main. The static-probe fallback is now merged in PR
@@ -71,7 +72,8 @@ Unix socket contract while avoiding the nearly-full system `/tmp` tmpfs.
 
 Gateway, harness, MCP, game-mod, protocol, and game-core each passed their
 locked workspace format, strict Clippy, and all-target/all-feature test gates
-in their isolated source worktrees. The observability main worktree passed its shell
+in their isolated source worktrees; gateway was rerun on merged main commit
+`f4d1409` for this refresh. The observability main worktree passed its shell
 syntax, validation-regression, bootstrap, installer-guard, materialization-
 guard, query-provision, and Collector persistence fixture suites on merged
 main. Its health-probe fixture passed on current main after the portable
@@ -116,7 +118,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at 538346e with local and exact-head hosted gates green; gateway PR #42 open at 9575b8b with local and hosted gates green; harness PR #84 open at a102761 with local gates and hosted policy green while Rust CI is pending; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at 03fa0e2 with local and exact-head hosted gates green; gateway PR #42 merged into main at f4d1409 after green branch gates; harness PR #84 open at a102761 with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the

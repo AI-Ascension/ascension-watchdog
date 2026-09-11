@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "classification": "candidate-source-set-not-activated",
-  "generated_at": "2026-09-11T08:53:40Z",
+  "generated_at": "2026-09-11T09:07:47Z",
   "purpose": "Exact source pins refreshed during the cross-machine resume wave; this is not an installed or activated release.",
   "activation": {
     "activated": false,
@@ -12,21 +12,21 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-      "last_observed_pr_head": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
+      "last_observed_pr_head": "03fa0e2f69cc62c44eb4bc6914673a9e6199c1e1",
       "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 11,
-      "state": "open; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass; not-merged"
+      "state": "open at 03fa0e2; selected implementation pin 538346e; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass; not-merged"
     },
     "sts2-gateway": {
-      "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
+      "revision": "f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b",
       "follow_up_revision": "87792cf3f6e2c3b6627d3a34bf380bb337c01373",
       "open_follow_up_revision": "9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f",
       "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 40,
       "feature_pull_requests": [34, 37, 38, 39],
-      "state": "merged; current main 5f531f6; component gates pass in isolated worktree"
+      "state": "merged; current main f4d1409 after PR #42; host-lease persistence and restore invalidation included"
     },
     "sts2-harness": {
       "revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",

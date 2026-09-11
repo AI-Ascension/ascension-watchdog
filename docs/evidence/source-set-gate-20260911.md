@@ -20,14 +20,20 @@ and exits 1. It never fetches, builds, installs, activates, or runs a
 companion.
 
 The first two gate runs are preserved in the source history. The current
-read-only run uses watchdog commit `538346e8909a2f4fc23e5b3ea9ec2960b8b34530`
-and manifest digest
-`825ecd8352cacc6fdbb753e8a62a9d1f8607b7ffe7471237499b8949272a3c4a`; it
-returned exit 1 with `admitted=false`. All eight supplied source worktrees
-were clean and exactly pinned for this run. The remaining failures are the
+read-only run uses watchdog commit `538346e8909a2f4fc23e5b3ea9ec2960b8b34530`,
+merged gateway main commit `f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b`, and
+manifest digest
+`596e4c5bb55d8bd3692a03cdded918ea1ebd07b7642d16f8d981aea021d7feaa`; it
+returned exit 1 with `admitted=false` (report
+`/home/agent/wd-tmp-0911/source-set-report-final.json`). All eight supplied
+source worktrees were clean and exactly pinned for this run. The remaining failures are the
 consumer artifact boundary: gateway/MCP copies retain pending conformance,
 consumer bindings are not the selected current revisions, and the contract
 manifests/consumer-conformance files are not byte-identical across copies.
+The root source pin was supplied from a clean detached worktree at `538346e`,
+because the candidate manifest is committed in the newer documentation head;
+the verifier therefore checks the selected implementation revision rather than
+mistaking the evidence update itself for the release source.
 
 All four inspected `coop-native-v1` artifacts passed their checksum-file
 integrity checks: 34 entries for the protocol copy and 25 entries for each
