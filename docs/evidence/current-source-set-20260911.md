@@ -263,3 +263,24 @@ pushed or merged, so current-main admission still requires applying these
 refreshes to the remote branches and rerunning the exact post-merge check. The
 unified cross-consumer build and native Windows/Linux service, live-host,
 cold-boot, rollback, and soak axes remain unverified.
+
+## Current-main artifact refresh admission — 2026-09-11 20:39 UTC
+
+The four refresh PRs have now merged: protocol #42 at `219510c`, gateway #44
+at `8940fba`, MCP #45 at `f3b6eaa`, and harness #86 at `4584c4c`. The exact
+current-main manifest is
+[`workspace-manifest.current-main-refresh-20260911.json`](../../workspace-manifest.current-main-refresh-20260911.json),
+with SHA-256
+`1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18`.
+
+The verifier returned `admitted=true` for eight clean main worktrees with four
+artifacts, complete checksum inventories (34 protocol rows and 25 in each
+consumer copy), identical contract/golden bytes, and synchronized
+`consumer-conformance.json` digest
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`. The
+machine-readable result is
+[`current-main-refresh-source-set-20260911.json`](current-main-refresh-source-set-20260911.json).
+
+Current-main source-set admission is now open, but the release remains
+unactivated. The unified cross-consumer build and native Windows/Linux service,
+live-host, cold-boot, rollback, and soak axes remain unverified.

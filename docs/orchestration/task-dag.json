@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "last_reconciled": "2026-09-11T20:20:44Z",
+  "last_reconciled": "2026-09-11T20:39:16Z",
   "descendant_limit": 12,
   "maximum_descendant_depth": 3,
   "model": "gpt-5.6-luna",
   "reasoning_effort": "max",
-  "reconciliation_note": "Legacy task entries below are historical. The post-merge source pins and read-only gate are recorded in docs/evidence/postmerge-source-set-20260911.md and workspace-manifest.postmerge-20260911.json. A local synchronized artifact refresh candidate is now admitted in docs/evidence/postmerge-refresh-source-set-20260911.md and workspace-manifest.postmerge-refresh-20260911.json; its four delivery commits remain unpushed/unmerged and unactivated. Native service/live-host/cold-boot/activation/rollback/soak evidence and nested depth-2/depth-3 spawning remain unavailable.",
+  "reconciliation_note": "Legacy task entries below are historical. The current-main source pins and read-only gate are recorded in docs/evidence/current-main-refresh-source-set-20260911.md and workspace-manifest.current-main-refresh-20260911.json. Protocol #42, gateway #44, MCP #45, and harness #86 merged with all required hosted checks; current-main source-set admission is true, but the candidate remains unactivated. Native service/live-host/cold-boot/activation/rollback/soak evidence and nested depth-2/depth-3 spawning remain unavailable.",
   "resumed_wave": [
     {"id":"G7R","agent":"/root/gateway_catalog_resumed","status":"active","reserved_threads":1,"depends_on":["G1"],"acceptance":"exact retained catalog bytes and original-context checks"},
     {"id":"G8","agent":"/root/managed_catalog_finish","status":"active","reserved_threads":1,"depends_on":["G6"],"acceptance":"retained host catalogs and executable managed fencing regressions"},
@@ -47,22 +47,22 @@
     {"id":"A7","workstream":"fixture-authority-repair","status":"ca4c663-root-review-pending","reserved_threads":0,"depends_on":["V14"],"acceptance":"fresh restart authority, durable monotonic lease history, stale queue uncertainty and configured lease timing"},
     {"id":"G6","workstream":"managed-host-authority-repair","status":"active","agent":"/root/windows_boundary","reserved_threads":1,"depends_on":["V19","V20"],"acceptance":"gateway-issued boot installation through authenticated host fence, exact lease context and durable dispatch outcomes"},
     {"id":"V18","workstream":"native-runtime-independent-review","status":"active-uses-V4-reservation","agent":"/root/platform_review","reserved_threads":0,"depends_on":["P1"],"acceptance":"inspect exact runtime ownership, helper containment binding and failure paths"},
-    {"id":"I1","workstream":"root-integration","status":"refresh-candidate-gate-passed-release-gates-open","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
+    {"id":"I1","workstream":"root-integration","status":"current-main-source-set-admitted-release-gates-open","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
   ],
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
     "watchdog": {"branch":"bootstrap","commit":"28e20fa8cfb9a43635a5c167e03ade6219d87a5a","pull_request":11,"head_commit":"28e20fa8cfb9a43635a5c167e03ade6219d87a5a","status":"PR #11 and broker/runtime PR #6 merged; product and hosted quality gates pass; native service-session remains unverified"},
-    "harness": {"commit":"4e738133822a48b99bea9a710aa49cf635e7cd2d","pull_request":84,"feature_commit":"40a41285ac44964c712eabfde37e3527ce6a1939","status":"current main remains represented by the stale merged copy; local refresh branch 9defafd updates it to 4e73813 and passes candidate admission; delivery remains unpushed/unmerged"},
-    "mcp": {"commit":"f376105ab779ea692855557a5ad6fdab32f9891d","pull_request":44,"status":"current main remains represented by the stale merged copy; local refresh branch c403163 updates it to f376105 and passes candidate admission; delivery remains unpushed/unmerged"},
-    "gateway": {"commit":"d5dedd264115472799b780b49fd9a545cb6a1507","pull_request":42,"follow_up_pull_request":43,"follow_up_commit":"72c79fd0bda286265201f25cf77f13f2a4fc6f14","status":"current main after PRs #42 and #43 merged; artifact-only delivery is source-bound to f4d1409 and passes its path boundary"},
+    "harness": {"commit":"4584c4cbc2f6bcb900f99092cafa80d32ca0cce8","pull_request":86,"feature_commit":"40a41285ac44964c712eabfde37e3527ce6a1939","status":"current main after refresh PR #86 merged; artifact conformance binds represented source 4e73813 and current-main admission passes; native service remains unverified"},
+    "mcp": {"commit":"f3b6eaa8bcf2241b8d6c47587c958388a8fe1031","pull_request":45,"status":"current main after refresh PR #45 merged; artifact conformance binds represented source f376105 and current-main admission passes; native/live evidence remains unverified"},
+    "gateway": {"commit":"8940fba823a0893b31d1a96301831c182d37ed32","pull_request":44,"follow_up_pull_request":43,"follow_up_commit":"72c79fd0bda286265201f25cf77f13f2a4fc6f14","status":"current main after refresh PR #44 merged; artifact-only delivery is source-bound to d5dedd2 and current-main admission passes"},
     "game_mod": {"commit":"afa44d6f8da66625b67a10d758725da01492a27a","pull_request":76,"status":"current main after installer hardening; component gates pass; cross-repository rebuild pending"},
-    "protocol": {"commit":"d6ec03d1edfe5ebd881fcdf57c4b6185a937f72e","pull_request":41,"status":"current main remains unchanged; local refresh branch 3301018 carries the synchronized consumer record and passes candidate admission; delivery remains unpushed/unmerged"},
+    "protocol": {"commit":"219510c4d4f9c96a54f510cca085a48a92bfe490","pull_request":42,"status":"current main after refresh PR #42 merged; synchronized consumer record and conformance assertion pass current-main admission"},
     "game_core": {"commit":"f5daf69f4f2c43fddbb04e7799d32503f7066110","pull_request":11,"status":"merged current main; defeated-target admission repair is source-tested and component gates pass"},
     "observability": {"commit":"6fad79d00ef4fa84097cb00e8342521f85f6e48e","pull_request":27,"status":"current main after reviewed-upgrade installation packet; live collector/Compose execution remains unavailable"},
-    "consumer_artifact_refresh": {"protocol":{"pull_request":null,"commit":"3301018a0625c9631e92be2769c7586928c10493"},"gateway":{"pull_request":null,"commit":"d987ac4212435e0e451f3411002a792e5f2d92c1"},"mcp":{"pull_request":null,"commit":"c403163d1749af90376064c17e9d037cba8a2130"},"harness":{"pull_request":null,"commit":"9defafd4d0a368a42fe74a17c7def3a2877fdb89"},"status":"local synchronized refresh candidate admitted=true; four delivery commits remain unpushed/unmerged and current-main admission still requires merged-head rerun"},
-    "refresh_candidate": {"manifest":"workspace-manifest.postmerge-refresh-20260911.json","manifest_sha256":"35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33","gate":"local post-merge candidate admitted=true; unactivated and delivery branches unpushed/unmerged","evidence":"docs/evidence/postmerge-refresh-source-set-20260911.md"},
-    "completion": "unverified: local artifact refresh candidate is admitted but unpushed/unmerged; unified build, native service, live, cold-boot, release activation/rollback handoff and soak gates remain open"
+    "consumer_artifact_refresh": {"protocol":{"pull_request":42,"commit":"219510c4d4f9c96a54f510cca085a48a92bfe490"},"gateway":{"pull_request":44,"commit":"8940fba823a0893b31d1a96301831c182d37ed32"},"mcp":{"pull_request":45,"commit":"f3b6eaa8bcf2241b8d6c47587c958388a8fe1031"},"harness":{"pull_request":86,"commit":"4584c4cbc2f6bcb900f99092cafa80d32ca0cce8"},"status":"merged synchronized refreshes; current-main source-set admission passes; release remains unactivated"},
+    "refresh_candidate": {"manifest":"workspace-manifest.current-main-refresh-20260911.json","manifest_sha256":"1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18","gate":"current-main candidate admitted=true; unactivated","evidence":"docs/evidence/current-main-refresh-source-set-20260911.md"},
+    "completion": "unverified: current-main source-set admission passes; unified build, native service, live, cold-boot, release activation/rollback handoff and soak gates remain open"
   },
   "completion": "unverified"
 }

@@ -9,13 +9,15 @@ watchdog service, 24/7 operation, or recovery guarantee has been verified.
 Status: watchdog PRs [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11)
 and [#6](https://github.com/AI-Ascension/ascension-watchdog/pull/6) are merged
 into `bootstrap`, and the watchdog's product and hosted quality gates pass.
-Current-main cross-repository release admission remains blocked until the
-post-merge consumer refresh branches are merged. A local exact refresh
-candidate is admitted by the read-only verifier, but remains unactivated. No
-service, live-host recovery, reboot or soak validation is claimed. See the
+Current-main cross-repository source-set admission now passes after the
+post-merge consumer refreshes were merged. The candidate remains unactivated,
+and no service, live-host recovery, reboot or soak validation is claimed. See
+the [current-main refresh evidence](docs/evidence/current-main-refresh-source-set-20260911.md)
+and [current-main machine-readable result](docs/evidence/current-main-refresh-source-set-20260911.json),
+as well as the
 [post-merge refresh evidence](docs/evidence/postmerge-refresh-source-set-20260911.md)
 and [machine-readable release checkpoint](docs/evidence/release-set-verification-20260911.json)
-for exact revisions and independent verification boundaries.
+for the historical pre-refresh checkpoint and independent verification boundaries.
 
 The OS service manager owns the watchdog. The watchdog supervises gateway and
 harness executables. The gateway owns game lifecycle authority and uses a
@@ -98,12 +100,13 @@ The candidate manifest must not be treated as an installed release.
 
 The merged artifact-refresh branches have a separate historical candidate
 manifest, [workspace-manifest.coop-refresh.candidate.json](workspace-manifest.coop-refresh.candidate.json).
-The current-main post-merge gate and the local regenerated candidate are
-recorded separately in
+The current-main post-merge gate, local regenerated candidate, and merged
+current-main result are recorded separately in
 [`workspace-manifest.postmerge-20260911.json`](workspace-manifest.postmerge-20260911.json),
 [`workspace-manifest.postmerge-refresh-20260911.json`](workspace-manifest.postmerge-refresh-20260911.json),
+[`workspace-manifest.current-main-refresh-20260911.json`](workspace-manifest.current-main-refresh-20260911.json),
 [`docs/evidence/postmerge-refresh-source-set-20260911.md`](docs/evidence/postmerge-refresh-source-set-20260911.md),
-and [`docs/evidence/postmerge-refresh-source-set-20260911.json`](docs/evidence/postmerge-refresh-source-set-20260911.json).
-The local candidate passes source-set admission, but its four refresh commits
-remain unpushed/unmerged and all runtime gates remain separate. All candidates
-remain unactivated.
+[`docs/evidence/postmerge-refresh-source-set-20260911.json`](docs/evidence/postmerge-refresh-source-set-20260911.json),
+and [`docs/evidence/current-main-refresh-source-set-20260911.json`](docs/evidence/current-main-refresh-source-set-20260911.json).
+Current-main source-set admission passes; all runtime gates remain separate and
+unactivated.

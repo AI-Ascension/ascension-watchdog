@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
-  "audit_id": "V35-postmerge-artifact-refresh-20260911",
-  "captured_at": "2026-09-11T20:20:44Z",
+  "audit_id": "V36-current-main-artifact-refresh-20260911",
+  "captured_at": "2026-09-11T20:39:16Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
-  "source_set_record": "docs/evidence/postmerge-refresh-source-set-20260911.md",
+  "source_set_record": "docs/evidence/current-main-refresh-source-set-20260911.md",
   "source_set_gate": {
     "admitted": true,
-    "manifest_sha256": "35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
-    "reason": "local exact post-merge artifact refresh candidate admits all eight clean worktrees; delivery branches remain unpushed/unmerged and the candidate is unactivated",
-    "report": "docs/evidence/postmerge-refresh-source-set-20260911.json"
+    "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
+    "reason": "current-main exact post-merge artifact refresh admits all eight clean worktrees after protocol, gateway, MCP, and harness refresh PRs merged; the candidate remains unactivated",
+    "report": "docs/evidence/current-main-refresh-source-set-20260911.json"
   },
   "refresh_candidate": {
-    "manifest": "workspace-manifest.postmerge-refresh-20260911.json",
-    "manifest_sha256": "35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
+    "manifest": "workspace-manifest.current-main-refresh-20260911.json",
+    "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
     "admitted": true,
-    "classification": "local post-merge refresh candidate; delivery branches unpushed/unmerged",
+    "classification": "current-main post-merge refresh candidate; delivery merged and unactivated",
     "repository_count": 8,
     "artifact_count": 4,
     "issues": [],
@@ -27,28 +27,28 @@
       "sts2-harness": 25
     },
     "source_revision_checks": "pass; source commits are ancestral, source trees match, and artifact-refresh diffs remain inside declared artifact directories",
-    "evidence": "docs/evidence/postmerge-refresh-source-set-20260911.md"
+    "evidence": "docs/evidence/current-main-refresh-source-set-20260911.md"
   },
   "source_set": {
     "ascension-watchdog": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
-    "sts2-gateway": "d5dedd264115472799b780b49fd9a545cb6a1507",
-    "sts2-harness": "4e738133822a48b99bea9a710aa49cf635e7cd2d",
-    "sts2-mcp-server": "f376105ab779ea692855557a5ad6fdab32f9891d",
+    "sts2-gateway": "8940fba823a0893b31d1a96301831c182d37ed32",
+    "sts2-harness": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8",
+    "sts2-mcp-server": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031",
     "sts2-game-mod": "afa44d6f8da66625b67a10d758725da01492a27a",
-    "sts2-protocol": "d6ec03d1edfe5ebd881fcdf57c4b6185a937f72e",
+    "sts2-protocol": "219510c4d4f9c96a54f510cca085a48a92bfe490",
     "sts2-game-core": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
     "ai-agent-observability": "6fad79d00ef4fa84097cb00e8342521f85f6e48e"
   },
   "pending_delivery": {
-    "repository": "AI-Ascension/sts2-harness",
-    "pull_request": 84,
-    "commit": "40a41285ac44964c712eabfde37e3527ce6a1939",
-    "base": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
-    "status": "merged into current main; local exact-head gates pass; refreshed artifact delivery is represented by an unpushed/unmerged candidate",
-    "scope": "missing durable-episode resume rejection and source-derived Windows named-pipe worker boundary"
+    "repository": "AI-Ascension companion artifact refreshes",
+    "pull_request": null,
+    "commit": null,
+    "base": "main",
+    "status": "resolved; refresh PRs #42/#44/#45/#86 merged into current main and current-main source-set admission passes",
+    "scope": "synchronized coop-native-v1 consumer bindings, provenance metadata, and checksum inventories"
   },
   "consumer_artifact_refresh": {
-    "status": "local synchronized refresh candidate admitted; delivery commits are unpushed/unmerged and unactivated",
+    "status": "synchronized current-main refresh merged and admitted; release remains unactivated",
     "contract_sha256": {
       "manifest": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
       "schema": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
@@ -56,12 +56,12 @@
       "consumer_conformance": "b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6"
     },
     "pull_requests": {
-      "sts2-protocol": {"number": 41, "commit": "57edfcb30028d910087121f46b9649564155e328"},
-      "sts2-gateway": {"number": 43, "commit": "72c79fd0bda286265201f25cf77f13f2a4fc6f14"},
-      "sts2-mcp-server": {"number": 44, "commit": "a0e24fcd8ba05fa45782755855aed7ef0a8def41"},
-      "sts2-harness": {"number": 85, "commit": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"}
+      "sts2-protocol": {"number": 42, "commit": "219510c4d4f9c96a54f510cca085a48a92bfe490"},
+      "sts2-gateway": {"number": 44, "commit": "8940fba823a0893b31d1a96301831c182d37ed32"},
+      "sts2-mcp-server": {"number": 45, "commit": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031"},
+      "sts2-harness": {"number": 86, "commit": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8"}
     },
-    "evidence": "docs/evidence/consumer-artifact-refresh-20260911.md"
+    "evidence": "docs/evidence/current-main-refresh-source-set-20260911.md"
   },
   "organization_policy_inspection": {
     "repository": "AI-Ascension/.github",
@@ -82,12 +82,13 @@
     "harness_hosted_rust_quality": 34588219783,
     "harness_hosted_policy": 34588219842,
     "consumer_refresh_local_package_gates": "pass; protocol, gateway, MCP, and harness locked all-target/all-feature serial package runs",
-    "consumer_refresh_hosted_quality": {"protocol": 34593088663, "gateway": 34593088287, "mcp": 34593088598, "harness": 34593088740},
-    "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688},
+    "consumer_refresh_hosted_quality": {"protocol": 34644936010, "gateway": 34644943114, "mcp": 34644936785, "harness": 34644935521},
+    "consumer_refresh_hosted_policy": {"protocol": 34644935963, "gateway": 34644943293, "mcp": 34644936715, "harness": 34644935513},
     "source_set_revision_tree_regressions": "pass; 6 focused source-set unit tests",
     "refresh_candidate_source_set_gate": "historical pass; exit 0/admitted=true with manifest bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
     "postmerge_source_set_gate": "historical fail-closed result; exit 1/admitted=false with manifest 4e2acc7216bdda3a892cd9c5d4d88e5ab870181edfb36b3d3f256f7c64a53c00",
-    "postmerge_refresh_source_set_gate": "pass; exit 0/admitted=true with manifest 35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33; delivery branches are unpushed/unmerged"
+    "postmerge_refresh_source_set_gate": "historical local pass; exit 0/admitted=true with manifest 35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
+    "current_main_refresh_source_set_gate": "pass; exit 0/admitted=true with manifest 1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18"
   },
   "evidence_axes": {
     "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
@@ -97,14 +98,14 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 and PR6 merged into bootstrap; companion source heads are merged; local artifact refresh commits are unpushed/unmerged; candidate unactivated"
+    "remote_delivery_status": "watchdog PR11 and PR6 merged into bootstrap; companion refresh PRs #42/#44/#45/#86 merged into main; current-main source-set admitted; no activation"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",
     "Docker/Podman and native Windows linker/runtime are unavailable here",
     "no authorized service/live-host/reboot/soak execution",
     "no unified current cross-consumer build/conformance target",
-    "local artifact refresh commits are unpushed/unmerged; current-main admission requires merged-head regeneration and rerun"
+    "current-main source-set admission is complete, but native/live/reboot/rollback/soak evidence remains unverified"
   ],
   "fault_matrix": {
     "count": 24,
