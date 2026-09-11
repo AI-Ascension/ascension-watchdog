@@ -1,6 +1,7 @@
 # Ownership and implementation contract
 
-Classification: proposed, until linked implementation and executable evidence exist.
+Classification: implemented watchdog architecture; cross-repository release
+admission and native/live evidence remain pending.
 
 The watchdog owns desired deployment mode, component supervision, job scheduling
 records, operational audit, retry windows and approved release identity. Gateway
