@@ -442,9 +442,11 @@ current main, because the refresh PRs remain open, and it does not close the
 unified build, native service, live-host, cold-boot, activation, nested
 delegation, or soak requirements.
 
-## Resume-wave packaging repair — 2026-09-11 16:46 UTC
+## Resume-wave packaging repair — 2026-09-11 17:05 UTC
 
-Root PR #11 is now at exact head `21cb25ea518d7344541af06431a27b411db8e218`.
+The packaging/test product changes were validated at exact head
+`902c8790a8d869c5934941c0be7110aa35fd0b18`; this paragraph and the machine
+snapshot are an evidence-only follow-up.
 The Windows packaging repair removes the hosted-only failure modes from the
 previous attempt: the non-mutating preflight normalizes extended Windows
 repository paths before PowerShell parsing, and the native ACL fixture uses a
