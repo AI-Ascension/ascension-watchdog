@@ -64,8 +64,12 @@ Credentials are never command-line arguments.
 `watchdog service install` calls the native `ServiceInstallPlan` API, registers
 automatic start and bounded failure actions, and does not start or initialize
 the service. `deploy/windows/install.ps1` requires a separately protected
-release verifier and finishes `release inspect --manifest ... --root ...` before
-it mutates SCM; a manifest's presence is not release validation.
+release verifier, rejects reparse points throughout the candidate release, and
+finishes `release inspect --manifest ... --root ...` before it mutates SCM; a
+manifest's presence is not release validation. It then resets inherited and
+explicit ACL entries and grants only SYSTEM/Administrators full control plus
+the selected service identity read/execute access to the release and read
+access to the config before registering SCM.
 `deploy/windows/uninstall.ps1` requires the owner-local config. Before opening
 its store or changing state, the native boundary queries SCM and binds the
 fixed service to the canonical executable and exact `daemon --service
@@ -76,9 +80,9 @@ reconciliation; a missing service is idempotent. There is no data-removal
 switch. State, credentials, and releases remain for separately audited
 lifecycle work.
 
-The config file must be provisioned with ACLs readable by the installed service
-identity. This wiring evidence does not claim that an operator-owned or
-inherited config is readable by the virtual service account.
+The installer contains this ACL provisioning boundary, but source-only wiring
+evidence does not claim that Windows account-name resolution, native ACL access,
+or SCM installation succeeded on a host.
 
 The Windows service must be registered with SCM automatic start and bounded
 failure actions. The graphical host broker must select an explicitly approved
@@ -113,3 +117,7 @@ source-tested byte/hash verification, a durable prepared marker, atomic
 selector/receipt publication, interruption recovery and compatibility checks
 before this wrapper is called. Sealed cross-repository handoff and native
 activation remain unverified.
+
+The package preflight parses both PowerShell wrappers and exercises the digest
+and inspection refusal paths without touching SCM. Native ACL resolution, SCM
+installation, and service startup remain separate host gates.
