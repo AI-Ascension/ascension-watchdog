@@ -21,6 +21,7 @@
 )]
 
 pub mod admin;
+pub mod build_set;
 pub mod cli;
 pub mod config;
 pub mod error;
