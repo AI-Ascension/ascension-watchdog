@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "audit_id": "V32-resume-wave-20260911",
-  "captured_at": "2026-09-11T10:15:56Z",
+  "captured_at": "2026-09-11T10:41:43Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "source_set_record": "docs/evidence/current-source-set-20260911.md",
   "source_set_gate": {
     "admitted": false,
-    "manifest_sha256": "1da21db7f58da78d8bd6f0a57dc3ded68d95b111310bc055e4527c311e5711e4",
+    "manifest_sha256": "0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d",
     "reason": "consumer manifest and consumer-conformance bindings differ; gateway/MCP copies retain pending markers",
-    "report": "/home/agent/wd-tmp-0911/source-set-report-final.json"
+    "report": "/home/agent/wd-tmp-0911/source-set-report-1041.json"
   },
   "source_set": {
     "ascension-watchdog": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
@@ -38,8 +38,10 @@
     "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
   },
   "checks": {
-    "watchdog_exact_head_hosted_validation": 34582695999,
-    "watchdog_exact_head_hosted_standards": 34582696030,
+    "watchdog_exact_head_hosted_validation": 34589427447,
+    "watchdog_exact_head_hosted_standards": 34589427371,
+    "watchdog_current_head_local_workspace": "pass; f5b81f4 full serial locked workspace all-target/all-feature run exited 0",
+    "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6",
     "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
     "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
     "harness_hosted_rust_quality": 34588219783,
@@ -53,7 +55,7 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 open at d28ef31; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; no activation"
+    "remote_delivery_status": "watchdog PR11 open at f5b81f4; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; no activation"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",

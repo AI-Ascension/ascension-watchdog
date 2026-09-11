@@ -2,7 +2,7 @@
   "classification": "confirmed",
   "source": "native thread metadata and executed turn contexts, not agent self-description",
   "root_thread_id": "01a078a4-d17d-7101-afa1-9e68655beedd",
-  "last_reconciled": "2026-09-11T10:15:56Z",
+  "last_reconciled": "2026-09-11T10:41:43Z",
   "maximum_reserved_descendants": 12,
   "current_wave": "integration-wave-20260910.json",
   "current_wave_note": "The resumed_wave below is historical. Current reservations, results, and blockers are recorded in the referenced dated wave.",
@@ -12,7 +12,7 @@
   "current_integration": {
     "watchdog_branch": "codex/watchdog-resume-20260911",
     "watchdog_commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-    "watchdog_last_observed_pr_head": "d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57",
+    "watchdog_last_observed_pr_head": "f5b81f42dbb525fa3fdbb32a29c202822e01aaa7",
     "watchdog_pull_request": 11,
     "harness_branch": "codex/harness-resume-missing-state-20260911",
     "harness_commit": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
@@ -38,7 +38,7 @@
     "observability_branch": "main",
     "observability_commit": "630431716ebfbf86280f9fd56f19d6016ad7aeb2",
     "observability_pull_request": 22,
-    "status": "watchdog selected pin 538346e is open in PR11 with docs head d28ef31 and exact-head hosted validation/standards green; exact source-set verifier rejects stale consumer bindings and differing manifests; gateway PR42 is merged at f4d1409; harness main 00bd9e1 remains the source pin while PR84 is open at 40a4128 with local and hosted gates green; MCP 98ab84b, game-mod bd8e905, protocol 0bc689e, game-core f5daf69 and observability 6304317 remain current main pins; no unified consumer build, native service, live host, cold boot, activation, or soak",
+    "status": "watchdog selected pin 538346e is open in PR11 with current head f5b81f4 and exact-head hosted validation/standards green; current systemd notifier and full serial workspace tests pass; exact source-set verifier rejects stale consumer bindings and differing manifests; gateway PR42 is merged at f4d1409; harness main 00bd9e1 remains the source pin while PR84 is open at 40a4128 with local and hosted gates green; MCP 98ab84b, game-mod bd8e905, protocol 0bc689e, game-core f5daf69 and observability 6304317 remain current main pins; no unified consumer build, native service, live host, cold boot, activation, or soak",
     "observed_depth": 1,
     "current_wave": "docs/evidence/current-source-set-20260911.md"
   },

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T10:15:56Z",
+  "captured_at": "2026-09-11T10:41:43Z",
   "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
   "phase": "exact-source-set-and-boundary-recorded",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
     "commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-    "current_pr_head": "d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57",
+    "current_pr_head": "f5b81f42dbb525fa3fdbb32a29c202822e01aaa7",
     "pull_request": 11
   },
   "source_set": {
@@ -30,7 +30,8 @@
     "enforced affected-row checks for paired durable watchdog job transitions and passed six suppression regressions plus the serial workspace gate",
     "refreshed the exact source-set verifier and root hosted lanes at 538346e; gateway PR #42 merged at f4d1409; source-set admission remains closed on consumer-binding drift",
     "inspected public AI-Ascension/.github and AI-Ascension.github.io policy/source trees; recorded their evidence and static-site boundaries",
-    "extended harness PR #84 to 40a4128 with the Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass"
+    "extended harness PR #84 to 40a4128 with the Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass",
+    "corrected Linux systemd notification sequencing so the first completed loop sends READY only and later progress sends WATCHDOG only when configured; current-head focused tests, service-loop integration, full serial workspace, and hosted PR lanes pass"
   ],
   "pending_follow_ups": [
     {
@@ -51,7 +52,7 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally at 538346e; serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass at docs head d28ef31 (validation run 34582695999; standards run 34582696030)",
+    "watchdog": "pass locally at current PR head f5b81f4; focused systemd tests, full serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34589427447; standards run 34589427371); selected source-set implementation pin remains 538346e",
     "companion_component_gates": "pass in isolated worktrees",
     "gateway_follow_up_pr42": "merged at f4d1409; 9575b8b branch local gates pass and hosted Rust quality/repository-policy checks pass",
     "harness_follow_up_pr84": "40a4128 local format/policy/Linux-Clippy/Windows-target-Clippy-check/focused/full-serial gates pass; hosted Rust-quality 34588219783 and policy 34588219842 pass; PR remains open and excluded from exact source set",

@@ -1,9 +1,10 @@
 # Current source set and verification boundary — 2026-09-11
 
-Captured at `2026-09-11T09:07:47Z`; root verification and gateway main were
-refreshed at this source-set wave. A delivery update was appended at
-`2026-09-11T10:15:56Z`. This is a resumable integration record, not an activated
-release. Every revision below is an exact local source revision; a component
+Captured at `2026-09-11T10:41:43Z`; root verification and gateway main were
+refreshed at this source-set wave. The prior delivery update was recorded at
+`2026-09-11T10:15:56Z`, and the current PR-head correction is recorded below.
+This is a resumable integration record, not an activated release. Every
+revision below is an exact local source revision; a component
 passing its own gates does not establish cross-consumer, service, live-host,
 reboot, or soak evidence.
 
@@ -11,7 +12,7 @@ reboot, or soak evidence.
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | selected implementation pin; PR head `d28ef31` contains the evidence refresh; local and exact-head hosted gates pass |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | selected implementation pin; current PR head `f5b81f4` contains the systemd readiness/heartbeat correction; local and exact-head hosted gates pass |
 | `sts2-gateway` | `main` | `f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b` | current remote main after PR #42 merge; merged host-lease safety changes included |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
@@ -78,6 +79,13 @@ completion, known failure, or interruption quarantine. The dedicated short
 temporary directory keeps test endpoint names within the product's 100-byte
 Unix socket contract while avoiding the nearly-full system `/tmp` tmpfs.
 
+The current PR head `f5b81f42dbb525fa3fdbb32a29c202822e01aaa7` was then rerun
+with the same serial locked workspace command and exited zero. Its focused
+Linux notifier tests passed 5/5, and the service-loop integration tests passed
+6/6. Hosted validation run `34589427447` passed Ubuntu, Windows, and dependency
+lanes; standards run `34589427371` also passed. These current-head results do
+not change the selected source-set implementation pin above.
+
 Gateway, harness, MCP, game-mod, protocol, and game-core each passed their
 locked workspace format, strict Clippy, and all-target/all-feature test gates
 in their isolated source worktrees; gateway was rerun on merged main commit
@@ -126,7 +134,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at d28ef31 with local and exact-head hosted gates green; gateway PR #42 merged into main at f4d1409 after green branch gates; harness PR #84 open at 40a4128 with local and hosted Rust-quality/policy gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at f5b81f4 with current local and exact-head hosted gates green; gateway PR #42 merged into main at f4d1409 after green branch gates; harness PR #84 open at 40a4128 with local and hosted Rust-quality/policy gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the
@@ -153,3 +161,23 @@ named-pipe execution, SCM/Job Object behavior, live host, cold boot, and soak
 remain unverified. The separate [Windows boundary ADR in the pending harness
 PR](https://github.com/AI-Ascension/sts2-harness/blob/40a41285ac44964c712eabfde37e3527ce6a1939/docs/decisions/0015-windows-worker-endpoint-boundary.md)
 is not part of the root source set.
+
+## Delivery update — 2026-09-11 10:41 UTC
+
+Root PR #11 is now at `f5b81f42dbb525fa3fdbb32a29c202822e01aaa7`. The Linux
+systemd notifier now sends `READY=1` on the first completed reconciliation and
+defers `WATCHDOG=1` until a later strictly increasing completed sequence when
+systemd supplies a watchdog interval. Focused notifier tests, the service-loop
+integration test, and the full serial workspace all-target/all-feature run
+passed at this head. Hosted Ubuntu, Windows, dependency, and standards checks
+are green in runs `34589427447` and `34589427371`.
+
+The read-only source-set verifier was rerun against the unchanged selected
+implementation worktree and refreshed manifest. It returned exit 1 with
+`admitted=false` and manifest digest
+`0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d`; the
+report is `/home/agent/wd-tmp-0911/source-set-report-1041.json`. All eight
+repositories remain clean and exactly pinned. Admission is still rejected only
+at the consumer boundary: gateway/MCP retain pending markers and the current
+consumer bindings are not one identical current set. No artifact bytes were
+edited to force admission.

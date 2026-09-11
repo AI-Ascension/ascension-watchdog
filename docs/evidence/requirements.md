@@ -386,3 +386,23 @@ delegation, or 24-hour soak. Current axes therefore remain
 `WINDOWS_SERVICE_VERIFIED = unverified`, `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
 `LIVE_HOST_RECOVERY_VERIFIED = unverified`, `COLD_BOOT_RECOVERY_VERIFIED = unverified`,
 and `SOAK_VERIFIED = unverified`.
+
+## Resume-wave refresh — 2026-09-11 10:41 UTC
+
+Root PR #11 is at `f5b81f42dbb525fa3fdbb32a29c202822e01aaa7`. The systemd
+notifier sequencing correction is source-tested: the first completed loop emits
+`READY=1` without `WATCHDOG=1`, while later increasing progress emits the
+watchdog notification only when the systemd interval is configured. Focused
+Linux notifier tests passed 5/5, service-loop integration passed 6/6, and the
+full serial locked workspace all-target/all-feature run exited 0. Hosted
+validation run `34589427447` and standards run `34589427371` are green for the
+current head.
+
+The refreshed read-only source-set gate still returns `admitted=false` (exit 1)
+with manifest digest
+`0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d`. All eight
+source worktrees are clean and exact; the remaining failures are stale/pending
+consumer-conformance bindings in the gateway/MCP/harness artifact copies. The
+consumer implementation is not available to repair from this root, so no
+artifact bytes were normalized. Native service/live-host, cold-boot, unified
+consumer build, nested depth-2/3 delegation, and soak evidence remain open.

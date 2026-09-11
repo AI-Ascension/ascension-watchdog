@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "last_reconciled": "2026-09-11T10:15:56Z",
+  "last_reconciled": "2026-09-11T10:41:43Z",
   "descendant_limit": 12,
   "maximum_descendant_depth": 3,
   "model": "gpt-5.6-luna",
   "reasoning_effort": "max",
-  "reconciliation_note": "Legacy task entries below are historical. The current source pins, endpoint smoke, ownership, and reservations are recorded in integration-wave-20260910.json and the 2026-09-11 source-set evidence. Gateway PR #42 is merged at f4d1409; harness PR #84 is open at 40a4128 with local gates pass and hosted checks pending, and is not part of the approved source set. Public organization/site policy inspection is recorded in docs/evidence/organization-policy-inspection-20260911.md. Nested depth-2/depth-3 spawning remains unobserved and no depth-4 bypass was attempted.",
+  "reconciliation_note": "Legacy task entries below are historical. The current source pins, endpoint smoke, ownership, and reservations are recorded in integration-wave-20260910.json and the 2026-09-11 source-set evidence. Gateway PR #42 is merged at f4d1409; harness PR #84 is open at 40a4128 with local gates and hosted checks green, and is not part of the approved source set. Public organization/site policy inspection is recorded in docs/evidence/organization-policy-inspection-20260911.md. Nested depth-2/depth-3 spawning remains unobserved and no depth-4 bypass was attempted.",
   "resumed_wave": [
     {"id":"G7R","agent":"/root/gateway_catalog_resumed","status":"active","reserved_threads":1,"depends_on":["G1"],"acceptance":"exact retained catalog bytes and original-context checks"},
     {"id":"G8","agent":"/root/managed_catalog_finish","status":"active","reserved_threads":1,"depends_on":["G6"],"acceptance":"retained host catalogs and executable managed fencing regressions"},
@@ -52,7 +52,7 @@
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"branch":"codex/watchdog-resume-20260911","commit":"538346e8909a2f4fc23e5b3ea9ec2960b8b34530","pull_request":11,"head_commit":"d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57","status":"open non-draft; selected implementation pin 538346e with source-set CLI and diagnostics source-tested; docs head d28ef31 has exact-head hosted validation/standards green; service-session remains unverified"},
+    "watchdog": {"branch":"codex/watchdog-resume-20260911","commit":"538346e8909a2f4fc23e5b3ea9ec2960b8b34530","pull_request":11,"head_commit":"f5b81f42dbb525fa3fdbb32a29c202822e01aaa7","status":"open non-draft; selected implementation pin 538346e with source-set CLI and diagnostics source-tested; current PR head f5b81f4 has full serial workspace and exact-head hosted validation/standards green; service-session remains unverified"},
     "harness": {"commit":"00bd9e123a86fca39bbffb65b370aac7ed2c8218","pull_request":84,"feature_commit":"40a41285ac44964c712eabfde37e3527ce6a1939","status":"current main remains the exact source pin; PR #84 adds missing-episode resume rejection and a source-derived Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass, cross-repository release rebuild pending"},
     "mcp": {"commit":"98ab84b3fad371b45b141e6d81dd9124769a4c59","pull_request":41,"status":"merged current main; native envelope identity preservation is source-tested and component gates pass; dependent release rebuild pending"},
     "gateway": {"commit":"f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b","pull_request":42,"follow_up_pull_request":42,"follow_up_commit":"9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f","status":"merged current main; PR #42 affected-row host install/renew checks and rekey invalidation are included; branch and merged-main component gates pass"},
