@@ -33,6 +33,7 @@ pub mod release;
 pub mod release_staged;
 pub mod runtime;
 pub mod service;
+pub mod source_set;
 pub mod storage;
 #[cfg(windows)]
 pub mod windows_service;

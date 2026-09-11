@@ -10,7 +10,12 @@ validation does not open credentials; the server validates and loads them at sta
 `watchdog start|pause|resume|drain|stop --config PATH --idempotency-key KEY` uses
 authenticated IPC and persists intent, response, and audit before acknowledgment.
 Reuse the exact key and command after an uncertain response. `status` uses the
-read credential. Acknowledgment means intent accepted, not completed cleanup.
+read credential. `watchdog quarantine --config PATH --idempotency-key KEY
+--attempt-id ID --reason REASON` uses the same authenticated admin path to
+durably classify an uncertain attempt without retrying or settling it.
+`watchdog diagnostics --config PATH` is a bounded, read-only owner-store
+snapshot; it does not contact children, include payload/result text, or make a
+recovery decision. Acknowledgment means intent accepted, not completed cleanup.
 
 `watchdog job submit --config PATH --idempotency-key KEY --kind KIND
 --payload JSON` submits a bounded watchdog-owned job through the same
@@ -31,7 +36,6 @@ targets fail closed for `--payload-file`; use inline `--payload` there instead.
 Without admin configuration, direct mode writes are restricted to the explicit
 synthetic-child configuration; production lifecycle commands fail closed.
 
-Status, lifecycle, job submission/inspection, quarantine, watchdog-local
 Status, lifecycle, job submission/inspection, quarantine, watchdog-local
 known-failure retry, scoped watchdog reconciliation, and protected release
 inspection are wired into the real service loop. Reconciliation validates the

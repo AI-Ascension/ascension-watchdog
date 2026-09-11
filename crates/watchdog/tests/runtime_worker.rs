@@ -26,6 +26,19 @@ use uuid::Uuid;
 const WATCHDOG_BOOT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WORKER_BOOT: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
+fn worker_tempdir() -> std::io::Result<TempDir> {
+    #[cfg(unix)]
+    {
+        // Keep the Linux socket fixture below the 100-byte Unix-domain path
+        // limit even when the harness supplies a long workspace TMPDIR.
+        tempfile::tempdir_in("/tmp")
+    }
+    #[cfg(not(unix))]
+    {
+        tempfile::tempdir()
+    }
+}
+
 fn worker_config(temp: &TempDir, desired_mode: DesiredMode) -> WatchdogConfig {
     let root = temp.path();
     let executable = synthetic_executable();
@@ -173,7 +186,7 @@ fn supervisor_boot_identity_is_one_fresh_uuid_per_instance()
 #[test]
 fn configured_worker_without_live_child_does_not_create_control_or_claim()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let config = worker_config(&temp, DesiredMode::Paused);
     let mut supervisor = Supervisor::initialize(config.clone())?;
     let report = supervisor.reconcile_once(1_000)?;
@@ -189,7 +202,7 @@ fn configured_worker_without_live_child_does_not_create_control_or_claim()
 #[test]
 fn draining_keeps_pending_handoff_barrier_without_live_child()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let running_config = worker_config(&temp, DesiredMode::Running);
     seed_pending_handoff(&running_config)?;
 
@@ -304,7 +317,7 @@ fn assert_missing_worker_endpoint_does_not_abort_stop(
 #[test]
 fn missing_worker_endpoint_does_not_abort_loop_or_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     assert_missing_worker_endpoint_does_not_abort_stop(
         &worker_config(&temp, DesiredMode::Running),
         false,
@@ -315,7 +328,7 @@ fn missing_worker_endpoint_does_not_abort_loop_or_skip_owned_stop_cleanup()
 #[test]
 fn worker_identity_failure_cannot_veto_durable_operator_stop()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let config = worker_config(&temp, DesiredMode::Running);
     let mut supervisor = Supervisor::initialize(config.clone())?;
     assert!(matches!(
@@ -343,7 +356,7 @@ fn worker_identity_failure_cannot_veto_durable_operator_stop()
 #[test]
 fn stale_prior_launch_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let config = worker_config(&temp, DesiredMode::Running);
     let endpoint = config
         .worker
@@ -359,7 +372,7 @@ fn stale_prior_launch_socket_does_not_abort_loop_or_skip_owned_stop_cleanup()
 #[test]
 fn unready_current_worker_socket_does_not_skip_owned_stop_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let config = worker_config(&temp, DesiredMode::Running);
     assert_missing_worker_endpoint_does_not_abort_stop(&config, true)
 }
@@ -367,7 +380,7 @@ fn unready_current_worker_socket_does_not_skip_owned_stop_cleanup()
 #[test]
 fn durable_claim_persistence_failure_cannot_create_a_worker_handoff()
 -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+    let temp = worker_tempdir()?;
     let config = worker_config(&temp, DesiredMode::Running);
     let binding = config.worker_binding()?.expect("worker binding");
     let mut store = Store::initialize(&config.database, &config)?;

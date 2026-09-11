@@ -1270,7 +1270,7 @@ impl From<&WatchdogError> for AdminDispatchError {
             WatchdogError::Timeout(_) => Self::Timeout,
             WatchdogError::Unsupported(_) => Self::Unsupported,
             WatchdogError::Sqlite(_) | WatchdogError::Io(_) => Self::PersistenceUnavailable,
-            WatchdogError::Json(_) => Self::Invalid,
+            WatchdogError::Json(_) | WatchdogError::VerificationFailed(_) => Self::Invalid,
         }
     }
 }

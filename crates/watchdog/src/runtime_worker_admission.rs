@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn pre_resume_requires_current_running_prepared_exact_frame_and_configuration() -> Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::tempdir_in("/tmp")?;
         let (config, mut store, spec, planned, worker) = fixture(root.path())?;
         let deadline = Instant::now() + Duration::from_secs(5);
         authorize(&config, &spec, &planned, &worker, deadline)?;
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn admission_rejects_a_second_component_intent_even_without_unique_index() -> Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::tempdir_in("/tmp")?;
         let (config, _store, spec, planned, worker) = fixture(root.path())?;
         let connection = rusqlite::Connection::open(&config.database)?;
         connection.execute_batch(
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn admission_reservation_serializes_operator_stop_until_guard_drop() -> Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::tempdir_in("/tmp")?;
         let (config, mut operator, spec, planned, worker) = fixture(root.path())?;
         let guard = authorize(
             &config,
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn pre_resume_rejects_changed_or_missing_source_configuration() -> Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::tempdir_in("/tmp")?;
         let (mut config, _store, spec, planned, worker) = fixture(root.path())?;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut changed = config.clone();

@@ -1809,14 +1809,26 @@ impl Store {
                 "attempt is not the active running claim".to_string(),
             ));
         }
-        tx.execute(
+        let attempt_changed = tx.execute(
             "UPDATE attempts SET status='completed', finished_at_ms=?, outcome=? WHERE id=? AND job_id=? AND status='running'",
             params![sqlite_timestamp(now_ms)?, result_text, attempt_id, job_id],
         )?;
-        tx.execute(
+        if attempt_changed != 1 {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(
+                "attempt completion changed concurrently".to_owned(),
+            ));
+        }
+        let job_changed = tx.execute(
             "UPDATE jobs SET status='completed', completed_at_ms=?, result=?, completion_digest=?, last_error=NULL WHERE id=? AND status='running'",
             params![sqlite_timestamp(now_ms)?, serde_json::to_string(result)?, digest, job_id],
         )?;
+        if job_changed != 1 {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(
+                "job completion changed concurrently".to_owned(),
+            ));
+        }
         insert_audit_tx(
             &tx,
             "job_completed",
@@ -1843,14 +1855,26 @@ impl Store {
             .collect::<rusqlite::Result<Vec<String>>>()?;
         drop(stmt);
         for job_id in &ids {
-            tx.execute(
+            let attempt_changed = tx.execute(
                 "UPDATE attempts SET status='unknown', finished_at_ms=?, outcome='daemon_interrupted' WHERE job_id=? AND status='running'",
                 params![sqlite_timestamp(now_ms)?, job_id],
             )?;
-            tx.execute(
+            if attempt_changed != 1 {
+                tx.rollback()?;
+                return Err(WatchdogError::Conflict(
+                    "interrupted attempt changed concurrently".to_owned(),
+                ));
+            }
+            let job_changed = tx.execute(
                 "UPDATE jobs SET status='quarantined', last_error='daemon interrupted; outcome unknown' WHERE id=? AND status='running'",
                 params![job_id],
             )?;
+            if job_changed != 1 {
+                tx.rollback()?;
+                return Err(WatchdogError::Conflict(
+                    "interrupted job changed concurrently".to_owned(),
+                ));
+            }
             insert_audit_tx(&tx, "job_quarantined_after_interruption", job_id, now_ms)?;
         }
         tx.commit()?;
@@ -1930,12 +1954,18 @@ impl Store {
         } else {
             JobStatus::Quarantined
         };
-        tx.execute(
+        let attempt_changed = tx.execute(
             "UPDATE attempts SET status='failed', finished_at_ms=?, outcome=? WHERE id=? AND status='running'",
             params![sqlite_timestamp(now_ms)?, error, attempt_id],
         )?;
-        tx.execute(
-            "UPDATE jobs SET status=?, next_retry_at_ms=?, last_error=?, worker_id=NULL WHERE id=?",
+        if attempt_changed != 1 {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(
+                "attempt failure changed concurrently".to_owned(),
+            ));
+        }
+        let job_changed = tx.execute(
+            "UPDATE jobs SET status=?, next_retry_at_ms=?, last_error=?, worker_id=NULL WHERE id=? AND status='running'",
             params![
                 target.as_str(),
                 retry_at_ms.map(sqlite_timestamp).transpose()?,
@@ -1943,6 +1973,12 @@ impl Store {
                 job_id
             ],
         )?;
+        if job_changed != 1 {
+            tx.rollback()?;
+            return Err(WatchdogError::Conflict(
+                "job failure changed concurrently".to_owned(),
+            ));
+        }
         insert_audit_tx(&tx, "job_failed", &format!("{job_id}:{target:?}"), now_ms)?;
         tx.commit()?;
         Ok(target)

@@ -1,5 +1,16 @@
-use ascension_watchdog::{DesiredMode, Store, WatchdogConfig};
+use ascension_watchdog::{DesiredMode, Store, WatchdogConfig, WatchdogError};
 use serde_json::json;
+
+fn assert_running(store: &Store, job_id: &str, attempt_id: &str) {
+    assert_eq!(
+        store.get_job(job_id).unwrap().unwrap().status,
+        ascension_watchdog::JobStatus::Running
+    );
+    assert_eq!(
+        store.attempt_summary(attempt_id).unwrap().unwrap().status,
+        "running"
+    );
+}
 
 #[cfg(windows)]
 fn protect_config_for_native_read(
@@ -100,6 +111,141 @@ fn summaries_filter_before_limit_and_never_export_private_values() {
     assert!(!output.contains("private"));
     assert!(store.job_summaries(None, 0).is_err());
     assert!(store.job_summaries(None, 257).is_err());
+}
+
+#[test]
+fn completion_rolls_back_when_either_durable_transition_is_suppressed() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Running,
+        ..WatchdogConfig::default()
+    };
+    let mut store = Store::initialize(&config.database, &config).unwrap();
+    let job = store
+        .submit_job_at("episode", &json!({"value": 1}), 1)
+        .unwrap();
+    let claim = store.claim_next_job("worker", 2).unwrap().unwrap();
+    let fault = rusqlite::Connection::open(&config.database).unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_attempt_completion
+             BEFORE UPDATE OF status ON attempts
+             WHEN NEW.status='completed'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.complete_job_at(&job.id, &claim.attempt_id, &json!({"done": true}), 3),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
+    fault
+        .execute_batch("DROP TRIGGER suppress_attempt_completion")
+        .unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_job_completion
+             BEFORE UPDATE OF status ON jobs
+             WHEN NEW.status='completed'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.complete_job_at(&job.id, &claim.attempt_id, &json!({"done": true}), 4),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
+}
+
+#[test]
+fn failure_rolls_back_when_either_durable_transition_is_suppressed() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Running,
+        ..WatchdogConfig::default()
+    };
+    let mut store = Store::initialize(&config.database, &config).unwrap();
+    let job = store
+        .submit_job_at("episode", &json!({"value": 1}), 1)
+        .unwrap();
+    let claim = store.claim_next_job("worker", 2).unwrap().unwrap();
+    let fault = rusqlite::Connection::open(&config.database).unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_attempt_failure
+             BEFORE UPDATE OF status ON attempts
+             WHEN NEW.status='failed'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.fail_job_at(&job.id, &claim.attempt_id, "synthetic", Some(5), 3),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
+    fault
+        .execute_batch("DROP TRIGGER suppress_attempt_failure")
+        .unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_job_failure
+             BEFORE UPDATE OF status ON jobs
+             WHEN NEW.status='queued'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.fail_job_at(&job.id, &claim.attempt_id, "synthetic", Some(6), 4),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
+}
+
+#[test]
+fn interruption_quarantine_rolls_back_when_either_transition_is_suppressed() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = WatchdogConfig {
+        database: directory.path().join("state.sqlite"),
+        desired_mode: DesiredMode::Running,
+        ..WatchdogConfig::default()
+    };
+    let mut store = Store::initialize(&config.database, &config).unwrap();
+    let job = store
+        .submit_job_at("episode", &json!({"value": 1}), 1)
+        .unwrap();
+    let claim = store.claim_next_job("worker", 2).unwrap().unwrap();
+    let fault = rusqlite::Connection::open(&config.database).unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_attempt_quarantine
+             BEFORE UPDATE OF status ON attempts
+             WHEN NEW.status='unknown'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.quarantine_interrupted_jobs(3),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
+    fault
+        .execute_batch("DROP TRIGGER suppress_attempt_quarantine")
+        .unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER suppress_job_quarantine
+             BEFORE UPDATE OF status ON jobs
+             WHEN NEW.status='quarantined'
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.quarantine_interrupted_jobs(4),
+        Err(WatchdogError::Conflict(_))
+    ));
+    assert_running(&store, &job.id, &claim.attempt_id);
 }
 
 #[test]

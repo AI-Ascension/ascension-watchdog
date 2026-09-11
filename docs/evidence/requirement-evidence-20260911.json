@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "audit_id": "V34-resume-wave-20260911",
+  "captured_at": "2026-09-11T17:05:35Z",
+  "classification": "partial; release and runtime axes unverified",
+  "requirements_ledger": "docs/evidence/requirements.md",
+  "source_set_record": "docs/evidence/current-source-set-20260911.md",
+  "source_set_gate": {
+    "admitted": false,
+    "manifest_sha256": "0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d",
+    "reason": "current main consumer copies remain stale/pending; four PR-only artifact refreshes now stage one current-main contract set",
+    "report": "/home/agent/wd-tmp-0911/source-set-report-1041.json"
+  },
+  "refresh_candidate": {
+    "manifest": "workspace-manifest.coop-refresh.candidate.json",
+    "manifest_sha256": "bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
+    "admitted": true,
+    "classification": "unactivated candidate with open artifact-refresh PR heads",
+    "repository_count": 8,
+    "artifact_count": 4,
+    "issues": [],
+    "contract_files_identical": true,
+    "checksum_entries": {
+      "sts2-protocol": 34,
+      "sts2-gateway": 25,
+      "sts2-mcp-server": 25,
+      "sts2-harness": 25
+    },
+    "source_revision_checks": "pass; source commits are ancestral, source trees match, and artifact-refresh diffs remain inside declared artifact directories",
+    "evidence": "docs/evidence/coop-refresh-source-set-20260911.md"
+  },
+  "source_set": {
+    "ascension-watchdog": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
+    "sts2-gateway": "f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b",
+    "sts2-harness": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+    "sts2-mcp-server": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
+    "sts2-game-mod": "bd8e90542dfc89366f820150c5c755e32716b1b0",
+    "sts2-protocol": "0bc689eabc5542ede2b09b030d9ea32daa8a73e7",
+    "sts2-game-core": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
+    "ai-agent-observability": "630431716ebfbf86280f9fd56f19d6016ad7aeb2"
+  },
+  "pending_delivery": {
+    "repository": "AI-Ascension/sts2-harness",
+    "pull_request": 84,
+    "commit": "40a41285ac44964c712eabfde37e3527ce6a1939",
+    "base": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+    "status": "open; local exact-head gates pass; hosted Rust-quality and policy checks pass",
+    "scope": "missing durable-episode resume rejection and source-derived Windows named-pipe worker boundary"
+  },
+  "consumer_artifact_refresh": {
+    "status": "open PR-only refreshes; local checksum and component gates pass; hosted policy and quality checks pass for all four",
+    "contract_sha256": {
+      "manifest": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
+      "schema": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
+      "conformance": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
+      "consumer_conformance": "c4350934fce24b11aa7f72ab8a99784c364323313d6390d59f33e8ab952e78a6"
+    },
+    "pull_requests": {
+      "sts2-protocol": {"number": 41, "commit": "57edfcb30028d910087121f46b9649564155e328"},
+      "sts2-gateway": {"number": 43, "commit": "72c79fd0bda286265201f25cf77f13f2a4fc6f14"},
+      "sts2-mcp-server": {"number": 44, "commit": "a0e24fcd8ba05fa45782755855aed7ef0a8def41"},
+      "sts2-harness": {"number": 85, "commit": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"}
+    },
+    "evidence": "docs/evidence/consumer-artifact-refresh-20260911.md"
+  },
+  "organization_policy_inspection": {
+    "repository": "AI-Ascension/.github",
+    "commit": "9043802204128452c8bdef6b8b0b3d0c304cc96d",
+    "site_repository": "AI-Ascension/AI-Ascension.github.io",
+    "site_commit": "87e3c849ff97af4d5b53bbcdb913b1049bed6062",
+    "record": "docs/evidence/organization-policy-inspection-20260911.md",
+    "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
+  },
+  "checks": {
+    "watchdog_exact_head_hosted_validation": 34625070885,
+    "watchdog_exact_head_hosted_standards": 34625070947,
+    "watchdog_current_head_local_workspace": "pass; validated product head 902c879 is clean; the pinned serial workspace suite exited 0 (212 watchdog library tests passed, 4 ignored, all active workspace integration suites passed), with strict workspace Clippy and fmt passing",
+    "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6 on the implementation base; source-set verifier regressions pass; no native systemd install claimed",
+    "watchdog_packaging_preflight": "pass; validated product head 902c879 hosted validation run 34625070885 passed Ubuntu and Windows dependency, format, lint, full workspace test, and locked release-build lanes; Windows executed the native packaged-config ACL reader and non-mutating PowerShell packaging preflight",
+    "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
+    "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
+    "harness_hosted_rust_quality": 34588219783,
+    "harness_hosted_policy": 34588219842,
+    "consumer_refresh_local_package_gates": "pass; protocol, gateway, MCP, and harness locked all-target/all-feature serial package runs",
+    "consumer_refresh_hosted_quality": {"protocol": 34593088663, "gateway": 34593088287, "mcp": 34593088598, "harness": 34593088740},
+    "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688},
+    "source_set_revision_tree_regressions": "pass; 6 focused source-set unit tests",
+    "refresh_candidate_source_set_gate": "pass; exit 0/admitted=true with manifest bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5"
+  },
+  "evidence_axes": {
+    "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
+    "synthetic_integration_verified": "partial",
+    "windows_service_verified": "unverified",
+    "linux_service_adapter_verified": "partial",
+    "live_host_recovery_verified": "unverified",
+    "cold_boot_recovery_verified": "unverified",
+    "soak_verified": "unverified",
+    "remote_delivery_status": "watchdog PR11 contains validated product head 902c879; exact product-head Ubuntu, Windows, dependency, and standards lanes green (validation 34625070885; standards 34625070947); this snapshot is an evidence-only follow-up; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
+  },
+  "blockers": [
+    "nested depth-2/depth-3 delegation surface is unavailable",
+    "Docker/Podman and native Windows linker/runtime are unavailable here",
+    "no authorized service/live-host/reboot/soak execution",
+    "no unified current cross-consumer build/conformance target",
+    "current-main consumer artifact copies remain pre-refresh; the separate refresh candidate is admitted only as an unmerged PR-head delivery set and still needs post-merge regeneration"
+  ],
+  "fault_matrix": {
+    "count": 24,
+    "detail": "requirements.md (FAULT-01..FAULT-24)",
+    "status": "historical evidence rows preserved; required native/live/reboot/soak follow-ups remain open"
+  }
+}

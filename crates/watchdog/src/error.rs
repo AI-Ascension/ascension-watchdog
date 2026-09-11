@@ -35,6 +35,10 @@ pub enum WatchdogError {
     Io(std::io::Error),
     /// JSON/configuration encoding failed.
     Json(serde_json::Error),
+    /// A structured verification report failed its admission gate. The
+    /// payload is emitted unchanged by the CLI so automation can retain all
+    /// fail-closed findings while still receiving a nonzero exit code.
+    VerificationFailed(String),
 }
 
 impl std::fmt::Display for WatchdogError {
@@ -54,6 +58,7 @@ impl std::fmt::Display for WatchdogError {
             Self::Sqlite(error) => write!(f, "sqlite error: {error}"),
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Json(error) => write!(f, "json error: {error}"),
+            Self::VerificationFailed(report) => write!(f, "{report}"),
         }
     }
 }

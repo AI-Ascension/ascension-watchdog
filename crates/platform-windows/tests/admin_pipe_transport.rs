@@ -8,12 +8,37 @@
 
 use ascension_platform_windows::{
     AdminPipeClient, AdminPipeServer, MAX_ADMIN_PIPE_FRAME, PlatformError,
-    read_protected_payload_file,
+    read_protected_payload_file, read_protected_service_config_file,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+struct TempDirectory(PathBuf);
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn run_icacls(path: &Path, arguments: &[&str]) -> Result<(), PlatformError> {
+    let output = Command::new("icacls.exe")
+        .arg(path)
+        .args(arguments)
+        .output()
+        .map_err(|error| PlatformError::Io(format!("icacls test command: {error}")))?;
+    if !output.status.success() {
+        return Err(PlatformError::Unavailable(format!(
+            "icacls test command failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
+}
 
 fn pipe_name(label: &str) -> String {
     let nonce = SystemTime::now()
@@ -239,4 +264,40 @@ fn protected_payload_reader_rejects_nonlocal_paths_at_the_boundary() {
         read_protected_payload_file(Path::new(r"C:\payload.json"), 0),
         Err(PlatformError::Invalid(_))
     ));
+}
+
+#[test]
+fn packaged_service_config_reader_accepts_the_fixed_acl_shape() -> Result<(), PlatformError> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let directory = std::env::temp_dir().join(format!(
+        "ascension-watchdog-config-acl-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory)
+        .map_err(|error| PlatformError::Io(format!("create ACL test directory: {error}")))?;
+    let _directory = TempDirectory(directory.clone());
+    let path = directory.join("watchdog.json");
+    std::fs::write(&path, br"{}")
+        .map_err(|error| PlatformError::Io(format!("write ACL test config: {error}")))?;
+
+    run_icacls(&path, &["/reset"])?;
+    run_icacls(&path, &["/inheritance:r"])?;
+    run_icacls(
+        &path,
+        &[
+            "/grant:r",
+            "*S-1-5-18:(F)",
+            "*S-1-5-32-544:(F)",
+            // TrustedInstaller is a built-in virtual service account. Use its
+            // account spelling because hosted icacls does not accept raw
+            // virtual-service SID syntax here; no SCM mutation is performed.
+            r"NT SERVICE\TrustedInstaller:(R)",
+        ],
+    )?;
+    run_icacls(&path, &["/setowner", "*S-1-5-18"])?;
+
+    assert_eq!(read_protected_service_config_file(&path, 1024)?, br"{}");
+    Ok(())
 }

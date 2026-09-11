@@ -466,6 +466,8 @@ fn real_service_quarantine_is_admin_only_atomic_and_replayable_after_restart() {
         }),
         ..WatchdogConfig::default()
     };
+    let config_path = fixture.temp.path().join("watchdog.json");
+    config.to_file(&config_path).unwrap();
     let mut supervisor = Supervisor::initialize(config.clone()).unwrap();
     let job = supervisor
         .submit_job("episode", &serde_json::json!({"private": "stay-local"}))
@@ -506,19 +508,26 @@ fn real_service_quarantine_is_admin_only_atomic_and_replayable_after_restart() {
     assert_eq!(forbidden.status, ReplyStatus::Forbidden);
     assert_eq!(queue.depth(), 0);
 
-    let command = AdminCommand::Quarantine(ascension_watchdog::admin::QuarantineRequest {
-        attempt_id: attempt_id.clone(),
-        reason: "operator observed an uncertain boundary".to_owned(),
-    });
-    let admin_client = fixture.client(Capability::Admin, &fixture.admin_token);
+    let config_path_for_request = config_path.clone();
+    let attempt_id_for_request = attempt_id.clone();
     let request = thread::spawn(move || {
-        admin_client
-            .execute("quarantine-once", command)
-            .expect("quarantine response")
+        ascension_watchdog::cli::execute(vec![
+            "quarantine".to_owned(),
+            "--config".to_owned(),
+            config_path_for_request.to_string_lossy().into_owned(),
+            "--idempotency-key".to_owned(),
+            "quarantine-once".to_owned(),
+            "--attempt-id".to_owned(),
+            attempt_id_for_request,
+            "--reason".to_owned(),
+            "operator observed an uncertain boundary".to_owned(),
+        ])
+        .expect("quarantine response")
     });
     wait_for_depth(&queue, 1);
     service.drain_admin(&queue, ascension_watchdog::storage::now_unix_ms());
-    let accepted = request.join().unwrap();
+    let accepted: ascension_watchdog::admin::AdminResponse =
+        serde_json::from_str(&request.join().unwrap().unwrap()).unwrap();
     assert_eq!(accepted.status, ReplyStatus::Accepted);
     drop(server);
     drop(service);

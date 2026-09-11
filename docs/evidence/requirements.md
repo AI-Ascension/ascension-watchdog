@@ -1,9 +1,10 @@
 # V32 requirements and evidence audit
 
 Classification: `partial` / `unverified` source-and-test audit. Historical
-entries below are retained for traceability; the Wave 48 addendum and the
-machine-readable release-set record carry the current source pins. This audit
-does not declare an implementation or release complete.
+entries below are retained for traceability; the dated resume-wave addendum,
+current source-set record, and machine-readable requirement snapshot carry the
+current source pins. This audit does not declare an implementation or release
+complete.
 
 ## Wave 48 current refresh — 2026-09-10
 
@@ -150,7 +151,7 @@ fixture/process fact and never means native, live, reboot, or release proof.
 | S02 | **S02-a** preserve dirty state and isolated ownership; **S02-b** authorized publication/PR/merge state; **S02-c** gated host, reboot, and gameplay tests with no overclaim | Isolated audit worktree; `AGENTS.md`; no product source proves publication or host authorization | `README`; `CP` says no remote/delivery, install, activation, or host action | partial | Isolation is evidenced for this audit and claims are conservative; publication, PR/merge, approved-host authorization, and gated live tests are absent. Record exact remote/PR state and execute only approved host workflows. |
 | S03 | **S03-a** requested/accepted/observed Luna-Max settings; **S03-b** genuine depth 1→2→3 ancestry with depth-4 denial; **S03-c** aggregate 12-thread ownership and registry | `docs/orchestration/agent-registry.json`, `task-dag.json`; no depth-2/3 source/test implementation | `AR` records nine depth-1 contexts and missing spawn capability; `CP` | partial | Model/depth-1 evidence is real, but nested depth is unmet and no depth-4 smoke exists. Re-run with supported native nested spawn, capture accepted and observed metadata, and verify depth restrictions. |
 | S04 | **S04-a** exact repo/source revisions; **S04-b** executable baseline wiring; **S04-c** current deployment topology and companion runtime evidence | `workspace-manifest.json`; `docs/evidence/{baseline,recovery-baseline}.md`; watchdog executable/source inventory | `RI` is source-derived and explicitly says no runtime claim; `CP` pins root-tested source and companion heads | partial | Root pins a source baseline, but the manifest is not an activated release set and companion heads are moving/unintegrated. Refresh all heads immediately before release and execute actual wiring, not type-existence checks. |
-| S05 | **S05-a** ownership architecture; **S05-b** cohesive Rust packages and required docs/schemas/config/deploy/tests; **S05-c** no placeholder/fake-green production paths | Packages `watchdog`, `fault-fixture`, `platform-windows`; `Cargo.*`, `schemas`, `config`, `deploy/linux`, package-level `tests/` suites and docs; package-level tests are the prompt's permitted equivalent to conventional `tests/unit|integration|faults` directories; `deploy/windows` remains absent | `docs/architecture.md`; `README`; `CP` | partial | Windows packaging and cross-repo consumer implementation remain open. Validate the existing equivalent package test suites and add/verify Windows packaging rather than treating directory naming as a gap. |
+| S05 | **S05-a** ownership architecture; **S05-b** cohesive Rust packages and required docs/schemas/config/deploy/tests; **S05-c** no placeholder/fake-green production paths | Packages `watchdog`, `fault-fixture`, `platform-windows`; `Cargo.*`, `schemas`, `config`, `deploy/linux`, `deploy/windows`, package-level `tests/` suites and docs; package-level tests are the prompt's permitted equivalent to conventional `tests/unit|integration|faults` directories | `docs/architecture.md`; `README`; `crates/watchdog/tests/windows_packaging.rs`; `crates/platform-windows/tests/admin_pipe_transport.rs`; `docs/evidence/windows-service-wiring.md`; `CP` | partial | Windows packaging now binds a fixed virtual account, SYSTEM-owned service config ACL, verifier/executable digests, reparse checks, and non-mutating PowerShell preflight into the Windows workspace lane; cross-repo consumer implementation, native service execution, and full acceptance remain open. Retain hosted results and native/install evidence as separate gates. |
 | S06 | **S06-a** assign executable tests to INV-01..15; **S06-b** cover failure paths and evidence axes, not only happy-path synthetic tests | Invariant mapping below; watchdog and fixture test suites | `FF`, `FG`, `SL`, `SR`, `SA`, `OR` | partial | Many synthetic invariants have narrow tests, but companion/native/live/reboot/soak scope is not covered. Close each invariant's listed next action and rerun the integrated release set. |
 | S07 | **S07-a** owner-local SQLite WAL/FULL, lock, migrations, integrity/backup/restore; **S07-b** watchdog jobs/attempts/budgets/operator records; **S07-c** gateway/harness stores and stable identity namespaces; **S07-d** bounded archival without silent reset | `crates/watchdog/src/storage.rs`, `storage_admin.rs`, `storage_backup_admin.rs`; `tests/core.rs`, `storage_*`, `admin_backup.rs`, `job_submission*`; fixture SQLite rows in `crates/fault-fixture/src/lib.rs` | `SR`; `SA`; `FF`; `CP` | partial | Watchdog and synthetic fixture stores are tested, but harness/gateway owner stores are not integrated here; watchdog archival and fixture tombstones remain incomplete. Add owner-specific migrations/identity tests, explicit archival/tombstone protocol, and cross-owner release tests. |
 | S08 | **S08-a** fresh durable boot/fence/lease and invalidation; **S08-b** historical read/reconcile without old authority; **S08-c** restore/rekey and rollback protection; **S08-d** real gateway/host consumer | Fixture bootstrap/fence/lease/operation handlers and `tests/recovery.rs`, `runtime.rs`; watchdog `storage.rs` restore | `FF`; `RI`; `OR`; `CP` | partial | The fixture models protocol semantics and watchdog restore rekeys its own store, but no production gateway lease consumer or host handshake is integrated. Implement gateway-issued authority and managed host-fence consumers, then test restart/rollback/rekey on the exact release. |
@@ -293,3 +294,178 @@ after the remaining consumer/release adapters are integrated (or the release is
 explicitly scoped to the existing REST contract), followed by the independent
 native/live/reboot/soak matrix. No row above should be changed to complete from
 a source-only, component, fake-host, cross-build, or ignored-test result.
+
+## Resume-wave addendum — 2026-09-11
+
+The cross-machine resume wave is pinned by
+`docs/evidence/current-source-set-20260911.md` and
+`docs/evidence/release-set-verification-20260911.json`. The watchdog source
+commit is `a5bbd7614204c83874dd9ead850829b2f8685b82` on PR #11. It exposes the
+already-authenticated quarantine operation through the executable CLI, adds a
+bounded read-only diagnostics command, and makes the Linux protected-tempdir
+fixture portable to minimal containers. It also checks affected-row counts for
+the paired durable attempt/job transitions in completion, known failure, and
+interruption quarantine, with six SQLite trigger regressions proving a
+suppressed transition rolls the transaction back. Pinned format, standards,
+check, warnings-denied Clippy, and serial full workspace all-target/all-feature
+tests pass, including those regressions.
+
+The exact companion source heads are gateway
+`5f531f602298de674bd31ed3f28a88359b02ca9d`, harness
+`00bd9e123a86fca39bbffb65b370aac7ed2c8218`, MCP
+`98ab84b3fad371b45b141e6d81dd9124769a4c59`, game-mod
+`bd8e90542dfc89366f820150c5c755e32716b1b0`, protocol
+`0bc689eabc5542ede2b09b030d9ea32daa8a73e7`, and game-core
+`f5daf69f4f2c43fddbb04e7799d32503f7066110`; each passed isolated locked
+format, strict Clippy, and all-target/all-feature test gates. Observability
+main at `630431716ebfbf86280f9fd56f19d6016ad7aeb2` contains the persistent
+bounded Collector queue/WAL and materialization repairs merged in PR #20. Its
+available persistence fixtures and pinned 0.160.0 binary configuration
+validation pass; the minimal static-probe fallback is merged in PR #22.
+Docker/Podman, Compose rendering, image build, live queue recovery, and
+external service execution remain unavailable.
+
+A gateway persist-before-effect follow-up is now open as PR [#42](https://github.com/AI-Ascension/sts2-gateway/pull/42)
+at source commit `83539a9dd669eb4c8da69033c06d45f114300c45`, based on current
+gateway main `5f531f602298de674bd31ed3f28a88359b02ca9d`. It adds affected-row
+checks to host lease install and renewal preparation plus SQLite suppression
+regressions; its local component gates and hosted Rust quality/repository-policy checks pass.
+The branch is intentionally excluded from the exact
+release source set until merged.
+
+The current `coop-native-v1` schema and conformance bytes agree, but current
+consumer-conformance bindings differ between protocol, gateway/MCP, and
+harness. No unified cross-consumer build was found. Consequently S11, S13,
+S16-G/H, INV-12, FAULT-15, FAULT-21, and the native/live portions of S17 remain
+partial or unverified. The separate axes remain
+`IMPLEMENTATION_COMPLETE = watchdog patch complete; assignment incomplete`,
+`SYNTHETIC_INTEGRATION_VERIFIED = partial`,
+`WINDOWS_SERVICE_VERIFIED = unverified`,
+`LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
+`LIVE_HOST_RECOVERY_VERIFIED = unverified`,
+`COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
+`REMOTE_DELIVERY_STATUS = watchdog PR #11 open with local and hosted gates
+green for a5bbd76 (Rust/synthetic run 34574717898; standards run 34574717909);
+gateway PR #42 open with local and hosted gates green;
+observability PRs #20 and #22 merged; not activated`. Nested-agent depth 2/3 remains unobserved because no
+spawn surface is exposed; no depth-4 bypass was attempted.
+
+## Resume-wave refresh — 2026-09-11 10:15 UTC
+
+The current machine-readable snapshot is
+[`requirement-evidence-20260911.json`](requirement-evidence-20260911.json).
+The exact selected source set is recorded in
+[`current-source-set-20260911.md`](current-source-set-20260911.md), with
+watchdog implementation pin `538346e`, merged gateway main `f4d1409`, and
+harness main `00bd9e1`. The read-only source-set verifier returned
+`admitted=false`; schema, conformance, and golden bytes agree, but current
+consumer manifests/bindings differ and gateway/MCP copies retain pending
+markers. No artifact bytes were normalized to make admission pass.
+
+Harness PR [#84](https://github.com/AI-Ascension/sts2-harness/pull/84) is open
+at `40a41285ac44964c712eabfde37e3527ce6a1939`, based on harness main
+`00bd9e1`. It contains the explicit missing-durable-episode resume rejection
+and a source-derived Windows named-pipe boundary with bounded peer identity,
+protected credential, and retained-image checks. The local exact-head format,
+strict policy, Linux/Windows-target Clippy/check, focused regression, and full
+serial workspace gates pass. Hosted Rust-quality run `34588219783` and policy
+run `34588219842` also pass; the PR is excluded from the exact source set until
+review and merge.
+
+The public organization policy and site trees were inspected read-only and are
+recorded in [`organization-policy-inspection-20260911.md`](organization-policy-inspection-20260911.md).
+They confirm the shared evidence labels, pull-request-only delivery, no
+proprietary game files/no copied harness source rules, policy-as-code metadata
+boundary, and the static site's historical-proof limits. They do not authorize
+metadata mutation or elevate runtime claims.
+
+The 24-row fault matrix remains open wherever it requires an authorized native
+service, live host, cold reboot, unified consumer build, nested depth-3
+delegation, or 24-hour soak. Current axes therefore remain
+`IMPLEMENTATION_COMPLETE = unverified`, `SYNTHETIC_INTEGRATION_VERIFIED = partial`,
+`WINDOWS_SERVICE_VERIFIED = unverified`, `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
+`LIVE_HOST_RECOVERY_VERIFIED = unverified`, `COLD_BOOT_RECOVERY_VERIFIED = unverified`,
+and `SOAK_VERIFIED = unverified`.
+
+## Resume-wave refresh — 2026-09-11 10:41 UTC
+
+Root PR #11 is at `f5b81f42dbb525fa3fdbb32a29c202822e01aaa7`. The systemd
+notifier sequencing correction is source-tested: the first completed loop emits
+`READY=1` without `WATCHDOG=1`, while later increasing progress emits the
+watchdog notification only when the systemd interval is configured. Focused
+Linux notifier tests passed 5/5, service-loop integration passed 6/6, and the
+full serial locked workspace all-target/all-feature run exited 0. Hosted
+validation run `34589427447` and standards run `34589427371` are green for the
+current head.
+
+The refreshed read-only source-set gate still returns `admitted=false` (exit 1)
+with manifest digest
+`0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d`. All eight
+source worktrees are clean and exact; the remaining failures are stale/pending
+consumer-conformance bindings in the gateway/MCP/harness artifact copies. The
+consumer implementation is not available to repair from this root, so no
+artifact bytes were normalized. Native service/live-host, cold-boot, unified
+consumer build, nested depth-2/3 delegation, and soak evidence remain open.
+
+## Resume-wave refresh — 2026-09-11 11:17 UTC
+
+The consumer artifact boundary is now addressed through four focused
+PR-only refreshes: protocol [#41](https://github.com/AI-Ascension/sts2-protocol/pull/41),
+gateway [#43](https://github.com/AI-Ascension/sts2-gateway/pull/43), MCP
+[#44](https://github.com/AI-Ascension/sts2-mcp-server/pull/44), and harness
+[#85](https://github.com/AI-Ascension/sts2-harness/pull/85). Their copies of
+the `coop-native-v1` manifest, consumer-conformance record, README metadata,
+and checksums are aligned to producer `d23ca83` and the current main consumer
+revisions. Protocol, gateway, MCP, and harness locked package gates pass at
+the refreshed copies; hosted policy/quality checks pass except that harness
+quality was still running at capture. The detailed record is
+[`consumer-artifact-refresh-20260911.md`](consumer-artifact-refresh-20260911.md).
+
+These PR branches are not merged and therefore are not part of the current
+candidate source set. The root source-set result remains `admitted=false` and
+must be rerun against post-merge revisions. Native service/live-host,
+Windows SCM, cold-boot, unified release build, nested depth-2/3 delegation,
+and soak evidence remain open.
+
+## Resume-wave update — 2026-09-11 11:42 UTC
+
+The exact refresh candidate now passes the source-set gate. The verifier
+supports source_revision/source_tree pins for artifact-only delivery commits,
+requiring ancestry, exact source-tree identity, and artifact-directory-only
+differences. The candidate manifest and result are recorded in
+workspace-manifest.coop-refresh.candidate.json and
+docs/evidence/coop-refresh-source-set-20260911.md.
+
+This closes the previously missing serialized consumer-binding check for the
+four staged refresh branches only. It does not close source-set admission for
+current main, because the refresh PRs remain open, and it does not close the
+unified build, native service, live-host, cold-boot, activation, nested
+delegation, or soak requirements.
+
+## Resume-wave packaging repair — 2026-09-11 17:05 UTC
+
+The packaging/test product changes were validated at exact head
+`902c8790a8d869c5934941c0be7110aa35fd0b18`; this paragraph and the machine
+snapshot are an evidence-only follow-up.
+The Windows packaging repair removes the hosted-only failure modes from the
+previous attempt: the non-mutating preflight normalizes extended Windows
+repository paths before PowerShell parsing, and the native ACL fixture uses a
+built-in virtual service account spelling that the hosted `icacls` accepts.
+
+The exact-head hosted validation run
+[`34625070885`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34625070885)
+and standards run
+[`34625070947`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34625070947)
+passed. Ubuntu and Windows completed dependency, whitespace, pinned format,
+warnings-denied lint, full workspace all-target/all-feature tests, and locked
+release-build gates. Windows also passed the native packaged-config ACL reader
+and the PowerShell packaging preflight; these are synthetic/native-hosted
+checks only and did not install or mutate an SCM service.
+
+The local pinned watchdog serial suite remains green at 212 passed and 4
+ignored, with strict workspace Clippy and fmt checks passing. This improves
+the watchdog packaging evidence only. The assignment remains partial:
+companion PRs and the admitted refresh candidate are still unmerged/open,
+current-main source-set admission and unified consumer build remain pending,
+and native installed-service, live-host, cold-boot, activation, nested
+depth-2/3 delegation, and soak evidence remain unverified.
