@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "audit_id": "V35-delivery-reconciliation-20260911",
-  "captured_at": "2026-09-11T22:30:28Z",
+  "audit_id": "V36-ledger-implementation-reconciliation-20260911",
+  "captured_at": "2026-09-11T22:48:53Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -133,5 +133,37 @@
       "activation/rollback",
       "soak"
     ]
+  },
+  "ledger_reconciliation": {
+    "method": "read-only source inspection of the admitted companion mains plus focused local component tests",
+    "reconciled_rows": {
+      "S08": "partial: gateway host-lease lifecycle implemented (install/renew/revoke/restart-invalidate)",
+      "S09": "partial: gateway host-lease store and watchdog linux-systemd-broker exist; no real host broker run",
+      "S10": "partial: harness RecoveryDisposition (in-place continuation/reconstruction/interrupted-unknown) implemented",
+      "INV-02/03/06/07": "partial: gateway fencing/restart/rekey and suppressed-transition tests pass locally",
+      "INV-05/10": "partial: harness reconstruction/divergence/unknown tests pass locally",
+      "FAULT-06/07/10": "partial: gateway boot-fence/restart and single-intent tests pass locally",
+      "FAULT-08": "partial: harness provider accounting/identity/timeout tests pass locally",
+      "FAULT-17": "partial: gateway resolved-archive duplicate-tombstone test passes locally",
+      "FAULT-18": "partial: harness checkpoint reconstruction test passes locally"
+    },
+    "still_open_rows": {
+      "S10_mcp_reconnect": "MCP has coop-native consumer surfaces but no named bounded-reconnect implementation/test",
+      "game_mod_native_coop": "only a decision record and experiment; no merged native coop consumer",
+      "cross_repository_runtime": "still unverified"
+    },
+    "component_tests": {
+      "sts2-gateway @ 8940fba8": {
+        "test recovery": "7 passed",
+        "lib host_lease": "2 passed"
+      },
+      "sts2-harness @ 4584c4cb": {
+        "completed_resume_process": "7 passed",
+        "execution_store": "46 passed",
+        "replay": "4 passed",
+        "phase2_recovery": "3 passed"
+      }
+    },
+    "classification": "component/source evidence for the pinned heads; not a cross-repository runtime proof"
   }
 }

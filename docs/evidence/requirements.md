@@ -593,6 +593,55 @@ build portions from open to compile-verified for the exact pinned inputs.
   pre-refresh", "no unified current cross-consumer build/conformance target",
   "gateway PR #42 / harness PR #84 open", and "watchdog PR #11 / PR #13 open".
 
+### Companion implementation reconciliation (2026-09-11)
+
+The historical matrix above predates several companion merges. Direct source
+inspection of the admitted current-main heads shows that the "not implemented"
+and "unverified" statements for the host-lease consumer and the harness recovery
+sideband are stale. The rows below are therefore reconciled to **partial**
+(source/component implemented and locally re-tested; cross-repository runtime
+integration still unverified). They are not promoted to verified.
+
+| Row | Historical statement | Reconciled current state |
+| --- | --- | --- |
+| S08 | no production gateway lease consumer | `sts2-gateway` implements host-lease lifecycle: `prepare/complete_host_lease_install`, `prepare/complete_host_lease_renew`, `begin/complete_host_lease_revoke`, and `invalidate_host_leases_for_restart`, with `RecoveryHostLeaseState` (`PendingHostInstall`/`PendingHostRenew`/`PendingHostRevoke`/`HostRevoked`/`RestartInvalidated`) and `is_mutation_ready` true only for `Installed` |
+| S09 | synthetic fixture only, no real broker | the gateway host-lease store and the watchdog `linux-systemd-broker` exist; a real host broker run is still absent |
+| S10 | harness recovery sideband not integrated | `sts2-harness` implements `RecoveryDisposition {InPlaceContinuation, Reconstruction, InterruptedUnknown}`, `reconstruct_attempt`, `mark_interrupted_unknown`, `resume_episode`, and `record_recovery_disposition` |
+| INV-02/03/06/07 | old authority/persist-before-effect not proven on real gateway | gateway `boot_fence_lease_and_unknown_survive_restart`, `admission_ticket_is_fenced_and_expires_atomically`, `backup_restore_rekeys_before_fence`, and the install/renew "suppressed transition" tests pass locally |
+| INV-05/10 | no production reconciliation; reconstruction/divergence open | harness `checkpoint_reconstruction_copies_the_verified_boundary_and_preserves_attempt_history`, `typed_replay_stops_at_sequence_divergence_and_payload_firewall_rejects_privileged_data`, and `p2_f061_crash_after_resume_claim_keeps_unknown_and_denies_new_input` pass locally |
+| FAULT-06/07/10 | no gateway lease/restart path | gateway `boot_fence_lease_and_unknown_survive_restart` and the duplicate/conflict single-intent test pass locally; no live host run |
+| FAULT-08 | harness/provider boundary unverified | harness `missing_provider_usage_is_explicit_and_does_not_become_zero`, `malformed_structured_usage_and_provider_identity_fail_closed`, and `p2_f062_provider_write_timeout_retains_ambiguous_attempt_without_retransmit` pass locally |
+| FAULT-17 | archive/tombstone beyond 64 open | gateway `resolved_archive_preserves_duplicate_tombstone` passes locally; a bounded long-run archival campaign is still open |
+| FAULT-18 | no reconstruction evidence | harness `checkpoint_reconstruction…` and `recovery` disposition code cited above |
+
+Exact re-tests in the pinned companion worktrees (2026-09-11):
+
+```text
+# sts2-gateway @ 8940fba8
+cargo +1.97.1 test --locked -p sts2-gateway --test recovery -- --test-threads=1        # 7 passed
+cargo +1.97.1 test --locked -p sts2-gateway --lib host_lease -- --test-threads=1       # 2 passed
+
+# sts2-harness @ 4584c4cb
+cargo +1.97.1 test --locked -p sts2-harness --test completed_resume_process --test execution_store   --test replay --test phase2_recovery -- --test-threads=1
+# completed_resume_process 7 passed; execution_store 46 passed; replay 4 passed; phase2_recovery 3 passed
+```
+
+These runs are component evidence for the pinned heads; they are not a
+cross-repository runtime proof and do not by themselves close the rows.
+
+### Rows still stale after this wave
+
+- **S10 MCP sole-owner bounded reconnect**: `sts2-mcp-server` has substantial
+  coop-native consumer surfaces (`catalog_coop_native.rs`,
+  `mapping_coop_native_*`, `projection_coop_receipt_query.rs`) but no named
+  bounded-reconnect implementation or test was found; the row stays open.
+- **game-mod native coop consumer**: current `sts2-game-mod` main
+  (`afa44d6f`) contains a decision record and an experiment
+  (`experiments/managed-rust-interop/coop-native-producer-tests`) but no merged
+  native coop consumer; the row stays open.
+- **Cross-repository runtime integration, live host, cold boot, rollback, and
+  soak**: unchanged and unverified.
+
 ### Rows that remain open (unchanged)
 
 Native Windows/Linux service execution, WSL termination, live-host recovery,
