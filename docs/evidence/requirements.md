@@ -441,3 +441,29 @@ four staged refresh branches only. It does not close source-set admission for
 current main, because the refresh PRs remain open, and it does not close the
 unified build, native service, live-host, cold-boot, activation, nested
 delegation, or soak requirements.
+
+## Resume-wave packaging repair — 2026-09-11 16:46 UTC
+
+Root PR #11 is now at exact head `21cb25ea518d7344541af06431a27b411db8e218`.
+The Windows packaging repair removes the hosted-only failure modes from the
+previous attempt: the non-mutating preflight normalizes extended Windows
+repository paths before PowerShell parsing, and the native ACL fixture uses a
+built-in virtual service account spelling that the hosted `icacls` accepts.
+
+The exact-head hosted validation run
+[`34623340465`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34623340465)
+and standards run
+[`34623339512`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34623339512)
+passed. Ubuntu and Windows completed dependency, whitespace, pinned format,
+warnings-denied lint, full workspace all-target/all-feature tests, and locked
+release-build gates. Windows also passed the native packaged-config ACL reader
+and the PowerShell packaging preflight; these are synthetic/native-hosted
+checks only and did not install or mutate an SCM service.
+
+The local pinned watchdog serial suite remains green at 212 passed and 4
+ignored, with strict workspace Clippy and fmt checks passing. This improves
+the watchdog packaging evidence only. The assignment remains partial:
+companion PRs and the admitted refresh candidate are still unmerged/open,
+current-main source-set admission and unified consumer build remain pending,
+and native installed-service, live-host, cold-boot, activation, nested
+depth-2/3 delegation, and soak evidence remain unverified.
