@@ -11,8 +11,8 @@
   "nested_status": "unmet: current platform reviewer reports no collaboration spawn or coordination tools in its schema; no depth-2 or depth-3 execution occurred",
   "current_integration": {
     "watchdog_branch": "codex/watchdog-resume-20260911",
-    "watchdog_commit": "06c130726faaef2dd792881c7e9d3d039b6c732f",
-    "watchdog_last_observed_pr_head": "0acd8278a174eaa59dedd7d6be8f8acd48b21bd4",
+    "watchdog_commit": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+    "watchdog_last_observed_pr_head": "a5bbd7614204c83874dd9ead850829b2f8685b82",
     "watchdog_pull_request": 11,
     "harness_branch": "main",
     "harness_commit": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
@@ -38,7 +38,7 @@
     "observability_branch": "main",
     "observability_commit": "630431716ebfbf86280f9fd56f19d6016ad7aeb2",
     "observability_pull_request": 22,
-    "status": "watchdog PR11 source 06c1307 with current PR head 0acd827 is open non-draft; hosted Ubuntu/Windows and standards gates pass; gateway PR40 is current main and safety follow-up PR42 at 83539a9 is open with local and hosted gates green; harness 00bd9e1, MCP 98ab84b, game-mod bd8e905, protocol 0bc689e, game-core f5daf69 and observability 6304317 are current main pins; no unified consumer build, native service, live host, cold boot, activation, or soak",
+    "status": "watchdog PR11 source a5bbd76 is open non-draft; local and hosted gates pass (Rust/synthetic run 34574717898; standards run 34574717909); gateway PR40 is current main and safety follow-up PR42 at 83539a9 is open with local and hosted gates green; harness 00bd9e1, MCP 98ab84b, game-mod bd8e905, protocol 0bc689e, game-core f5daf69 and observability 6304317 are current main pins; no unified consumer build, native service, live host, cold boot, activation, or soak",
     "observed_depth": 1,
     "current_wave": "integration-wave-20260910.json"
   },

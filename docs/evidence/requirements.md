@@ -299,12 +299,15 @@ a source-only, component, fake-host, cross-build, or ignored-test result.
 The cross-machine resume wave is pinned by
 `docs/evidence/current-source-set-20260911.md` and
 `docs/evidence/release-set-verification-20260911.json`. The watchdog source
-commit is `06c130726faaef2dd792881c7e9d3d039b6c732f` on PR #11. It exposes the
+commit is `a5bbd7614204c83874dd9ead850829b2f8685b82` on PR #11. It exposes the
 already-authenticated quarantine operation through the executable CLI, adds a
 bounded read-only diagnostics command, and makes the Linux protected-tempdir
-fixture portable to minimal containers. Pinned format, standards, check,
-warnings-denied Clippy, and serial full workspace all-target/all-feature tests
-pass, including the new diagnostics integration test.
+fixture portable to minimal containers. It also checks affected-row counts for
+the paired durable attempt/job transitions in completion, known failure, and
+interruption quarantine, with six SQLite trigger regressions proving a
+suppressed transition rolls the transaction back. Pinned format, standards,
+check, warnings-denied Clippy, and serial full workspace all-target/all-feature
+tests pass, including those regressions.
 
 The exact companion source heads are gateway
 `5f531f602298de674bd31ed3f28a88359b02ca9d`, harness
@@ -340,7 +343,8 @@ partial or unverified. The separate axes remain
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
 `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = watchdog PR #11 open with hosted gates green;
+`REMOTE_DELIVERY_STATUS = watchdog PR #11 open with local and hosted gates
+green for a5bbd76 (Rust/synthetic run 34574717898; standards run 34574717909);
 gateway PR #42 open with local and hosted gates green;
 observability PRs #20 and #22 merged; not activated`. Nested-agent depth 2/3 remains unobserved because no
 spawn surface is exposed; no depth-4 bypass was attempted.

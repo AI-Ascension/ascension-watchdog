@@ -1,15 +1,16 @@
 # Current source set and verification boundary — 2026-09-11
 
-Captured at `2026-09-11T06:53:43Z`. This is a resumable integration record,
-not an activated release. Every revision below is an exact local source
-revision; a component passing its own gates does not establish cross-consumer,
-service, live-host, reboot, or soak evidence.
+Captured at `2026-09-11T06:53:43Z`; root verification refreshed at
+`2026-09-11T07:37:30Z`. This is a resumable integration record, not an
+activated release. Every revision below is an exact local source revision; a
+component passing its own gates does not establish cross-consumer, service,
+live-host, reboot, or soak evidence.
 
 ## Exact source set
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `06c130726faaef2dd792881c7e9d3d039b6c732f` | open; CLI quarantine/diagnostics patch; local and hosted source gates pass |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `a5bbd7614204c83874dd9ead850829b2f8685b82` | open; atomic durable job-state transition checks and regressions; local and hosted gates pass |
 | `sts2-gateway` | `main` | `5f531f602298de674bd31ed3f28a88359b02ca9d` | current remote main; component gates pass |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
@@ -45,14 +46,18 @@ cargo +1.97.1 fmt --all -- --check
 cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .
 cargo +1.97.1 check --locked --workspace --all-targets --all-features
 cargo +1.97.1 clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo +1.97.1 test --locked --workspace --all-targets --all-features --no-fail-fast -- --test-threads=1
+TMPDIR=/home/agent/wd-tmp-0911 cargo +1.97.1 test --locked --workspace --all-targets --all-features --no-fail-fast -- --test-threads=1
 ```
 
 The final test command exited zero; it included 206 watchdog library tests,
 all watchdog integration suites, fault-fixture suites, and the platform
 packages, with only the repository's four expected ignored watchdog tests and
 the separately labeled platform-boundary ignores. The new executable CLI
-quarantine path and read-only diagnostics test are included.
+quarantine path and read-only diagnostics test are included. The storage query
+suite now also covers rollback when either durable update is suppressed for
+completion, known failure, or interruption quarantine. The dedicated short
+temporary directory keeps test endpoint names within the product's 100-byte
+Unix socket contract while avoiding the nearly-full system `/tmp` tmpfs.
 
 Gateway, harness, MCP, game-mod, protocol, and game-core each passed their
 locked workspace format, strict Clippy, and all-target/all-feature test gates
@@ -101,7 +106,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with hosted gates green; gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with local and hosted gates green for a5bbd76 (Rust/synthetic run 34574717898; standards run 34574717909); gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the

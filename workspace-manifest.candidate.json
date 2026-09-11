@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "06c130726faaef2dd792881c7e9d3d039b6c732f",
-      "last_observed_pr_head": "06c130726faaef2dd792881c7e9d3d039b6c732f",
+      "revision": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+      "last_observed_pr_head": "a5bbd7614204c83874dd9ead850829b2f8685b82",
       "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 11,
-      "state": "open; CLI quarantine/diagnostics patch; pinned local and hosted source gates pass; not-merged"
+      "state": "open; atomic durable job-state transition checks and regressions; local and hosted gates pass (Rust/synthetic run 34574717898; standards run 34574717909); not-merged"
     },
     "sts2-gateway": {
       "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
@@ -84,9 +84,9 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees; observability main also validated by pinned Collector binary",
     "artifact_bytes_cross_component": "schema/conformance equal for inspected coop-native-v1 copies; consumer bindings differ",
     "cross_consumer_build": "not-run; no unified consumer workspace/build exists",
-    "hosted_watchdog_runs": "pass-for-current-06c1307; Ubuntu and Windows lanes green",
-    "hosted_watchdog_standards_runs": "pass-for-current-06c1307; standards and dependency lanes green",
-    "hosted_watchdog_status_at_capture": "current local and hosted pinned gates pass; native service-session remains separately unverified",
+    "hosted_watchdog_runs": "pass-for-current-a5bbd76; Ubuntu, Windows, and dependency lanes green in Rust/synthetic run 34574717898",
+    "hosted_watchdog_standards_runs": "pass-for-current-a5bbd76; standards run 34574717909 green",
+    "hosted_watchdog_status_at_capture": "current local and hosted gates pass; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,
       "watchdog_revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",

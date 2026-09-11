@@ -5,10 +5,10 @@
   "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
   "source_set": {
     "ascension-watchdog": {
-      "revision": "06c130726faaef2dd792881c7e9d3d039b6c732f",
+      "revision": "a5bbd7614204c83874dd9ead850829b2f8685b82",
       "ref": "codex/watchdog-resume-20260911",
       "remote_pr": 11,
-      "state": "open; source-tested implementation branch"
+      "state": "open; atomic durable job-state transition checks and regressions; local and hosted gates pass (Rust/synthetic run 34574717898; standards run 34574717909)"
     },
     "sts2-gateway": {
       "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
@@ -53,7 +53,7 @@
       "standards": "pass",
       "check": "pass",
       "clippy": "pass",
-      "tests": "pass; serial workspace all-target/all-feature run, 206 library tests plus integration suites"
+      "tests": "pass; serial workspace all-target/all-feature run, 206 library tests plus integration suites; six storage trigger regressions cover completion, failure, and interruption rollback"
     },
     "sts2-gateway": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
     "sts2-harness": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
