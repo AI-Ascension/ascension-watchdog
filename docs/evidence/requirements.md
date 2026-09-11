@@ -526,5 +526,8 @@ machine-readable result is
 
 This closes current-main source-set admission for the refreshed artifacts, not
 release activation. No unified cross-consumer build is available in this
-workspace, and native Windows/Linux service execution, live-host recovery,
-cold boot, rollback, and soak evidence remain unverified.
+workspace. The separate current-main native Linux process-boundary smoke passed
+on the supplied Train host and is recorded in
+[`real-harness-worker.md`](real-harness-worker.md); native Windows/Linux service
+execution, live-host recovery, cold boot, rollback, and soak evidence remain
+unverified.

@@ -67,12 +67,30 @@
   },
   "evidence_axes": {
     "unified_cross_consumer_build": "unverified; no unified target is available in this workspace",
+    "native_linux_process_boundary": "pass; current-main watchdog and harness binaries crossed the real Linux process boundary on the supplied Train host; see docs/evidence/real-harness-worker.md",
     "native_windows_service": "unverified",
     "native_linux_service": "unverified",
     "live_host_recovery": "unverified",
     "cold_boot_recovery": "unverified",
     "activation_rollback": "unverified",
     "soak": "unverified"
+  },
+  "native_process_smoke": {
+    "captured_at": "2026-09-11T21:12:37Z",
+    "host": "completetrain-B550-GAMING-X-V2",
+    "address": "train.home.complete.tech",
+    "kernel": "7.0.0-31-generic",
+    "systemd": "255.4-1ubuntu8.17",
+    "cgroup_filesystem": "cgroup2fs",
+    "watchdog_build_revision": "eb2e34269d5c89ac9fcc89ae6ed548d8e74c110f",
+    "watchdog_admitted_product_revision": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
+    "watchdog_sha256": "105ca9fba97ec8024689b31a017ba9edcd978a77f46c5e1a9eb323158744d204",
+    "harness_merge_revision": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8",
+    "harness_sha256": "b711754f2e31b83762a1fbdfffe09fa9a6e16fec5309ace2c3af27a926ac766f",
+    "test_executable_sha256": "1be81b0f454484992cc2d97cfdd6280299ec48125da0f0a6c3d141b78ab197b9",
+    "result": "pass; 1 passed, 0 failed, 0 ignored; test body 8.61 seconds",
+    "cleanup": "pass; owner-local fixture removed, no matching process or user unit remained",
+    "classification": "native Linux process boundary only; no installed service, live-host, reboot, activation/rollback, or soak claim"
   },
   "issues": [
     "release remains unactivated",
