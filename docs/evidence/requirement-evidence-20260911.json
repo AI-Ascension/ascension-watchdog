@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V35-delivery-reconciliation-20260911",
-  "captured_at": "2026-09-11T21:53:26Z",
+  "captured_at": "2026-09-11T22:30:28Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -93,7 +93,7 @@
     "synthetic_integration_verified": "partial",
     "unified_build_verified": "pass for the admitted current-main set; compile evidence only",
     "windows_service_verified": "unverified",
-    "linux_service_adapter_verified": "partial",
+    "linux_service_adapter_verified": "partial: native user-scope systemd lifecycle verified; installed root system service and uninstall still require authorization",
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "rollback_verified": "unverified",
@@ -110,5 +110,28 @@
     "count": 24,
     "detail": "requirements.md (FAULT-01..FAULT-24)",
     "status": "native/live/reboot/soak follow-ups remain open; unified build portion now verified"
+  },
+  "native_user_systemd_lifecycle": {
+    "status": "pass (user-scope transient unit; not the installed system service)",
+    "evidence": "docs/evidence/native-user-systemd-lifecycle-20260911.md",
+    "host": "train.home.complete.tech",
+    "watched_binary_sha256": "105ca9fba97ec8024689b31a017ba9edcd978a77f46c5e1a9eb323158744d204",
+    "verified": [
+      "Type=notify READY",
+      "WATCHDOG=1 keepalive > 2x WatchdogSec",
+      "Restart=on-failure recovery after SIGKILL",
+      "control-group containment",
+      "clean stop",
+      "retained owner-local state"
+    ],
+    "not_verified": [
+      "root system-service install/start/status/stop/uninstall idempotence",
+      "WSL termination",
+      "uninstall durable no-restart intent",
+      "live host",
+      "cold boot",
+      "activation/rollback",
+      "soak"
+    ]
   }
 }

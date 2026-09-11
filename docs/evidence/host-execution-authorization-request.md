@@ -118,14 +118,16 @@ imply approval for another; the reboot item is separate.
 - Acceptance: elapsed wall-clock duration is at least 24 hours; no duplicate
   effects; bounded memory/queue growth; unresolved operations retained.
 
-## Lower-impact partial option (if full authorization is not granted)
+## Lower-impact partial option — executed 2026-09-11
 
-A systemd **user-scope transient unit** (`systemd-run --user`) can exercise
-readiness notification and cgroup containment of the Linux adapter against a
-synthetic child without root and without a persistent system service. It does
-not prove the installed system-service path, live host, reboot, activation,
-rollback, or soak, and it would be labeled as synthetic/user-scope evidence
-only. This is offered only if the higher-impact host work remains unauthorized.
+A systemd **user-scope transient unit** (`systemd-run --user`) was executed on
+the host without root and without a persistent system service. It verified
+`Type=notify` readiness, `WATCHDOG=1` keepalive, `Restart=on-failure`
+service-manager recovery, cgroup containment, clean stop, and retained
+owner-local state; see
+[`native-user-systemd-lifecycle-20260911.md`](native-user-systemd-lifecycle-20260911.md).
+It does not prove the installed root system-service path, live host, reboot,
+activation, rollback, or soak, so items 1–5 above still require authorization.
 
 ## Status
 
