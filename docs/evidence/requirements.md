@@ -570,16 +570,19 @@ with build output directed outside the worktree. See
 [`build-set-workflow.md`](build-set-workflow.md).
 
 The committed current-main plan
-`workspace-build-plan.current-main-refresh-20260911.json`
-(SHA-256 `332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc`)
-ran successfully: `admitted=true`, `built=true`, 7 repositories, 0 issues. All
+`workspace-build-plan.current-main-refresh-20260911.json` (schema v2) defines an
+ordered build plus conformance step per repository. It ran successfully:
+`admitted=true`, `built=true`, 7 repositories, 0 issues, with conformance tests
+passed for watchdog (schema), gateway (recovery/lease), harness (recovery
+disposition/replay), MCP (artifact), and protocol (consumer conformance). All
 eight companion worktrees and the pinned watchdog worktree were clean after the
 run. The machine-readable result is
 [`current-main-refresh-build-set-20260911.json`](current-main-refresh-build-set-20260911.json);
 the transcription is recorded in
 [`current-main-refresh-build-set-20260911.md`](current-main-refresh-build-set-20260911.md).
 This moves the "no unified cross-consumer build" blocker and the S15/S16-G
-build portions from open to compile-verified for the exact pinned inputs.
+build portions from open to compile- and component-conformance-verified for the
+exact pinned inputs.
 
 ### Rows explicitly reconciled by this wave
 

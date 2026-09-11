@@ -1,23 +1,211 @@
 {
-  "schema_version": 1,
-  "classification": "current-main-refresh-build-set-not-activated",
-  "purpose": "Declarative locked build commands for the admitted current-main source set. A passing build-set is compile evidence only: it is not an installed service, activation, live-host, reboot, rollback, or soak result.",
+  "schema_version": 2,
+  "classification": "current-main-refresh-build-and-conformance-not-activated",
+  "purpose": "Declarative locked build and conformance commands for the admitted current-main source set. A passing run is component/compile evidence only: not an installed service, activation, live-host, reboot, rollback, or soak result.",
   "toolchain": "1.97.1",
-  "default": {
-    "program": "cargo",
-    "args": ["+{toolchain}", "build", "--locked", "--release"],
-    "env": {
-      "CARGO_TARGET_DIR": "{scratch}/target"
-    },
-    "timeout_seconds": 3600
-  },
   "repositories": {
-    "ascension-watchdog": null,
-    "sts2-gateway": null,
-    "sts2-harness": null,
-    "sts2-mcp-server": null,
-    "sts2-game-mod": null,
-    "sts2-protocol": null,
-    "sts2-game-core": null
+    "ascension-watchdog": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      },
+      {
+        "name": "schema-conformance",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "test",
+          "--locked",
+          "-p",
+          "watchdog-fault-fixture",
+          "--test",
+          "schema"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-gateway": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      },
+      {
+        "name": "recovery-conformance",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "test",
+          "--locked",
+          "-p",
+          "sts2-gateway",
+          "--test",
+          "recovery"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-harness": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      },
+      {
+        "name": "recovery-conformance",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "test",
+          "--locked",
+          "-p",
+          "sts2-harness",
+          "--test",
+          "completed_resume_process",
+          "--test",
+          "execution_store",
+          "--test",
+          "replay",
+          "--test",
+          "phase2_recovery"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-mcp-server": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      },
+      {
+        "name": "artifact-conformance",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "test",
+          "--locked",
+          "-p",
+          "sts2-mcp-server",
+          "--test",
+          "runtime_v2_artifact"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-protocol": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      },
+      {
+        "name": "consumer-conformance",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "test",
+          "--locked",
+          "-p",
+          "sts2-protocol",
+          "--test",
+          "coop_native_consumer_conformance"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-game-mod": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ],
+    "sts2-game-core": [
+      {
+        "name": "build",
+        "program": "cargo",
+        "args": [
+          "+{toolchain}",
+          "build",
+          "--locked",
+          "--release"
+        ],
+        "env": {
+          "CARGO_TARGET_DIR": "{scratch}/target"
+        },
+        "timeout_seconds": 3600
+      }
+    ]
   }
 }

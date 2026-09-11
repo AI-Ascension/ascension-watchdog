@@ -46,13 +46,15 @@ struct BuildPlan {
     #[serde(default)]
     toolchain: Option<String>,
     #[serde(default)]
-    default: Option<BuildStep>,
+    default: Option<StepSpec>,
     #[serde(default)]
-    repositories: BTreeMap<String, Option<BuildStep>>,
+    repositories: BTreeMap<String, Option<StepSpec>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct BuildStep {
+    #[serde(default)]
+    name: Option<String>,
     program: String,
     #[serde(default)]
     args: Vec<String>,
@@ -60,6 +62,23 @@ struct BuildStep {
     env: BTreeMap<String, String>,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+}
+
+/// A repository's ordered work: one step, or a build-then-conformance sequence.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum StepSpec {
+    One(BuildStep),
+    Many(Vec<BuildStep>),
+}
+
+impl StepSpec {
+    fn into_steps(self) -> Vec<BuildStep> {
+        match self {
+            Self::One(step) => vec![step],
+            Self::Many(steps) => steps,
+        }
+    }
 }
 
 /// Machine-readable build-set result.  `built` is true only when every
@@ -74,12 +93,22 @@ pub struct BuildSetReport {
     pub built: bool,
     pub toolchain: Option<String>,
     pub repository_count: usize,
-    pub repositories: BTreeMap<String, BuildStepReport>,
+    pub repositories: BTreeMap<String, RepositoryBuildReport>,
+    pub issues: Vec<String>,
+}
+
+/// One repository's ordered steps. `status` is `pass` only when every step
+/// passed; after a failed step the remaining steps are marked `skipped`.
+#[derive(Clone, Debug, Serialize)]
+pub struct RepositoryBuildReport {
+    pub status: String,
+    pub steps: Vec<BuildStepReport>,
     pub issues: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildStepReport {
+    pub name: Option<String>,
     pub status: String,
     pub program: String,
     pub args: Vec<String>,
@@ -132,7 +161,7 @@ pub fn run_build_set(
     };
 
     let mut report = BuildSetReport {
-        orchestrator_version: 1,
+        orchestrator_version: 2,
         plan_sha256,
         manifest_sha256,
         classification: plan.classification.clone(),
@@ -164,20 +193,18 @@ pub fn run_build_set(
             all_passed = false;
             report.repositories.insert(
                 name.clone(),
-                refused(
-                    format!("{name} is not part of the admitted source set"),
-                    step_hint(&plan, name),
-                ),
+                refused_repository(format!("{name} is not part of the admitted source set")),
             );
             continue;
         }
-        let step = plan
+        let steps = plan
             .repositories
             .get(name)
             .and_then(Option::as_ref)
-            .or(plan.default.as_ref())
+            .map(|spec| spec.clone().into_steps())
+            .or_else(|| plan.default.as_ref().map(|spec| spec.clone().into_steps()))
             .ok_or_else(|| format!("build plan has no command for {name}"))?;
-        let entry = execute_repository(name, step, &plan, repository_paths, &scratch);
+        let entry = execute_repository(name, &steps, &plan, repository_paths, &scratch);
         if entry.status != "pass" {
             all_passed = false;
         }
@@ -196,21 +223,14 @@ pub fn run_build_set(
 
 fn execute_repository(
     name: &str,
-    step: &BuildStep,
+    steps: &[BuildStep],
     plan: &BuildPlan,
     repository_paths: &BTreeMap<String, PathBuf>,
     scratch: &Path,
-) -> BuildStepReport {
-    let mut report = BuildStepReport {
+) -> RepositoryBuildReport {
+    let mut report = RepositoryBuildReport {
         status: "fail".to_owned(),
-        program: step.program.clone(),
-        args: step.args.clone(),
-        working_directory: None,
-        exit_code: None,
-        timed_out: false,
-        duration_millis: 0,
-        stdout_tail: String::new(),
-        stderr_tail: String::new(),
+        steps: Vec::new(),
         issues: Vec::new(),
     };
 
@@ -229,11 +249,63 @@ fn execute_repository(
             .push("repository worktree path is not a directory".to_owned());
         return report;
     }
-    report.working_directory = Some(root.clone());
 
-    let step_scratch = scratch.join(sanitized(name));
+    let mut all_passed = true;
+    let mut blocked = false;
+    for (index, step) in steps.iter().enumerate() {
+        if blocked {
+            all_passed = false;
+            report.steps.push(skipped_step(
+                step,
+                "a previous step in this repository failed",
+            ));
+            continue;
+        }
+        let entry = execute_repository_step(name, index, step, plan, &root, scratch);
+        if entry.status != "pass" {
+            all_passed = false;
+            blocked = true;
+        }
+        report.steps.push(entry);
+    }
 
-    let program = match substitute(&step.program, plan, Some(&root), Some(&step_scratch)) {
+    if all_passed {
+        "pass".clone_into(&mut report.status);
+    } else {
+        report
+            .issues
+            .push("one or more repository steps failed".to_owned());
+    }
+    report
+}
+
+fn execute_repository_step(
+    name: &str,
+    index: usize,
+    step: &BuildStep,
+    plan: &BuildPlan,
+    root: &Path,
+    scratch: &Path,
+) -> BuildStepReport {
+    let mut report = BuildStepReport {
+        name: step.name.clone(),
+        status: "fail".to_owned(),
+        program: step.program.clone(),
+        args: step.args.clone(),
+        working_directory: None,
+        exit_code: None,
+        timed_out: false,
+        duration_millis: 0,
+        stdout_tail: String::new(),
+        stderr_tail: String::new(),
+        issues: Vec::new(),
+    };
+    report.working_directory = Some(root.to_path_buf());
+
+    let repo_scratch = scratch.join(sanitized(name));
+    let sink_label = format!("{}-{index}", sanitized(name));
+
+    let program = match substitute(&step.program, plan, Some(root), Some(&repo_scratch)) {
         Ok(program) => program,
         Err(issue) => {
             report.issues.push(issue);
@@ -244,7 +316,7 @@ fn execute_repository(
 
     let mut args = Vec::with_capacity(step.args.len());
     for argument in &step.args {
-        match substitute(argument, plan, Some(&root), Some(&step_scratch)) {
+        match substitute(argument, plan, Some(root), Some(&repo_scratch)) {
             Ok(value) => args.push(value),
             Err(issue) => {
                 report.issues.push(issue);
@@ -256,7 +328,7 @@ fn execute_repository(
 
     let mut env = BTreeMap::new();
     for (key, value) in &step.env {
-        match substitute(value, plan, Some(&root), Some(&step_scratch)) {
+        match substitute(value, plan, Some(root), Some(&repo_scratch)) {
             Ok(value) => {
                 env.insert(key.clone(), value);
             }
@@ -268,7 +340,15 @@ fn execute_repository(
     }
 
     let timeout = Duration::from_secs(step.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS));
-    let outcome = match execute_step(&program, &args, &env, &root, &step_scratch, timeout) {
+    let outcome = match execute_step(
+        &program,
+        &args,
+        &env,
+        root,
+        &repo_scratch,
+        &sink_label,
+        timeout,
+    ) {
         Ok(outcome) => outcome,
         Err(issue) => {
             report.issues.push(issue);
@@ -284,42 +364,37 @@ fn execute_repository(
     if outcome.timed_out {
         report
             .issues
-            .push(format!("build exceeded the {timeout:?} wall-clock bound"));
+            .push(format!("step exceeded the {timeout:?} wall-clock bound"));
     } else if !outcome.status.is_some_and(|status| status.success()) {
         report
             .issues
-            .push("build command exited non-zero".to_owned());
+            .push("step command exited non-zero".to_owned());
     } else {
         "pass".clone_into(&mut report.status);
     }
     report
 }
 
-fn step_hint(plan: &BuildPlan, name: &str) -> BuildStep {
-    plan.repositories
-        .get(name)
-        .and_then(Option::as_ref)
-        .or(plan.default.as_ref())
-        .cloned()
-        .unwrap_or_else(|| BuildStep {
-            program: String::new(),
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            timeout_seconds: None,
-        })
-}
-
-fn refused(issue: String, step: BuildStep) -> BuildStepReport {
+fn skipped_step(step: &BuildStep, reason: &str) -> BuildStepReport {
     BuildStepReport {
-        status: "fail".to_owned(),
-        program: step.program,
-        args: step.args,
+        name: step.name.clone(),
+        status: "skipped".to_owned(),
+        program: step.program.clone(),
+        args: step.args.clone(),
         working_directory: None,
         exit_code: None,
         timed_out: false,
         duration_millis: 0,
         stdout_tail: String::new(),
         stderr_tail: String::new(),
+        issues: vec![reason.to_owned()],
+    }
+}
+
+fn refused_repository(issue: String) -> RepositoryBuildReport {
+    RepositoryBuildReport {
+        status: "fail".to_owned(),
+        steps: Vec::new(),
         issues: vec![issue],
     }
 }
@@ -330,13 +405,14 @@ fn execute_step(
     env: &BTreeMap<String, String>,
     working_directory: &Path,
     scratch: &Path,
+    sink_label: &str,
     timeout: Duration,
 ) -> Result<StepOutcome, String> {
     if let Err(error) = fs::create_dir_all(scratch) {
         return Err(format!("build scratch directory is unavailable: {error}"));
     }
-    let stdout_path = scratch.join("stdout");
-    let stderr_path = scratch.join("stderr");
+    let stdout_path = scratch.join(format!("{sink_label}.stdout"));
+    let stderr_path = scratch.join(format!("{sink_label}.stderr"));
     let stdout_file = File::create(&stdout_path)
         .map_err(|error| format!("build stdout sink is unavailable: {error}"))?;
     let stderr_file = File::create(&stderr_path)
@@ -385,7 +461,7 @@ fn execute_step(
 }
 
 fn validate_plan(plan: &BuildPlan) -> Result<(), String> {
-    if plan.schema_version != 1 {
+    if plan.schema_version != 1 && plan.schema_version != 2 {
         return Err(format!(
             "unsupported build plan schema version {}",
             plan.schema_version
@@ -397,12 +473,12 @@ fn validate_plan(plan: &BuildPlan) -> Result<(), String> {
     if plan.repositories.is_empty() {
         return Err("build plan declares no repositories".to_owned());
     }
-    for (name, step) in &plan.repositories {
+    for (name, spec) in &plan.repositories {
         if name.is_empty() || name.contains('/') || name.contains('\\') {
             return Err(format!("invalid build plan repository name {name:?}"));
         }
-        match step {
-            Some(step) => validate_step(name, step)?,
+        match spec {
+            Some(spec) => validate_steps(name, &spec.clone().into_steps())?,
             None if plan.default.is_some() => {}
             None => {
                 return Err(format!(
@@ -411,8 +487,18 @@ fn validate_plan(plan: &BuildPlan) -> Result<(), String> {
             }
         }
     }
-    if let Some(step) = &plan.default {
-        validate_step("<default>", step)?;
+    if let Some(spec) = &plan.default {
+        validate_steps("<default>", &spec.clone().into_steps())?;
+    }
+    Ok(())
+}
+
+fn validate_steps(name: &str, steps: &[BuildStep]) -> Result<(), String> {
+    if steps.is_empty() {
+        return Err(format!("build plan {name} declares no steps"));
+    }
+    for (index, step) in steps.iter().enumerate() {
+        validate_step(&format!("{name}[{index}]"), step)?;
     }
     Ok(())
 }
@@ -523,7 +609,7 @@ mod tests {
     fn plan_validation_rejects_invalid_shapes() {
         assert!(
             validate_plan(&plan_from(serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "classification": "test",
                 "repositories": {"a": {"program": "cargo"}}
             })))
@@ -628,6 +714,7 @@ mod tests {
             &BTreeMap::new(),
             scratch.path(),
             &scratch.path().join("ok"),
+            "ok",
             Duration::from_secs(30),
         )
         .expect("step runs");
@@ -641,6 +728,7 @@ mod tests {
             &BTreeMap::new(),
             scratch.path(),
             &scratch.path().join("bad"),
+            "bad",
             Duration::from_secs(30),
         )
         .expect("step runs");
@@ -657,12 +745,71 @@ mod tests {
             &BTreeMap::new(),
             scratch.path(),
             &scratch.path().join("slow"),
+            "slow",
             Duration::from_millis(250),
         )
         .expect("step runs");
         assert!(outcome.timed_out);
         assert!(outcome.status.is_none());
         assert!(outcome.duration < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_step_skips_later_conformance_steps() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = tempfile::tempdir().expect("root");
+        let plan = plan_from(serde_json::json!({
+            "schema_version": 2,
+            "classification": "test",
+            "repositories": {
+                "a": [
+                    {"name": "build", "program": "false"},
+                    {"name": "conformance", "program": "true"}
+                ]
+            }
+        }));
+        let mut paths = BTreeMap::new();
+        paths.insert("a".to_owned(), root.path().to_path_buf());
+        let steps = plan
+            .repositories
+            .get("a")
+            .and_then(Option::as_ref)
+            .map(|spec| spec.clone().into_steps())
+            .expect("steps");
+        let report = execute_repository("a", &steps, &plan, &paths, scratch.path());
+        assert_eq!(report.status, "fail");
+        assert_eq!(report.steps[0].status, "fail");
+        assert_eq!(report.steps[1].status, "skipped");
+        assert_eq!(report.steps[1].name.as_deref(), Some("conformance"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordered_steps_all_pass_in_sequence() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = tempfile::tempdir().expect("root");
+        let plan = plan_from(serde_json::json!({
+            "schema_version": 2,
+            "classification": "test",
+            "repositories": {
+                "a": [
+                    {"name": "build", "program": "true"},
+                    {"name": "conformance", "program": "true"}
+                ]
+            }
+        }));
+        let mut paths = BTreeMap::new();
+        paths.insert("a".to_owned(), root.path().to_path_buf());
+        let steps = plan
+            .repositories
+            .get("a")
+            .and_then(Option::as_ref)
+            .map(|spec| spec.clone().into_steps())
+            .expect("steps");
+        let report = execute_repository("a", &steps, &plan, &paths, scratch.path());
+        assert_eq!(report.status, "pass");
+        assert!(report.steps.iter().all(|step| step.status == "pass"));
     }
 
     #[test]
