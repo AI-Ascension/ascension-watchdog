@@ -72,8 +72,8 @@
     "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
   },
   "checks": {
-    "watchdog_exact_head_hosted_validation": 34623340465,
-    "watchdog_exact_head_hosted_standards": 34623339512,
+    "watchdog_exact_head_hosted_validation": 34625070885,
+    "watchdog_exact_head_hosted_standards": 34625070947,
     "watchdog_current_head_local_workspace": "pass; validated product head 902c879 is clean; the pinned serial workspace suite exited 0 (212 watchdog library tests passed, 4 ignored, all active workspace integration suites passed), with strict workspace Clippy and fmt passing",
     "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6 on the implementation base; source-set verifier regressions pass; no native systemd install claimed",
     "watchdog_packaging_preflight": "pass; validated product head 902c879 hosted validation run 34625070885 passed Ubuntu and Windows dependency, format, lint, full workspace test, and locked release-build lanes; Windows executed the native packaged-config ACL reader and non-mutating PowerShell packaging preflight",

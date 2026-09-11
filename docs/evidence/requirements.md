@@ -453,9 +453,9 @@ repository paths before PowerShell parsing, and the native ACL fixture uses a
 built-in virtual service account spelling that the hosted `icacls` accepts.
 
 The exact-head hosted validation run
-[`34623340465`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34623340465)
+[`34625070885`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34625070885)
 and standards run
-[`34623339512`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34623339512)
+[`34625070947`](https://github.com/AI-Ascension/ascension-watchdog/actions/runs/34625070947)
 passed. Ubuntu and Windows completed dependency, whitespace, pinned format,
 warnings-denied lint, full workspace all-target/all-feature tests, and locked
 release-build gates. Windows also passed the native packaged-config ACL reader
