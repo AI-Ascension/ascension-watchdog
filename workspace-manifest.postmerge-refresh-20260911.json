@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "classification": "post-merge-refresh-candidate-not-activated",
+  "generated_at": "2026-09-11T20:20:44Z",
+  "purpose": "Exact local post-merge artifact refresh candidate for read-only admission; delivery commits are unmerged and this is not an activated release.",
+  "activation": {
+    "activated": false,
+    "artifact_digests_verified": false,
+    "native_install_verified": false,
+    "rollback_verified": false
+  },
+  "repositories": {
+    "ascension-watchdog": {
+      "revision": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
+      "ref": "bootstrap",
+      "remote": "AI-Ascension/ascension-watchdog"
+    },
+    "sts2-gateway": {
+      "revision": "d987ac4212435e0e451f3411002a792e5f2d92c1",
+      "source_revision": "d5dedd264115472799b780b49fd9a545cb6a1507",
+      "source_tree": "7868858f187b6b121981b3e36cf54e85665cefad",
+      "ref": "codex/coop-native-refresh-postmerge-20260911",
+      "remote": "AI-Ascension/sts2-gateway"
+    },
+    "sts2-harness": {
+      "revision": "9defafd4d0a368a42fe74a17c7def3a2877fdb89",
+      "source_revision": "4e738133822a48b99bea9a710aa49cf635e7cd2d",
+      "source_tree": "f9200703423d98ee2121a79864877342bb2ac5cd",
+      "ref": "codex/coop-native-refresh-postmerge-20260911",
+      "remote": "AI-Ascension/sts2-harness"
+    },
+    "sts2-mcp-server": {
+      "revision": "c403163d1749af90376064c17e9d037cba8a2130",
+      "source_revision": "f376105ab779ea692855557a5ad6fdab32f9891d",
+      "source_tree": "679e8eae14f0269ab1dfa0244919ef419684560a",
+      "ref": "codex/coop-native-refresh-postmerge-20260911",
+      "remote": "AI-Ascension/sts2-mcp-server"
+    },
+    "sts2-game-mod": {
+      "revision": "afa44d6f8da66625b67a10d758725da01492a27a",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-game-mod"
+    },
+    "sts2-protocol": {
+      "revision": "3301018a0625c9631e92be2769c7586928c10493",
+      "ref": "codex/coop-native-refresh-postmerge-20260911",
+      "remote": "AI-Ascension/sts2-protocol"
+    },
+    "sts2-game-core": {
+      "revision": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-game-core"
+    },
+    "ai-agent-observability": {
+      "revision": "6fad79d00ef4fa84097cb00e8342521f85f6e48e",
+      "ref": "main",
+      "remote": "AI-Ascension/ai-agent-observability"
+    }
+  }
+}

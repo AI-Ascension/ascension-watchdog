@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "audit_id": "current-main-artifact-refresh-source-set-20260911",
+  "captured_at": "2026-09-11T20:39:16Z",
+  "classification": "current-main-source-set-admitted; release-not-activated",
+  "manifest": "workspace-manifest.current-main-refresh-20260911.json",
+  "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
+  "merge_commits": {
+    "sts2-protocol": {
+      "pull_request": 42,
+      "commit": "219510c4d4f9c96a54f510cca085a48a92bfe490"
+    },
+    "sts2-gateway": {
+      "pull_request": 44,
+      "commit": "8940fba823a0893b31d1a96301831c182d37ed32"
+    },
+    "sts2-mcp-server": {
+      "pull_request": 45,
+      "commit": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031"
+    },
+    "sts2-harness": {
+      "pull_request": 86,
+      "commit": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8"
+    }
+  },
+  "represented_source_revisions": {
+    "sts2-gateway": "d5dedd264115472799b780b49fd9a545cb6a1507",
+    "sts2-mcp-server": "f376105ab779ea692855557a5ad6fdab32f9891d",
+    "sts2-harness": "4e738133822a48b99bea9a710aa49cf635e7cd2d"
+  },
+  "checks": {
+    "worktrees_clean_and_pinned": true,
+    "contract_files_identical": true,
+    "golden_files_identical": true,
+    "checksum_entries": {
+      "sts2-protocol": 34,
+      "sts2-gateway": 25,
+      "sts2-mcp-server": 25,
+      "sts2-harness": 25
+    },
+    "consumer_conformance_sha256": "b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6",
+    "source_set_gate": "pass; exit 0/admitted=true",
+    "hosted_required_checks": {
+      "sts2-protocol": {
+        "quality": 34644936010,
+        "policy": 34644935963
+      },
+      "sts2-gateway": {
+        "quality": 34644943114,
+        "policy": 34644943293
+      },
+      "sts2-mcp-server": {
+        "quality": 34644936785,
+        "policy": 34644936715
+      },
+      "sts2-harness": {
+        "quality": 34644935521,
+        "policy": 34644935513
+      }
+    }
+  },
+  "admitted": true,
+  "remote_delivery": {
+    "pushed": true,
+    "merged": true,
+    "activated": false
+  },
+  "evidence_axes": {
+    "unified_cross_consumer_build": "unverified; no unified target is available in this workspace",
+    "native_windows_service": "unverified",
+    "native_linux_service": "unverified",
+    "live_host_recovery": "unverified",
+    "cold_boot_recovery": "unverified",
+    "activation_rollback": "unverified",
+    "soak": "unverified"
+  },
+  "issues": [
+    "release remains unactivated",
+    "unified cross-consumer build is not available",
+    "native service, live-host, cold-boot, rollback, and soak gates remain unverified"
+  ]
+}

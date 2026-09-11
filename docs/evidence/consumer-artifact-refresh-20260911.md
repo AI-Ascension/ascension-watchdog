@@ -76,10 +76,10 @@ policy and Rust/component quality checks passing. Harness PR #85 had its
 policy check passing and its Rust quality check still in progress at capture;
 the PR itself remains open. No PR was merged or deployed by this refresh.
 
-The current candidate source-set worktrees remain on the previously recorded
-main commits, so the root read-only verifier result remains
-`admitted=false` until the refresh PRs are reviewed/merged and a post-merge
-manifest, artifact record, and gate run are produced. Native service
+At this capture, the candidate source-set worktrees remained on the previously
+recorded main commits, so the root read-only verifier result was
+`admitted=false` until the refresh PRs were reviewed/merged and a post-merge
+manifest, artifact record, and gate run were produced. Native service
 installation, authorized two-peer host settlement, Windows SCM execution,
 cold boot, Docker/Podman, and soak evidence remain unverified.
 
@@ -113,3 +113,49 @@ contract files, and complete checksum inventories. The full result is
 recorded in docs/evidence/coop-refresh-source-set-20260911.md. This does not
 promote the PR heads to merged main or change the separate native, live,
 activation, reboot, and soak evidence boundaries.
+
+## Post-merge regeneration candidate — 2026-09-11 20:20 UTC
+
+After the companion merges, the synchronized copies were regenerated locally
+against gateway `d5dedd264115472799b780b49fd9a545cb6a1507`, MCP
+`f376105ab779ea692855557a5ad6fdab32f9891d`, and harness
+`4e738133822a48b99bea9a710aa49cf635e7cd2d`. The resulting local delivery
+commits are protocol `3301018a0625c9631e92be2769c7586928c10493`, gateway
+`d987ac4212435e0e451f3411002a792e5f2d92c1`, MCP
+`c403163d1749af90376064c17e9d037cba8a2130`, and harness
+`9defafd4d0a368a42fe74a17c7def3a2877fdb89`.
+
+All four copies now have identical `consumer-conformance.json` bytes at
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`.
+Their contract and golden bytes are identical, and the checksum inventories
+pass with 34 protocol entries and 25 entries in each consumer copy. The exact
+candidate manifest and verifier result are recorded in
+[`workspace-manifest.postmerge-refresh-20260911.json`](../../workspace-manifest.postmerge-refresh-20260911.json)
+and [`postmerge-refresh-source-set-20260911.json`](postmerge-refresh-source-set-20260911.json);
+the manifest digest is
+`35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33`, and the
+verifier returned `admitted=true` for eight clean worktrees.
+
+The four delivery commits are local and remain unpushed/unmerged. This closes
+the local artifact-refresh admission check only; it does not establish a
+current-main release, unified build, native service, live-host, cold-boot,
+rollback, or soak result.
+
+## Merged delivery and current-main admission — 2026-09-11 20:39 UTC
+
+The refresh branches were published and merged after all required hosted
+checks passed: protocol PR #42 merged at `219510c`, gateway PR #44 at
+`8940fba`, MCP PR #45 at `f3b6eaa`, and harness PR #86 at `4584c4c`.
+
+The clean current-main source-set verifier now returns `admitted=true` for
+eight worktrees. Contract and golden bytes remain identical, the checksum
+inventories contain 34 protocol entries and 25 entries in each consumer copy,
+and the four consumer-conformance copies match at
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`. The
+current-main manifest and complete admission report are recorded in
+[`workspace-manifest.current-main-refresh-20260911.json`](../../workspace-manifest.current-main-refresh-20260911.json)
+and [`current-main-refresh-source-set-20260911.json`](current-main-refresh-source-set-20260911.json).
+
+This establishes current-main source-set admission only. The release is not
+activated, and unified-build, native service, live-host, cold-boot, rollback,
+and soak evidence remain unverified.

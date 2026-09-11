@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "audit_id": "post-merge-artifact-refresh-source-set-20260911",
+  "captured_at": "2026-09-11T20:20:44Z",
+  "classification": "post-merge-refresh-candidate-admitted; release-not-activated",
+  "manifest": "workspace-manifest.postmerge-refresh-20260911.json",
+  "manifest_sha256": "35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
+  "delivery_commits": {
+    "sts2-protocol": "3301018a0625c9631e92be2769c7586928c10493",
+    "sts2-gateway": "d987ac4212435e0e451f3411002a792e5f2d92c1",
+    "sts2-mcp-server": "c403163d1749af90376064c17e9d037cba8a2130",
+    "sts2-harness": "9defafd4d0a368a42fe74a17c7def3a2877fdb89"
+  },
+  "represented_source_revisions": {
+    "sts2-gateway": "d5dedd264115472799b780b49fd9a545cb6a1507",
+    "sts2-mcp-server": "f376105ab779ea692855557a5ad6fdab32f9891d",
+    "sts2-harness": "4e738133822a48b99bea9a710aa49cf635e7cd2d"
+  },
+  "checks": {
+    "worktrees_clean_and_pinned": true,
+    "contract_files_identical": true,
+    "golden_files_identical": true,
+    "checksum_entries": {
+      "sts2-protocol": 34,
+      "sts2-gateway": 25,
+      "sts2-mcp-server": 25,
+      "sts2-harness": 25
+    },
+    "consumer_conformance_sha256": "b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6",
+    "source_set_gate": "pass; exit 0/admitted=true",
+    "component_gates": {
+      "sts2-protocol": "format, strict policy, Clippy, and locked all-target/all-feature tests pass; serialized consumer conformance test passes",
+      "sts2-gateway": "format, strict policy, Clippy, and locked all-target/all-feature tests pass serially",
+      "sts2-mcp-server": "format, strict policy, Clippy, and locked all-target/all-feature tests pass",
+      "sts2-harness": "format, strict policy, Clippy, artifact/native tests, and repeated isolated phase3_cli test pass; one full-workspace concurrent phase3_cli run had an intermittent broken-pipe failure"
+    }
+  },
+  "admitted": true,
+  "remote_delivery": {
+    "pushed": false,
+    "merged": false,
+    "activated": false
+  },
+  "evidence_axes": {
+    "native_windows_service": "unverified",
+    "native_linux_service": "unverified",
+    "live_host_recovery": "unverified",
+    "cold_boot_recovery": "unverified",
+    "activation_rollback": "unverified",
+    "soak": "unverified"
+  },
+  "issues": [
+    "refresh commits are local and unmerged",
+    "unified cross-consumer build is not available",
+    "native, live-host, cold-boot, rollback, and soak gates remain unverified"
+  ]
+}

@@ -469,3 +469,62 @@ companion PRs and the admitted refresh candidate are still unmerged/open,
 current-main source-set admission and unified consumer build remain pending,
 and native installed-service, live-host, cold-boot, activation, nested
 depth-2/3 delegation, and soak evidence remain unverified.
+
+## Post-merge source-set update — 2026-09-11 19:27 UTC
+
+The previously open watchdog and companion PRs have now merged. The exact
+post-merge source-set revalidation is recorded in
+[`postmerge-source-set-20260911.md`](postmerge-source-set-20260911.md) and
+[`postmerge-source-set-20260911.json`](postmerge-source-set-20260911.json).
+The contract bytes and checksum inventories pass, but current-main admission
+is still rejected because the MCP and harness source heads advanced beyond the
+consumer-conformance revisions embedded in their merged artifact copies.
+Fresh artifact/conformance regeneration and a clean rerun are required.
+
+This does not change the independent evidence axes: native Windows/Linux
+service execution, live-host recovery, cold boot, activation/rollback, nested
+depth-2/3 delegation, and soak remain unverified.
+
+## Post-merge artifact refresh candidate — 2026-09-11 20:20 UTC
+
+The four synchronized `coop-native-v1` consumer copies were regenerated for
+the current merged gateway, MCP, and harness heads. Local delivery commits are
+protocol `3301018`, gateway `d987ac4`, MCP `c403163`, and harness `9defafd`.
+The exact local candidate manifest is
+[`workspace-manifest.postmerge-refresh-20260911.json`](../../workspace-manifest.postmerge-refresh-20260911.json),
+with SHA-256
+`35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33`.
+
+The verifier returned `admitted=true` for eight clean worktrees. Contract and
+golden bytes match, checksum inventories are complete (34 protocol entries;
+25 in each consumer copy), and all four consumer-conformance copies match at
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`. The
+machine-readable result is
+[`postmerge-refresh-source-set-20260911.json`](postmerge-refresh-source-set-20260911.json).
+
+The candidate delivery commits remain local and unmerged; therefore this is
+not current-main release admission or activation. A merged-head regeneration
+and rerun, unified cross-consumer build, native service, live-host recovery,
+cold boot, rollback, and soak evidence remain outstanding.
+
+## Current-main artifact refresh admission — 2026-09-11 20:39 UTC
+
+The four refresh PRs merged after all required hosted checks passed: protocol
+#42 (`219510c`), gateway #44 (`8940fba`), MCP #45 (`f3b6eaa`), and harness #86
+(`4584c4c`). The exact current-main manifest is
+[`workspace-manifest.current-main-refresh-20260911.json`](../../workspace-manifest.current-main-refresh-20260911.json),
+with SHA-256
+`1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18`.
+
+The verifier returned `admitted=true` for eight clean worktrees. Four artifact
+copies have complete checksum inventories (34 protocol entries and 25 in each
+consumer copy); contract and golden bytes are identical; and all four
+`consumer-conformance.json` copies match at
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`. The
+machine-readable result is
+[`current-main-refresh-source-set-20260911.json`](current-main-refresh-source-set-20260911.json).
+
+This closes current-main source-set admission for the refreshed artifacts, not
+release activation. No unified cross-consumer build is available in this
+workspace, and native Windows/Linux service execution, live-host recovery,
+cold boot, rollback, and soak evidence remain unverified.
