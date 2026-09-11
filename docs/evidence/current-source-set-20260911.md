@@ -240,3 +240,26 @@ normalized in this repository.
 
 The native Windows/Linux service, live-host, cold-boot, activation/rollback,
 and soak axes remain unverified and are not promoted by this source-set run.
+
+## Post-merge artifact refresh candidate — 2026-09-11 20:20 UTC
+
+The synchronized consumer artifacts were regenerated in isolated local
+worktrees for the current gateway `d5dedd2`, MCP `f376105`, and harness
+`4e73813` heads. The delivery commits are protocol `3301018`, gateway
+`d987ac4`, MCP `c403163`, and harness `9defafd`; their exact revisions and
+represented source trees are recorded in
+[`workspace-manifest.postmerge-refresh-20260911.json`](../../workspace-manifest.postmerge-refresh-20260911.json).
+
+The read-only verifier admitted all eight clean worktrees with manifest SHA-256
+`35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33`. The four
+`consumer-conformance.json` copies are byte-identical at
+`b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6`; contract
+and golden bytes are identical; checksum inventories contain 34 protocol rows
+and 25 rows in each consumer copy. Machine-readable details are in
+[`postmerge-refresh-source-set-20260911.json`](postmerge-refresh-source-set-20260911.json).
+
+This is a local candidate admission only: the four delivery commits are not
+pushed or merged, so current-main admission still requires applying these
+refreshes to the remote branches and rerunning the exact post-merge check. The
+unified cross-consumer build and native Windows/Linux service, live-host,
+cold-boot, rollback, and soak axes remain unverified.

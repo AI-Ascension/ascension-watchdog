@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
-  "audit_id": "V34-resume-wave-20260911",
-  "captured_at": "2026-09-11T19:27:30Z",
+  "audit_id": "V35-postmerge-artifact-refresh-20260911",
+  "captured_at": "2026-09-11T20:20:44Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
-  "source_set_record": "docs/evidence/postmerge-source-set-20260911.md",
+  "source_set_record": "docs/evidence/postmerge-refresh-source-set-20260911.md",
   "source_set_gate": {
-    "admitted": false,
-    "manifest_sha256": "4e2acc7216bdda3a892cd9c5d4d88e5ab870181edfb36b3d3f256f7c64a53c00",
-    "reason": "post-merge contract bytes and checksums pass, but MCP and harness source changes follow serialized consumer bindings; fresh artifact regeneration is required",
-    "report": "docs/evidence/postmerge-source-set-20260911.json"
+    "admitted": true,
+    "manifest_sha256": "35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
+    "reason": "local exact post-merge artifact refresh candidate admits all eight clean worktrees; delivery branches remain unpushed/unmerged and the candidate is unactivated",
+    "report": "docs/evidence/postmerge-refresh-source-set-20260911.json"
   },
   "refresh_candidate": {
-    "manifest": "workspace-manifest.coop-refresh.candidate.json",
-    "manifest_sha256": "bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
+    "manifest": "workspace-manifest.postmerge-refresh-20260911.json",
+    "manifest_sha256": "35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
     "admitted": true,
-    "classification": "historical PR-head candidate; merged delivery no longer equivalent to current main",
+    "classification": "local post-merge refresh candidate; delivery branches unpushed/unmerged",
     "repository_count": 8,
     "artifact_count": 4,
     "issues": [],
@@ -27,7 +27,7 @@
       "sts2-harness": 25
     },
     "source_revision_checks": "pass; source commits are ancestral, source trees match, and artifact-refresh diffs remain inside declared artifact directories",
-    "evidence": "docs/evidence/coop-refresh-source-set-20260911.md"
+    "evidence": "docs/evidence/postmerge-refresh-source-set-20260911.md"
   },
   "source_set": {
     "ascension-watchdog": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
@@ -44,16 +44,16 @@
     "pull_request": 84,
     "commit": "40a41285ac44964c712eabfde37e3527ce6a1939",
     "base": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
-    "status": "merged into current main; local exact-head gates pass; post-merge source-set regeneration remains required",
+    "status": "merged into current main; local exact-head gates pass; refreshed artifact delivery is represented by an unpushed/unmerged candidate",
     "scope": "missing durable-episode resume rejection and source-derived Windows named-pipe worker boundary"
   },
   "consumer_artifact_refresh": {
-    "status": "merged delivery refreshes; local checksum and component gates pass; post-merge source-set admission rejects stale MCP/harness bindings",
+    "status": "local synchronized refresh candidate admitted; delivery commits are unpushed/unmerged and unactivated",
     "contract_sha256": {
       "manifest": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
       "schema": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
       "conformance": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
-      "consumer_conformance": "c4350934fce24b11aa7f72ab8a99784c364323313d6390d59f33e8ab952e78a6"
+      "consumer_conformance": "b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6"
     },
     "pull_requests": {
       "sts2-protocol": {"number": 41, "commit": "57edfcb30028d910087121f46b9649564155e328"},
@@ -86,7 +86,8 @@
     "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688},
     "source_set_revision_tree_regressions": "pass; 6 focused source-set unit tests",
     "refresh_candidate_source_set_gate": "historical pass; exit 0/admitted=true with manifest bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
-    "postmerge_source_set_gate": "fail-closed; exit 1/admitted=false with manifest 4e2acc7216bdda3a892cd9c5d4d88e5ab870181edfb36b3d3f256f7c64a53c00; contract/checksum bytes pass but MCP and harness source-to-delivery changes escape the artifact-only boundary"
+    "postmerge_source_set_gate": "historical fail-closed result; exit 1/admitted=false with manifest 4e2acc7216bdda3a892cd9c5d4d88e5ab870181edfb36b3d3f256f7c64a53c00",
+    "postmerge_refresh_source_set_gate": "pass; exit 0/admitted=true with manifest 35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33; delivery branches are unpushed/unmerged"
   },
   "evidence_axes": {
     "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
@@ -96,14 +97,14 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 and PR6 merged into bootstrap; companion PRs #41/#43/#44/#84/#85 merged; post-merge source-set admission rejected by stale MCP/harness consumer bindings; no activation"
+    "remote_delivery_status": "watchdog PR11 and PR6 merged into bootstrap; companion source heads are merged; local artifact refresh commits are unpushed/unmerged; candidate unactivated"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",
     "Docker/Podman and native Windows linker/runtime are unavailable here",
     "no authorized service/live-host/reboot/soak execution",
     "no unified current cross-consumer build/conformance target",
-    "post-merge MCP and harness artifact copies require regeneration against their final source heads"
+    "local artifact refresh commits are unpushed/unmerged; current-main admission requires merged-head regeneration and rerun"
   ],
   "fault_matrix": {
     "count": 24,
