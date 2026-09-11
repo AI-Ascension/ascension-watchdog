@@ -221,3 +221,22 @@ and remains admitted=false until the refresh PRs are merged and the final
 post-merge manifest and consumer records are regenerated. Native service,
 live-host, cold-boot, unified-build, activation, and soak evidence remain
 separate and unverified.
+
+## Post-merge revalidation — 2026-09-11 19:27 UTC
+
+The four artifact-refresh PRs and harness resume PR have now merged. The exact
+post-merge source set is recorded in
+[`postmerge-source-set-20260911.md`](postmerge-source-set-20260911.md) and
+[`workspace-manifest.postmerge-20260911.json`](../../workspace-manifest.postmerge-20260911.json).
+
+The read-only verifier was rerun against the eight clean post-merge worktrees.
+Contract bytes and checksum inventories pass, but admission remains rejected:
+the artifact copies serialize gateway `f4d1409`, MCP `98ab84b`, and harness
+`00bd9e1`, while current delivery heads are gateway `d5dedd2`, MCP `f376105`,
+and harness `4e73813`. The gateway merge is artifact-only relative to its
+serialized source; MCP and harness contain additional non-artifact changes, so
+their copies require a fresh artifact/conformance regeneration. No bytes were
+normalized in this repository.
+
+The native Windows/Linux service, live-host, cold-boot, activation/rollback,
+and soak axes remain unverified and are not promoted by this source-set run.

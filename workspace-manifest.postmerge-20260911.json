@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "classification": "post-merge-current-main-source-set-not-activated",
+  "generated_at": "2026-09-11T19:27:30Z",
+  "purpose": "Exact post-merge source set for read-only admission and conformance verification; this is not an activated release.",
+  "activation": {
+    "activated": false,
+    "artifact_digests_verified": false,
+    "native_install_verified": false,
+    "rollback_verified": false
+  },
+  "repositories": {
+    "ascension-watchdog": {
+      "revision": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
+      "ref": "bootstrap",
+      "remote": "AI-Ascension/ascension-watchdog"
+    },
+    "sts2-gateway": {
+      "revision": "d5dedd264115472799b780b49fd9a545cb6a1507",
+      "source_revision": "f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b",
+      "source_tree": "98fe7bbd0b57c44761238d86f9bf0b5594c97da4",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-gateway"
+    },
+    "sts2-harness": {
+      "revision": "4e738133822a48b99bea9a710aa49cf635e7cd2d",
+      "source_revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+      "source_tree": "2f253945e301c509ca098d740b8797f16bff9a30",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-harness"
+    },
+    "sts2-mcp-server": {
+      "revision": "f376105ab779ea692855557a5ad6fdab32f9891d",
+      "source_revision": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
+      "source_tree": "796ee080b34d0add13e53cc9324fe8122bc05f59",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-mcp-server"
+    },
+    "sts2-game-mod": {
+      "revision": "afa44d6f8da66625b67a10d758725da01492a27a",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-game-mod"
+    },
+    "sts2-protocol": {
+      "revision": "d6ec03d1edfe5ebd881fcdf57c4b6185a937f72e",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-protocol"
+    },
+    "sts2-game-core": {
+      "revision": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
+      "ref": "main",
+      "remote": "AI-Ascension/sts2-game-core"
+    },
+    "ai-agent-observability": {
+      "revision": "6fad79d00ef4fa84097cb00e8342521f85f6e48e",
+      "ref": "main",
+      "remote": "AI-Ascension/ai-agent-observability"
+    }
+  }
+}

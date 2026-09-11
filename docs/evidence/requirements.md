@@ -469,3 +469,18 @@ companion PRs and the admitted refresh candidate are still unmerged/open,
 current-main source-set admission and unified consumer build remain pending,
 and native installed-service, live-host, cold-boot, activation, nested
 depth-2/3 delegation, and soak evidence remain unverified.
+
+## Post-merge source-set update — 2026-09-11 19:27 UTC
+
+The previously open watchdog and companion PRs have now merged. The exact
+post-merge source-set revalidation is recorded in
+[`postmerge-source-set-20260911.md`](postmerge-source-set-20260911.md) and
+[`postmerge-source-set-20260911.json`](postmerge-source-set-20260911.json).
+The contract bytes and checksum inventories pass, but current-main admission
+is still rejected because the MCP and harness source heads advanced beyond the
+consumer-conformance revisions embedded in their merged artifact copies.
+Fresh artifact/conformance regeneration and a clean rerun are required.
+
+This does not change the independent evidence axes: native Windows/Linux
+service execution, live-host recovery, cold boot, activation/rollback, nested
+depth-2/3 delegation, and soak remain unverified.
