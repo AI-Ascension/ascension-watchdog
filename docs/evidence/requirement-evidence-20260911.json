@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V34-resume-wave-20260911",
-  "captured_at": "2026-09-11T11:47:10Z",
+  "captured_at": "2026-09-11T12:05:52Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "source_set_record": "docs/evidence/current-source-set-20260911.md",
@@ -72,10 +72,10 @@
     "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
   },
   "checks": {
-    "watchdog_exact_head_hosted_validation": 34593968856,
-    "watchdog_exact_head_hosted_standards": 34593968844,
-    "watchdog_current_head_local_workspace": "pass; 08e46a8 documentation and source-set verifier changes compile; prior f5b81f4 full serial locked workspace all-target/all-feature run exited 0",
-    "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6",
+    "watchdog_exact_head_hosted_validation": 34596556880,
+    "watchdog_exact_head_hosted_standards": 34596556883,
+    "watchdog_current_head_local_workspace": "pass; 569813d full locked watchdog package all-target/all-feature tests exited 0 (212 passed, 4 ignored); strict Clippy and standards also pass",
+    "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6 on the implementation base; source-set verifier regressions pass at 569813d",
     "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
     "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
     "harness_hosted_rust_quality": 34588219783,
@@ -94,7 +94,7 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 open at 08e46a8; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
+    "remote_delivery_status": "watchdog PR11 open at 569813d; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",

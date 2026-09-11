@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T11:47:10Z",
+  "captured_at": "2026-09-11T12:05:52Z",
   "status": "resume-wave-exact-refresh-candidate-gate-passed; consumer artifact refresh PRs open; release admission blocked",
   "phase": "exact-source-set-candidate-with-artifact-delivery-revisions-validated",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
     "commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-    "current_pr_head": "08e46a8648259e8c9223e9c6d2ff67a97af65be2",
+    "current_pr_head": "569813d8af7b6b930ae874a69e3329edca17d915",
     "pull_request": 11
   },
   "source_set": {
@@ -67,7 +67,7 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally at current PR head 08e46a8; source-set revision/tree regressions and exact refresh-candidate gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34593968856; standards run 34593968844); selected source-set implementation pin remains 538346e",
+    "watchdog": "pass locally at current PR head 569813d; source-set revision/tree regressions, exact refresh-candidate gate, strict Clippy, standards, and full locked package tests pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34596556880; standards run 34596556883); selected source-set implementation pin remains 538346e",
     "companion_component_gates": "pass in isolated worktrees; refreshed protocol, gateway, MCP, and harness package gates also pass",
     "gateway_follow_up_pr42": "merged at f4d1409; 9575b8b branch local gates pass and hosted Rust quality/repository-policy checks pass",
     "harness_follow_up_pr84": "40a4128 local format/policy/Linux-Clippy/Windows-target-Clippy-check/focused/full-serial gates pass; hosted Rust-quality 34588219783 and policy 34588219842 pass; PR remains open and excluded from exact source set",
