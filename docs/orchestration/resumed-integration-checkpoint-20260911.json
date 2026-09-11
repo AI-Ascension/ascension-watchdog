@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T09:07:47Z",
+  "captured_at": "2026-09-11T10:15:56Z",
   "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
   "phase": "exact-source-set-and-boundary-recorded",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
     "commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-    "current_pr_head": "03fa0e2f69cc62c44eb4bc6914673a9e6199c1e1",
+    "current_pr_head": "d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57",
     "pull_request": 11
   },
   "source_set": {
@@ -28,16 +28,18 @@
     "recorded exact current source and artifact digests",
     "pushed watchdog PR #11; closed superseded observability PR #21; observability PRs #20 and #22 are merged",
     "enforced affected-row checks for paired durable watchdog job transitions and passed six suppression regressions plus the serial workspace gate",
-    "refreshed the exact source-set verifier and root hosted lanes at 538346e; gateway PR #42 merged at f4d1409; source-set admission remains closed on consumer-binding drift"
+    "refreshed the exact source-set verifier and root hosted lanes at 538346e; gateway PR #42 merged at f4d1409; source-set admission remains closed on consumer-binding drift",
+    "inspected public AI-Ascension/.github and AI-Ascension.github.io policy/source trees; recorded their evidence and static-site boundaries",
+    "extended harness PR #84 to 40a4128 with the Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass"
   ],
   "pending_follow_ups": [
     {
       "repository": "AI-Ascension/sts2-harness",
       "pull_request": 84,
-      "commit": "a1027614ba8f459a05cdf798ac8e3122a1917065",
+      "commit": "40a41285ac44964c712eabfde37e3527ce6a1939",
       "based_on": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
-      "status": "open; local format, strict Clippy, serial locked workspace gates, hosted policy, and hosted Rust rerun pass; excluded from exact source set until reviewed and merged",
-      "scope": "reject explicit Runtime-v3 resume when the durable episode is missing instead of creating a new episode"
+      "status": "open; local format, strict policy, Linux/Windows-target Clippy and check, focused rerun, serial locked workspace, hosted Rust-quality run 34588219783, and hosted policy run 34588219842 pass; excluded from exact source set until reviewed and merged",
+      "scope": "reject explicit Runtime-v3 resume when the durable episode is missing instead of creating a new episode; add source-derived Windows named-pipe, peer-identity, protected-credential, and retained-image boundary"
     }
   ],
   "delegation": {
@@ -49,10 +51,10 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally at 538346e; serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass at docs head 03fa0e2 (run 34581603697; standards 34581603692)",
+    "watchdog": "pass locally at 538346e; serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass at docs head d28ef31 (validation run 34582695999; standards run 34582696030)",
     "companion_component_gates": "pass in isolated worktrees",
     "gateway_follow_up_pr42": "merged at f4d1409; 9575b8b branch local gates pass and hosted Rust quality/repository-policy checks pass",
-    "harness_follow_up_pr84": "a102761 local gates pass; hosted policy and Rust quality rerun pass (run 34581375902; rerun job 103206721619)",
+    "harness_follow_up_pr84": "40a4128 local format/policy/Linux-Clippy/Windows-target-Clippy-check/focused/full-serial gates pass; hosted Rust-quality 34588219783 and policy 34588219842 pass; PR remains open and excluded from exact source set",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",
@@ -67,11 +69,13 @@
     "no explicitly authorized native Windows/Linux service or game host",
     "no unified cross-repository consumer build/conformance target",
     "current coop-native-v1 consumer-conformance bytes are not one identical current set",
-    "observability PR #21 was superseded by merged PR #20; portability PR #22 is merged"
+    "observability PR #21 was superseded by merged PR #20; portability PR #22 is merged",
+    "native Windows linker/runtime and service execution are unavailable in this environment"
   ],
   "evidence": {
     "source_set": "docs/evidence/current-source-set-20260911.md",
     "release_set": "docs/evidence/release-set-verification-20260911.json",
+    "organization_policy": "docs/evidence/organization-policy-inspection-20260911.md",
     "historical_records_preserved": true
   }
 }

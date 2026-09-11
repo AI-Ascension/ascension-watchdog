@@ -1,16 +1,17 @@
 # Current source set and verification boundary — 2026-09-11
 
 Captured at `2026-09-11T09:07:47Z`; root verification and gateway main were
-refreshed at this source-set wave. This is a resumable integration record, not an
-activated release. Every revision below is an exact local source revision; a
-component passing its own gates does not establish cross-consumer, service,
-live-host, reboot, or soak evidence.
+refreshed at this source-set wave. A delivery update was appended at
+`2026-09-11T10:15:56Z`. This is a resumable integration record, not an activated
+release. Every revision below is an exact local source revision; a component
+passing its own gates does not establish cross-consumer, service, live-host,
+reboot, or soak evidence.
 
 ## Exact source set
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | selected implementation pin; PR head `03fa0e2` contains the evidence refresh; local and exact-head hosted gates pass |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | selected implementation pin; PR head `d28ef31` contains the evidence refresh; local and exact-head hosted gates pass |
 | `sts2-gateway` | `main` | `f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b` | current remote main after PR #42 merge; merged host-lease safety changes included |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
@@ -29,13 +30,14 @@ fence. The branch's exact-head hosted Rust quality and repository-policy checks
 passed (workflow runs `34580441918` and `34580442118`); the merged main source
 also receives a local gate below.
 
-A harness safety follow-up is also open: PR
+A harness safety/platform follow-up is also open: PR
 [#84](https://github.com/AI-Ascension/sts2-harness/pull/84), current commit
-`a1027614ba8f459a05cdf798ac8e3122a1917065`, rejects `--resume` when the
-durable episode is missing instead of creating a fresh episode. Its local
-format, strict Clippy, and serial locked workspace gates pass; the hosted
-policy run `34581376023` and hosted Rust rerun `34581375902` pass (rerun job
-`103206721619`). This branch is likewise excluded from the exact source set.
+`40a41285ac44964c712eabfde37e3527ce6a1939`, rejects `--resume` when the
+durable episode is missing instead of creating a fresh episode and adds the
+source-derived Windows named-pipe worker boundary. Its local format, strict
+Clippy, and serial locked workspace gates pass. Hosted Rust-quality run
+`34588219783` and policy run `34588219842` also pass for this head, but the
+branch remains unmerged and is excluded from the exact source set.
 
 The source set was fetched into isolated worktrees. The root source pin was
 verified from a clean detached worktree at `538346e`; the candidate manifest
@@ -45,6 +47,12 @@ was closed as superseded by merged PR #20; its persistence work is represented
 by current observability main. The static-probe fallback is now merged in PR
 #22, but neither observability change is silently treated as an activated
 release artifact.
+
+The organization-wide public policy and site inspection is recorded in
+[`organization-policy-inspection-20260911.md`](organization-policy-inspection-20260911.md).
+It confirms the shared evidence labels, pull-request-only delivery boundary,
+no-proprietary-file/no-copied-source rules, and the site's static proof limits;
+it does not authorize metadata mutation or promote runtime claims.
 
 ## Gates executed
 
@@ -118,7 +126,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at 03fa0e2 with local and exact-head hosted gates green; gateway PR #42 merged into main at f4d1409 after green branch gates; harness PR #84 open at a102761 with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at d28ef31 with local and exact-head hosted gates green; gateway PR #42 merged into main at f4d1409 after green branch gates; harness PR #84 open at 40a4128 with local and hosted Rust-quality/policy gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the
@@ -126,3 +134,22 @@ README and is not promoted here: it used a synthetic gateway/MCP downstream
 and did not verify a service, gameplay, provider, reboot, release, or soak.
 Only depth-1 delegation was observed in the available orchestration records;
 no depth-2 or depth-3 child was created, and no depth-4 bypass was attempted.
+
+## Delivery update — 2026-09-11 10:15 UTC
+
+Harness PR #84 now points to `40a41285ac44964c712eabfde37e3527ce6a1939`.
+The local gates at that exact head are confirmed: pinned format, strict
+repository policy (`879 sized files, 0 warning(s), 0 error(s)`), Linux
+warnings-denied Clippy, Windows-target boundary and harness Clippy/check, the
+focused `phase3_cli` rerun, and the full serial locked workspace test command.
+The first serial attempt had one transient `phase3_cli` BrokenPipe; the
+focused rerun and clean serial rerun passed. Hosted Rust-quality run
+`34588219783` and policy run `34588219842` also pass. The branch is still an
+open PR, so the exact source set remains on harness main `00bd9e1`.
+
+The Windows implementation is source-derived and cross-compiled here; this
+machine has no native Windows linker/runtime, so Windows service installation,
+named-pipe execution, SCM/Job Object behavior, live host, cold boot, and soak
+remain unverified. The separate [Windows boundary ADR in the pending harness
+PR](https://github.com/AI-Ascension/sts2-harness/blob/40a41285ac44964c712eabfde37e3527ce6a1939/docs/decisions/0015-windows-worker-endpoint-boundary.md)
+is not part of the root source set.

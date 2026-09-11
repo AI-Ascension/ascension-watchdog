@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "last_reconciled": "2026-09-11T07:37:30Z",
+  "last_reconciled": "2026-09-11T10:15:56Z",
   "descendant_limit": 12,
   "maximum_descendant_depth": 3,
   "model": "gpt-5.6-luna",
   "reasoning_effort": "max",
-  "reconciliation_note": "Legacy task entries below are historical. The current source pins, endpoint smoke, ownership, and reservations are recorded in integration-wave-20260910.json and the 2026-09-11 source-set evidence; gateway persist-before-effect follow-up PR #42 is pending review and is not part of the approved source set. Nested depth-2/depth-3 spawning remains unobserved and no depth-4 bypass was attempted.",
+  "reconciliation_note": "Legacy task entries below are historical. The current source pins, endpoint smoke, ownership, and reservations are recorded in integration-wave-20260910.json and the 2026-09-11 source-set evidence. Gateway PR #42 is merged at f4d1409; harness PR #84 is open at 40a4128 with local gates pass and hosted checks pending, and is not part of the approved source set. Public organization/site policy inspection is recorded in docs/evidence/organization-policy-inspection-20260911.md. Nested depth-2/depth-3 spawning remains unobserved and no depth-4 bypass was attempted.",
   "resumed_wave": [
     {"id":"G7R","agent":"/root/gateway_catalog_resumed","status":"active","reserved_threads":1,"depends_on":["G1"],"acceptance":"exact retained catalog bytes and original-context checks"},
     {"id":"G8","agent":"/root/managed_catalog_finish","status":"active","reserved_threads":1,"depends_on":["G6"],"acceptance":"retained host catalogs and executable managed fencing regressions"},
@@ -43,24 +43,24 @@
     {"id":"V24","workstream":"fixture-expiry-independent-review","status":"active","agent":"/root/fixture_review","reserved_threads":1,"depends_on":["A8"],"acceptance":"verify immutable ticket expiry and UNKNOWN persistence without stale cross-session operation mutation"},
     {"id":"P6L","workstream":"linux-boundary","status":"source-integrated-native-service-unverified","reserved_threads":0,"depends_on":["V4"],"acceptance":"identity-safe signaling, failed-launch uncertainty and protected executable launch"},
     {"id":"P8","workstream":"native-bootstrap-authority","status":"active","agent":"/root/linux_boundary","reserved_threads":1,"depends_on":["V18"],"acceptance":"trusted delegated root and bootstrap identity, conservative post-spawn proof failure and incarnation binding"},
-    {"id":"P6W","workstream":"windows-boundary","status":"source-integrated-native-execution-unverified","reserved_threads":0,"depends_on":["V4"],"acceptance":"verified IPC peer binding, replay control, FFI bounds and owned service lifecycle"},
+    {"id":"P6W","workstream":"windows-boundary","status":"source-boundary-pr84-open-native-execution-unverified","reserved_threads":0,"depends_on":["V4"],"acceptance":"verified IPC peer binding, replay control, FFI bounds and owned service lifecycle"},
     {"id":"A7","workstream":"fixture-authority-repair","status":"ca4c663-root-review-pending","reserved_threads":0,"depends_on":["V14"],"acceptance":"fresh restart authority, durable monotonic lease history, stale queue uncertainty and configured lease timing"},
     {"id":"G6","workstream":"managed-host-authority-repair","status":"active","agent":"/root/windows_boundary","reserved_threads":1,"depends_on":["V19","V20"],"acceptance":"gateway-issued boot installation through authenticated host fence, exact lease context and durable dispatch outcomes"},
     {"id":"V18","workstream":"native-runtime-independent-review","status":"active-uses-V4-reservation","agent":"/root/platform_review","reserved_threads":0,"depends_on":["P1"],"acceptance":"inspect exact runtime ownership, helper containment binding and failure paths"},
-    {"id":"I1","workstream":"root-integration","status":"core-release-preflight-tests-pass-companions-pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
+    {"id":"I1","workstream":"root-integration","status":"source-set-rejected-harness-pr84-hosted-pending","reserved_threads":0,"depends_on":["W1","G1","H1","P1"],"acceptance":"exact release-set rebuild and independent fault review"}
   ],
   "shared_file_owner": "root",
   "nested_delegation": "unavailable: descendant tool surface lacks native spawning; no bypass permitted",
   "current_integration": {
-    "watchdog": {"branch":"codex/watchdog-resume-20260911","commit":"b4cda14ea578e9ad33f8142698d494aeb9f3a61f","pull_request":11,"head_commit":"b4cda14ea578e9ad33f8142698d494aeb9f3a61f","status":"open non-draft; CLI quarantine/diagnostics, portable protected-tempdir fixture, atomic paired job-transition checks, and exact source-set admission gate are source-tested; local gates pass; hosted rerun pending; service-session remains unverified"},
-    "harness": {"commit":"00bd9e123a86fca39bbffb65b370aac7ed2c8218","pull_request":78,"status":"merged current main; native hierarchy recheck is source-tested and component gates pass; cross-repository release rebuild pending"},
+    "watchdog": {"branch":"codex/watchdog-resume-20260911","commit":"538346e8909a2f4fc23e5b3ea9ec2960b8b34530","pull_request":11,"head_commit":"d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57","status":"open non-draft; selected implementation pin 538346e with source-set CLI and diagnostics source-tested; docs head d28ef31 has exact-head hosted validation/standards green; service-session remains unverified"},
+    "harness": {"commit":"00bd9e123a86fca39bbffb65b370aac7ed2c8218","pull_request":84,"feature_commit":"40a41285ac44964c712eabfde37e3527ce6a1939","status":"current main remains the exact source pin; PR #84 adds missing-episode resume rejection and a source-derived Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass, cross-repository release rebuild pending"},
     "mcp": {"commit":"98ab84b3fad371b45b141e6d81dd9124769a4c59","pull_request":41,"status":"merged current main; native envelope identity preservation is source-tested and component gates pass; dependent release rebuild pending"},
-    "gateway": {"commit":"5f531f602298de674bd31ed3f28a88359b02ca9d","pull_request":40,"follow_up_pull_request":42,"follow_up_commit":"83539a9dd669eb4c8da69033c06d45f114300c45","status":"merged current main; PR #40 recovered-lease fence forwarding is source-tested and component gates pass; PR #42 adds affected-row checks for persisted host install/renew transitions and is open with local and hosted gates green"},
+    "gateway": {"commit":"f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b","pull_request":42,"follow_up_pull_request":42,"follow_up_commit":"9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f","status":"merged current main; PR #42 affected-row host install/renew checks and rekey invalidation are included; branch and merged-main component gates pass"},
     "game_mod": {"commit":"bd8e90542dfc89366f820150c5c755e32716b1b0","pull_request":55,"status":"merged current main; presentation/evidence routes are current and component gates pass; cross-repository rebuild pending"},
     "protocol": {"commit":"0bc689eabc5542ede2b09b030d9ea32daa8a73e7","pull_request":20,"status":"merged current main; presentation/evidence routes are current and artifact/conformance tests pass; current consumer bindings remain non-unified"},
     "game_core": {"commit":"f5daf69f4f2c43fddbb04e7799d32503f7066110","pull_request":11,"status":"merged current main; defeated-target admission repair is source-tested and component gates pass"},
     "observability": {"commit":"630431716ebfbf86280f9fd56f19d6016ad7aeb2","pull_request":22,"status":"merged current main; PR #20 persistent bounded Collector queue/WAL repairs and PR #22 portable static-probe checks are current; live collector/Compose execution remains unavailable"},
-    "completion": "unverified: no unified cross-consumer build or live conformance; native service, live, cold-boot, release activation handoff and soak gates remain open"
+    "completion": "unverified: exact source-set gate rejects consumer-binding drift; harness PR #84 local and hosted checks pass but remains unmerged; native service, live, cold-boot, release activation handoff and soak gates remain open"
   },
   "completion": "unverified"
 }

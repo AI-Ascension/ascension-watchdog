@@ -1,9 +1,10 @@
 # V32 requirements and evidence audit
 
 Classification: `partial` / `unverified` source-and-test audit. Historical
-entries below are retained for traceability; the Wave 48 addendum and the
-machine-readable release-set record carry the current source pins. This audit
-does not declare an implementation or release complete.
+entries below are retained for traceability; the dated resume-wave addendum,
+current source-set record, and machine-readable requirement snapshot carry the
+current source pins. This audit does not declare an implementation or release
+complete.
 
 ## Wave 48 current refresh — 2026-09-10
 
@@ -348,3 +349,40 @@ green for a5bbd76 (Rust/synthetic run 34574717898; standards run 34574717909);
 gateway PR #42 open with local and hosted gates green;
 observability PRs #20 and #22 merged; not activated`. Nested-agent depth 2/3 remains unobserved because no
 spawn surface is exposed; no depth-4 bypass was attempted.
+
+## Resume-wave refresh — 2026-09-11 10:15 UTC
+
+The current machine-readable snapshot is
+[`requirement-evidence-20260911.json`](requirement-evidence-20260911.json).
+The exact selected source set is recorded in
+[`current-source-set-20260911.md`](current-source-set-20260911.md), with
+watchdog implementation pin `538346e`, merged gateway main `f4d1409`, and
+harness main `00bd9e1`. The read-only source-set verifier returned
+`admitted=false`; schema, conformance, and golden bytes agree, but current
+consumer manifests/bindings differ and gateway/MCP copies retain pending
+markers. No artifact bytes were normalized to make admission pass.
+
+Harness PR [#84](https://github.com/AI-Ascension/sts2-harness/pull/84) is open
+at `40a41285ac44964c712eabfde37e3527ce6a1939`, based on harness main
+`00bd9e1`. It contains the explicit missing-durable-episode resume rejection
+and a source-derived Windows named-pipe boundary with bounded peer identity,
+protected credential, and retained-image checks. The local exact-head format,
+strict policy, Linux/Windows-target Clippy/check, focused regression, and full
+serial workspace gates pass. Hosted Rust-quality run `34588219783` and policy
+run `34588219842` also pass; the PR is excluded from the exact source set until
+review and merge.
+
+The public organization policy and site trees were inspected read-only and are
+recorded in [`organization-policy-inspection-20260911.md`](organization-policy-inspection-20260911.md).
+They confirm the shared evidence labels, pull-request-only delivery, no
+proprietary game files/no copied harness source rules, policy-as-code metadata
+boundary, and the static site's historical-proof limits. They do not authorize
+metadata mutation or elevate runtime claims.
+
+The 24-row fault matrix remains open wherever it requires an authorized native
+service, live host, cold reboot, unified consumer build, nested depth-3
+delegation, or 24-hour soak. Current axes therefore remain
+`IMPLEMENTATION_COMPLETE = unverified`, `SYNTHETIC_INTEGRATION_VERIFIED = partial`,
+`WINDOWS_SERVICE_VERIFIED = unverified`, `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
+`LIVE_HOST_RECOVERY_VERIFIED = unverified`, `COLD_BOOT_RECOVERY_VERIFIED = unverified`,
+and `SOAK_VERIFIED = unverified`.
