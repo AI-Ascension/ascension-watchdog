@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-11T22:48:53Z",
+  "captured_at": "2026-09-11T23:30:12Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -17,16 +17,18 @@
   "unified_build_set": {
     "workflow": "docs/evidence/build-set-workflow.md",
     "plan": "workspace-build-plan.current-main-refresh-20260911.json",
-    "plan_sha256": "332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc",
+    "plan_sha256": "a4c7bd6953b1d3317b6ebaa0fb28add0b634145a0027aafde613dcf030d71fb2",
     "report": "docs/evidence/current-main-refresh-build-set-20260911.json",
-    "report_sha256": "335e0c9b82144defb8359f2dcf61b0d7797c5147ab84ace56b8cfd2c2a5d0809",
+    "report_sha256": "83e044e8977d2fdc0305a79615cb8eefbfeee303ed57f54983af95a560dc3592",
     "toolchain": "1.97.1",
     "admitted": true,
     "built": true,
     "repositories": 7,
     "issues": [],
-    "classification": "compile evidence only",
-    "postconditions": "all companion worktrees and the pinned watchdog worktree clean; scratch target removed"
+    "classification": "compile and component-conformance evidence only",
+    "postconditions": "all companion worktrees and the pinned watchdog worktree clean; scratch target removed",
+    "orchestrator_version": 2,
+    "steps": "build plus conformance for watchdog/gateway/harness/mcp/protocol; build only for game-mod/game-core"
   },
   "source_set": {
     "ascension-watchdog": "1925f2852acf5e727a795971546390edf6c8d2b0",
@@ -91,7 +93,7 @@
   "evidence_axes": {
     "implementation_complete": "unverified: assignment incomplete",
     "synthetic_integration_verified": "partial",
-    "unified_build_verified": "pass for the admitted current-main set; compile evidence only",
+    "unified_build_verified": "pass for the admitted current-main set: locked release builds plus component conformance tests; compile/component evidence only",
     "windows_service_verified": "unverified",
     "linux_service_adapter_verified": "partial: native user-scope systemd lifecycle verified; installed root system service and uninstall still require authorization",
     "live_host_recovery_verified": "unverified",

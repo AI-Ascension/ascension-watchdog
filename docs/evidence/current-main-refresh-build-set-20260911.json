@@ -1,8 +1,8 @@
 {
-  "orchestrator_version": 1,
-  "plan_sha256": "332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc",
+  "orchestrator_version": 2,
+  "plan_sha256": "a4c7bd6953b1d3317b6ebaa0fb28add0b634145a0027aafde613dcf030d71fb2",
   "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
-  "classification": "current-main-refresh-build-set-not-activated",
+  "classification": "current-main-refresh-build-and-conformance-not-activated",
   "admitted": true,
   "built": true,
   "toolchain": "1.97.1",
@@ -10,121 +10,281 @@
   "repositories": {
     "ascension-watchdog": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 206461,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling serde_core v1.0.229\n   Compiling serde v1.0.229\n   Compiling pin-project-lite v0.2.17\n   Compiling parking v2.2.1\n   Compiling winnow v1.0.4\n   Compiling libc v0.2.189\n   Compiling equivalent v1.0.2\n   Compiling hashbrown v0.17.1\n   Compiling crossbeam-utils v0.8.23\n   Compiling futures-core v0.3.34\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling futures-io v0.3.34\n   Compiling fastrand v2.5.0\n   Compiling event-listener v5.4.2\n   Compiling rustix v1.1.4\n   Compiling bitflags v2.13.1\n   Compiling concurrent-queue v2.5.0\n   Compiling event-listener-strategy v0.5.4\n   Compiling indexmap v2.14.1\n   Compiling futures-lite v2.6.1\n   Compiling linux-raw-sys v0.12.1\n   Compiling typenum v1.20.1\n   Compiling autocfg v1.5.1\n   Compiling slab v0.4.12\n   Compiling shlex v2.0.1\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling async-io v2.6.0\n   Compiling find-msvc-tools v0.1.12\n   Compiling errno v0.3.14\n   Compiling hybrid-array v0.4.15\n   Compiling cc v1.4.5\n   Compiling toml_edit v0.25.13+spec-1.1.0\n   Compiling async-task v4.7.1\n   Compiling vcpkg v0.2.15\n   Compiling cmov v0.5.4\n   Compiling pkg-config v0.3.34\n   Compiling endi v1.1.1\n   Compiling proc-macro-crate v3.5.0\n   Compiling getrandom v0.4.3\n   Compiling ctutils v0.4.2\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling signal-hook-registry v1.4.8\n   Compiling async-channel v2.5.0\n   Compiling foldhash v0.2.0\n   Compiling const-oid v0.10.2\n   Compiling atomic-waker v1.1.2\n   Compiling once_cell v1.21.4\n   Compiling zmij v1.0.23\n   Compiling libsqlite3-sys v0.38.2\n   Compiling piper v0.2.5\n   Compiling digest v0.11.3\n   Compiling tracing-core v0.1.36\n   Compiling async-lock v3.4.2\n   Compiling serde_json v1.0.151\n   Compiling uuid v1.26.0\n   Compiling blocking v1.7.0\n   Compiling async-executor v1.14.0\n   Compiling async-broadcast v0.7.2\n   Compiling ordered-stream v0.2.0\n   Compiling itoa v1.0.18\n   Compiling cpufeatures v0.3.1\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling fallible-iterator v0.3.0\n   Compiling hex v0.4.3\n   Compiling smallvec v1.16.0\n   Compiling memchr v2.8.3\n   Compiling sha2 v0.11.0\n   Compiling hmac v0.13.0\n   Compiling hashlink v0.12.1\n   Compiling ascension-platform-linux-descriptors v0.1.0 (<host-path>\n   Compiling fs2 v0.4.3\n   Compiling zeroize v1.9.0\n   Compiling base64 v0.22.1\n   Compiling serde_derive v1.0.229\n   Compiling async-trait v0.1.92\n   Compiling serde_repr v0.1.21\n   Compiling polling v3.11.0\n   Compiling enumflags2_derive v0.7.12\n   Compiling tracing-attributes v0.1.31\n   Compiling async-recursion v1.1.1\n   Compiling async-signal v0.2.14\n   Compiling async-process v2.5.0\n   Compiling tracing v0.1.44\n   Compiling zvariant_utils v4.2.0\n   Compiling zcheapstr v1.1.0\n   Compiling enumflags2 v0.7.12\n   Compiling zvariant_derive v5.15.0\n   Compiling zvariant v5.15.0\n   Compiling zbus_names v4.3.4\n   Compiling zbus_macros v5.19.0\n   Compiling zbus v5.16.0\n   Compiling rusqlite v0.40.2\n   Compiling ascension-watchdog v0.1.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 3m 26s\n",
+          "issues": []
+        },
+        {
+          "name": "schema-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "watchdog-fault-fixture",
+            "--test",
+            "schema"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 35276,
+          "stdout_tail": "\nrunning 3 tests\ntest runtime_artifact_compiles_as_draft_2020_12 ... ok\ntest checksum_manifests_bind_paths_to_artifact_root_and_package_boundary ... ok\ntest recovery_artifact_valid_and_invalid_fixtures_use_draft_2020_12 ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s\n\n",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling libc v0.2.189\n   Compiling serde_core v1.0.229\n   Compiling autocfg v1.5.1\n   Compiling cfg-if v1.0.4\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling zmij v1.0.23\n   Compiling equivalent v1.0.2\n   Compiling foldhash v0.2.0\n   Compiling shlex v2.0.1\n   Compiling allocator-api2 v0.2.21\n   Compiling find-msvc-tools v0.1.12\n   Compiling smallvec v1.16.0\n   Compiling typenum v1.20.1\n   Compiling serde_json v1.0.151\n   Compiling num-traits v0.2.19\n   Compiling cc v1.4.5\n   Compiling hashbrown v0.17.1\n   Compiling getrandom v0.3.4\n   Compiling vcpkg v0.2.15\n   Compiling pkg-config v0.3.34\n   Compiling version_check v0.9.5\n   Compiling syn v3.0.5\n   Compiling zerocopy v0.8.56\n   Compiling itoa v1.0.18\n   Compiling parking_lot_core v0.9.12\n   Compiling hybrid-array v0.4.15\n   Compiling getrandom v0.4.3\n   Compiling ahash v0.8.12\n   Compiling regex-syntax v0.8.11\n   Compiling ref-cast v1.0.27\n   Compiling aho-corasick v1.1.5\n   Compiling once_cell v1.21.4\n   Compiling const-oid v0.10.2\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling scopeguard v1.2.0\n   Compiling num-bigint v0.4.8\n   Compiling crypto-common v0.2.2\n   Compiling block-buffer v0.12.1\n   Compiling num-iter v0.1.46\n   Compiling lock_api v0.4.14\n   Compiling hashlink v0.12.1\n   Compiling syn v2.0.119\n   Compiling borrow-or-share v0.2.4\n   Compiling libsqlite3-sys v0.38.2\n   Compiling fallible-iterator v0.3.0\n   Compiling heck v0.5.0\n   Compiling unicode-general-category v1.1.0\n   Compiling digest v0.11.3\n   Compiling bit-vec v0.8.0\n   Compiling bitflags v2.13.1\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling num-rational v0.4.2\n   Compiling cpufeatures v0.3.1\n   Compiling uuid v1.26.0\n   Compiling bit-set v0.8.0\n   Compiling regex-automata v0.4.18\n   Compiling sha2 v0.11.0\n   Compiling num v0.4.3\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling fraction v0.17.0\n   Compiling parking_lot v0.12.5\n   Compiling fs2 v0.4.3\n   Compiling vsimd v0.8.0\n   Compiling outref v0.5.2\n   Compiling percent-encoding v2.3.2\n   Compiling bytecount v0.6.9\n   Compiling micromap v0.3.0\n   Compiling num-cmp v0.1.0\n   Compiling jsonschema-regex v0.52.1\n   Compiling data-encoding v2.11.1\n   Compiling socket2 v0.6.5\n   Compiling uuid-simd v0.8.0\n   Compiling strum_macros v0.28.0\n   Compiling fancy-regex v0.19.0\n   Compiling regex v1.13.1\n   Compiling strum v0.28.0\n   Compiling fluent-uri v0.4.1\n   Compiling email_address v0.2.9\n   Compiling jsonschema-value v0.52.1\n   Compiling referencing v0.52.1\n   Compiling jsonschema v0.52.1\n   Compiling rusqlite v0.40.2\n   Compiling watchdog-fault-fixture v0.1.0 (<host-path>\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.84s\n     Running tests/schema.rs (<host-path>\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 333973,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling serde_core v1.0.229\n   Compiling serde v1.0.229\n   Compiling pin-project-lite v0.2.17\n   Compiling parking v2.2.1\n   Compiling winnow v1.0.4\n   Compiling libc v0.2.189\n   Compiling hashbrown v0.17.1\n   Compiling crossbeam-utils v0.8.23\n   Compiling equivalent v1.0.2\n   Compiling futures-core v0.3.34\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling fastrand v2.5.0\n   Compiling futures-io v0.3.34\n   Compiling event-listener v5.4.2\n   Compiling rustix v1.1.4\n   Compiling bitflags v2.13.1\n   Compiling futures-lite v2.6.1\n   Compiling indexmap v2.14.1\n   Compiling concurrent-queue v2.5.0\n   Compiling event-listener-strategy v0.5.4\n   Compiling typenum v1.20.1\n   Compiling autocfg v1.5.1\n   Compiling linux-raw-sys v0.12.1\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling slab v0.4.12\n   Compiling find-msvc-tools v0.1.12\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling async-io v2.6.0\n   Compiling shlex v2.0.1\n   Compiling errno v0.3.14\n   Compiling toml_edit v0.25.13+spec-1.1.0\n   Compiling hybrid-array v0.4.15\n   Compiling cc v1.4.5\n   Compiling cmov v0.5.4\n   Compiling endi v1.1.1\n   Compiling proc-macro-crate v3.5.0\n   Compiling getrandom v0.4.3\n   Compiling pkg-config v0.3.34\n   Compiling async-task v4.7.1\n   Compiling vcpkg v0.2.15\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling ctutils v0.4.2\n   Compiling signal-hook-registry v1.4.8\n   Compiling async-channel v2.5.0\n   Compiling zmij v1.0.23\n   Compiling once_cell v1.21.4\n   Compiling foldhash v0.2.0\n   Compiling const-oid v0.10.2\n   Compiling atomic-waker v1.1.2\n   Compiling piper v0.2.5\n   Compiling libsqlite3-sys v0.38.2\n   Compiling tracing-core v0.1.36\n   Compiling async-lock v3.4.2\n   Compiling serde_json v1.0.151\n   Compiling blocking v1.7.0\n   Compiling uuid v1.26.0\n   Compiling digest v0.11.3\n   Compiling async-executor v1.14.0\n   Compiling async-broadcast v0.7.2\n   Compiling hashlink v0.12.1\n   Compiling ordered-stream v0.2.0\n   Compiling cpufeatures v0.3.1\n   Compiling itoa v1.0.18\n   Compiling smallvec v1.16.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling hex v0.4.3\n   Compiling memchr v2.8.3\n   Compiling fallible-iterator v0.3.0\n   Compiling sha2 v0.11.0\n   Compiling hmac v0.13.0\n   Compiling fs2 v0.4.3\n   Compiling ascension-platform-linux-descriptors v0.1.0 (<host-path>\n   Compiling base64 v0.22.1\n   Compiling zeroize v1.9.0\n   Compiling enumflags2_derive v0.7.12\n   Compiling tracing-attributes v0.1.31\n   Compiling async-recursion v1.1.1\n   Compiling polling v3.11.0\n   Compiling serde_derive v1.0.229\n   Compiling serde_repr v0.1.21\n   Compiling async-trait v0.1.92\n   Compiling async-signal v0.2.14\n   Compiling tracing v0.1.44\n   Compiling async-process v2.5.0\n   Compiling zvariant_utils v4.2.0\n   Compiling enumflags2 v0.7.12\n   Compiling zcheapstr v1.1.0\n   Compiling zvariant_derive v5.15.0\n   Compiling zvariant v5.15.0\n   Compiling zbus_names v4.3.4\n   Compiling zbus_macros v5.19.0\n   Compiling zbus v5.16.0\n   Compiling rusqlite v0.40.2\n   Compiling ascension-watchdog v0.1.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 5m 33s\n",
       "issues": []
     },
     "sts2-game-core": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 10986,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling winnow v1.0.4\n   Compiling zmij v1.0.23\n   Compiling const-oid v0.10.2\n   Compiling serde_json v1.0.151\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling memchr v2.8.3\n   Compiling itoa v1.0.18\n   Compiling cpufeatures v0.3.0\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.12\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-game-core v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 10.92s\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 21359,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling winnow v1.0.4\n   Compiling zmij v1.0.23\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling const-oid v0.10.2\n   Compiling serde_json v1.0.151\n   Compiling itoa v1.0.18\n   Compiling cpufeatures v0.3.0\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.12\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-game-core v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 21.06s\n",
       "issues": []
     },
     "sts2-game-mod": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 15665,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling zmij v1.0.23\n   Compiling serde v1.0.229\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling itoa v1.0.18\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-game-mod-host v0.0.0 (<host-path>\n   Compiling sts2-game-mod-http-adapter v0.0.0 (<host-path>\n   Compiling hybrid-array v0.4.15\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling syn v3.0.3\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_derive v1.0.229\n   Compiling sts2-game-mod-loading v0.0.0 (<host-path>\n   Compiling sts2-game-mod v0.0.0 (<host-path>\n   Compiling sts2-game-mod-interop v0.0.0 (<host-path>\n   Compiling sts2-release-tool v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 15.63s\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 37594,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling zmij v1.0.23\n   Compiling serde v1.0.229\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling itoa v1.0.18\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling sts2-game-mod-http-adapter v0.0.0 (<host-path>\n   Compiling sts2-game-mod-host v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling syn v3.0.3\n   Compiling hybrid-array v0.4.15\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling serde_derive v1.0.229\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling sts2-game-mod-loading v0.0.0 (<host-path>\n   Compiling sts2-game-mod v0.0.0 (<host-path>\n   Compiling sts2-release-tool v0.0.0 (<host-path>\n   Compiling sts2-game-mod-interop v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 37.16s\n",
       "issues": []
     },
     "sts2-gateway": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 125605,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling autocfg v1.5.1\n   Compiling libc v0.2.189\n   Compiling cfg-if v1.0.4\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling zmij v1.0.23\n   Compiling zerocopy v0.8.56\n   Compiling getrandom v0.3.4\n   Compiling typenum v1.20.1\n   Compiling generic-array v0.14.7\n   Compiling ahash v0.8.12\n   Compiling shlex v2.0.1\n   Compiling serde_json v1.0.151\n   Compiling regex-syntax v0.8.11\n   Compiling num-traits v0.2.19\n   Compiling smallvec v1.16.0\n   Compiling ref-cast v1.0.27\n   Compiling parking_lot_core v0.9.12\n   Compiling find-msvc-tools v0.1.12\n   Compiling cc v1.4.5\n   Compiling aho-corasick v1.1.5\n   Compiling itoa v1.0.18\n   Compiling pkg-config v0.3.34\n   Compiling vcpkg v0.2.15\n   Compiling num-integer v0.1.47\n   Compiling syn v3.0.3\n   Compiling num-complex v0.4.6\n   Compiling once_cell v1.21.4\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling scopeguard v1.2.0\n   Compiling syn v2.0.119\n   Compiling lock_api v0.4.14\n   Compiling unicode-general-category v1.1.0\n   Compiling borrow-or-share v0.2.4\n   Compiling libsqlite3-sys v0.38.2\n   Compiling equivalent v1.0.2\n   Compiling allocator-api2 v0.2.21\n   Compiling getrandom v0.4.3\n   Compiling heck v0.5.0\n   Compiling foldhash v0.2.0\n   Compiling bit-vec v0.8.0\n   Compiling regex-automata v0.4.18\n   Compiling hashbrown v0.17.1\n   Compiling parking_lot v0.12.5\n   Compiling bit-set v0.8.0\n   Compiling num-rational v0.4.2\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling num v0.4.3\n   Compiling fraction v0.17.0\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling percent-encoding v2.3.2\n   Compiling vsimd v0.8.0\n   Compiling micromap v0.3.0\n   Compiling bytecount v0.6.9\n   Compiling winnow v1.0.4\n   Compiling outref v0.5.2\n   Compiling num-cmp v0.1.0\n   Compiling uuid-simd v0.8.0\n   Compiling strum_macros v0.28.0\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling regex v1.13.1\n   Compiling fancy-regex v0.19.0\n   Compiling digest v0.10.7\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_spanned v1.1.1\n   Compiling jsonschema-regex v0.55.1\n   Compiling data-encoding v2.11.1\n   Compiling bitflags v2.13.1\n   Compiling fluent-uri v0.4.1\n   Compiling strum v0.28.0\n   Compiling email_address v0.2.9\n   Compiling jsonschema-value v0.55.1\n   Compiling cpufeatures v0.2.17\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling fallible-iterator v0.3.0\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling sha2 v0.10.9\n   Compiling uuid v1.23.5\n   Compiling fs2 v0.4.3\n   Compiling base64 v0.22.1\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling rusqlite v0.40.2\n   Compiling sts2-gateway v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 2m 05s\n",
+          "issues": []
+        },
+        {
+          "name": "recovery-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-gateway",
+            "--test",
+            "recovery"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 41450,
+          "stdout_tail": "\nrunning 7 tests\ntest rcj_vectors_reject_noncanonical_and_unsupported_actions ... ok\ntest duplicate_and_conflict_never_send_a_second_intent ... ok\ntest settled_requires_operation_bound_witness ... ok\ntest resolved_archive_preserves_duplicate_tombstone ... ok\ntest admission_ticket_is_fenced_and_expires_atomically ... ok\ntest boot_fence_lease_and_unknown_survive_restart ... ok\ntest backup_restore_rekeys_before_fence ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s\n\n",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling version_check v0.9.5\n   Compiling libc v0.2.189\n   Compiling autocfg v1.5.1\n   Compiling serde_core v1.0.229\n   Compiling cfg-if v1.0.4\n   Compiling memchr v2.8.3\n   Compiling serde v1.0.229\n   Compiling getrandom v0.3.4\n   Compiling zmij v1.0.23\n   Compiling zerocopy v0.8.56\n   Compiling shlex v2.0.1\n   Compiling regex-syntax v0.8.11\n   Compiling find-msvc-tools v0.1.12\n   Compiling generic-array v0.14.7\n   Compiling ahash v0.8.12\n   Compiling num-traits v0.2.19\n   Compiling serde_json v1.0.151\n   Compiling typenum v1.20.1\n   Compiling smallvec v1.16.0\n   Compiling parking_lot_core v0.9.12\n   Compiling ref-cast v1.0.27\n   Compiling cc v1.4.5\n   Compiling aho-corasick v1.1.5\n   Compiling pkg-config v0.3.34\n   Compiling syn v3.0.3\n   Compiling scopeguard v1.2.0\n   Compiling once_cell v1.21.4\n   Compiling itoa v1.0.18\n   Compiling vcpkg v0.2.15\n   Compiling lock_api v0.4.14\n   Compiling syn v2.0.119\n   Compiling foldhash v0.2.0\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling equivalent v1.0.2\n   Compiling getrandom v0.4.3\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling heck v0.5.0\n   Compiling regex-automata v0.4.18\n   Compiling allocator-api2 v0.2.21\n   Compiling borrow-or-share v0.2.4\n   Compiling bit-vec v0.8.0\n   Compiling unicode-general-category v1.1.0\n   Compiling libsqlite3-sys v0.38.2\n   Compiling num-rational v0.4.2\n   Compiling bit-set v0.8.0\n   Compiling hashbrown v0.17.1\n   Compiling parking_lot v0.12.5\n   Compiling num v0.4.3\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling fraction v0.17.0\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling micromap v0.3.0\n   Compiling strum_macros v0.28.0\n   Compiling outref v0.5.2\n   Compiling percent-encoding v2.3.2\n   Compiling num-cmp v0.1.0\n   Compiling vsimd v0.8.0\n   Compiling bytecount v0.6.9\n   Compiling digest v0.10.7\n   Compiling jsonschema-regex v0.55.1\n   Compiling bitflags v2.13.1\n   Compiling data-encoding v2.11.1\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling cpufeatures v0.2.17\n   Compiling uuid-simd v0.8.0\n   Compiling fallible-iterator v0.3.0\n   Compiling sha2 v0.10.9\n   Compiling uuid v1.23.5\n   Compiling fs2 v0.4.3\n   Compiling base64 v0.22.1\n   Compiling fancy-regex v0.19.0\n   Compiling regex v1.13.1\n   Compiling strum v0.28.0\n   Compiling fluent-uri v0.4.1\n   Compiling email_address v0.2.9\n   Compiling jsonschema-value v0.55.1\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n   Compiling rusqlite v0.40.2\n   Compiling sts2-gateway v0.0.0 (<host-path>\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.91s\n     Running tests/recovery.rs (<host-path>\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 209769,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling libc v0.2.189\n   Compiling autocfg v1.5.1\n   Compiling cfg-if v1.0.4\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling getrandom v0.3.4\n   Compiling zmij v1.0.23\n   Compiling zerocopy v0.8.56\n   Compiling parking_lot_core v0.9.12\n   Compiling shlex v2.0.1\n   Compiling generic-array v0.14.7\n   Compiling ahash v0.8.12\n   Compiling serde_json v1.0.151\n   Compiling smallvec v1.16.0\n   Compiling ref-cast v1.0.27\n   Compiling typenum v1.20.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling regex-syntax v0.8.11\n   Compiling aho-corasick v1.1.5\n   Compiling cc v1.4.5\n   Compiling num-traits v0.2.19\n   Compiling scopeguard v1.2.0\n   Compiling syn v3.0.3\n   Compiling pkg-config v0.3.34\n   Compiling once_cell v1.21.4\n   Compiling itoa v1.0.18\n   Compiling vcpkg v0.2.15\n   Compiling lock_api v0.4.14\n   Compiling syn v2.0.119\n   Compiling getrandom v0.4.3\n   Compiling allocator-api2 v0.2.21\n   Compiling equivalent v1.0.2\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling heck v0.5.0\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling regex-automata v0.4.18\n   Compiling foldhash v0.2.0\n   Compiling libsqlite3-sys v0.38.2\n   Compiling borrow-or-share v0.2.4\n   Compiling bit-vec v0.8.0\n   Compiling unicode-general-category v1.1.0\n   Compiling hashbrown v0.17.1\n   Compiling bit-set v0.8.0\n   Compiling parking_lot v0.12.5\n   Compiling block-buffer v0.10.4\n   Compiling crypto-common v0.1.7\n   Compiling num-rational v0.4.2\n   Compiling num-cmp v0.1.0\n   Compiling outref v0.5.2\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling num v0.4.3\n   Compiling fraction v0.17.0\n   Compiling strum_macros v0.28.0\n   Compiling winnow v1.0.4\n   Compiling percent-encoding v2.3.2\n   Compiling micromap v0.3.0\n   Compiling bytecount v0.6.9\n   Compiling vsimd v0.8.0\n   Compiling regex v1.13.1\n   Compiling fancy-regex v0.19.0\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling uuid-simd v0.8.0\n   Compiling digest v0.10.7\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling strum v0.28.0\n   Compiling serde_spanned v1.1.1\n   Compiling jsonschema-regex v0.55.1\n   Compiling data-encoding v2.11.1\n   Compiling fallible-iterator v0.3.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling bitflags v2.13.1\n   Compiling cpufeatures v0.2.17\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling sha2 v0.10.9\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling uuid v1.23.5\n   Compiling fs2 v0.4.3\n   Compiling base64 v0.22.1\n   Compiling fluent-uri v0.4.1\n   Compiling jsonschema-value v0.55.1\n   Compiling email_address v0.2.9\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n   Compiling rusqlite v0.40.2\n   Compiling sts2-gateway v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 3m 29s\n",
       "issues": []
     },
     "sts2-harness": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 159276,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling cfg-if v1.0.4\n   Compiling libc v0.2.189\n   Compiling typenum v1.20.1\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling zmij v1.0.23\n   Compiling find-msvc-tools v0.1.12\n   Compiling simd-adler32 v0.3.10\n   Compiling shlex v2.0.1\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling cc v1.4.5\n   Compiling generic-array v0.14.7\n   Compiling pkg-config v0.3.34\n   Compiling adler2 v2.0.1\n   Compiling vcpkg v0.2.15\n   Compiling itoa v1.0.18\n   Compiling cpufeatures v0.3.1\n   Compiling memchr v2.8.3\n   Compiling serde v1.0.229\n   Compiling zeroize v1.9.0\n   Compiling crc32fast v1.5.1\n   Compiling getrandom v0.4.3\n   Compiling subtle v2.6.1\n   Compiling cpufeatures v0.2.17\n   Compiling bitflags v2.13.2\n   Compiling miniz_oxide v0.9.1\n   Compiling rustix v1.1.4\n   Compiling hybrid-array v0.4.15\n   Compiling getrandom v0.3.4\n   Compiling syn v3.0.5\n   Compiling opaque-debug v0.3.1\n   Compiling getrandom v0.2.17\n   Compiling errno v0.3.14\n   Compiling rand_core v0.6.4\n   Compiling signal-hook-registry v1.4.8\n   Compiling flate2 v1.1.10\n   Compiling mio v1.2.3\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling miniz_oxide v0.8.9\n   Compiling fdeflate v0.3.7\n   Compiling fallible-iterator v0.3.0\n   Compiling libsqlite3-sys v0.38.2\n   Compiling crypto-common v0.1.7\n   Compiling inout v0.1.4\n   Compiling universal-hash v0.5.1\n   Compiling cipher v0.4.4\n   Compiling poly1305 v0.8.0\n   Compiling aead v0.5.2\n   Compiling digest v0.11.3\n   Compiling chacha20 v0.9.1\n   Compiling smallvec v1.16.0\n   Compiling pin-project-lite v0.2.17\n   Compiling sha2 v0.11.0\n   Compiling bytes v1.12.1\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling linux-raw-sys v0.12.1\n   Compiling chacha20poly1305 v0.10.1\n   Compiling png v0.18.1\n   Compiling uuid v1.23.5\n   Compiling ryu-js v1.0.2\n   Compiling winnow v1.0.4\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling windows-link v0.2.1\n   Compiling windows-sys v0.61.2\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-expert-state-package v0.0.0 (<host-path>\n   Compiling serde_derive v1.0.229\n   Compiling tokio-macros v2.7.2\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling tokio v1.53.1\n   Compiling sts2-harness-windows-boundary v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (https://github.com/AI-Ascension/sts2-protocol.git?rev=0bc689eabc5542ede2b09b030d9ea32daa8a73e7#0bc689ea)\n   Compiling sts2-patch-diff v0.1.0 (<host-path>\n   Compiling rusqlite v0.40.2\n   Compiling sts2-harness v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 2m 39s\n",
+          "issues": []
+        },
+        {
+          "name": "recovery-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-harness",
+            "--test",
+            "completed_resume_process",
+            "--test",
+            "execution_store",
+            "--test",
+            "replay",
+            "--test",
+            "phase2_recovery"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 85026,
+          "stdout_tail": "\nrunning 7 tests\ntest process_support::tests::drain_stream_bounds_repeated_interrupted_reads ... ok\ntest process_support::tests::drain_stream_bounds_a_continuous_reader_to_one_drain_call ... ok\ntest bounded_child_output_limit_reaps_the_owned_process_group ... ok\ntest bounded_child_contains_a_pipe_holding_descendant ... ok\ntest bounded_child_timeout_reaps_the_owned_process_group ... ok\ntest interrupted_unknown_resume_is_denied_before_external_calls ... ok\ntest completed_resume_returns_the_stored_record_without_external_calls ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s\n\n\nrunning 46 tests\ntest operation_identity::action_identity_rejects_digest_size_and_catalog_mismatches ... ok\ntest default_store_configuration_pins_the_published_recovery_schema ... ok\ntest operation_identity::action_identity_requires_a_bounded_canonical_unique_envelope ... ok\ntest checkpoint_reconstruction_copies_the_verified_boundary_and_preserves_attempt_history ... ok\ntest catalog::checkpoint_catalog_bytes_survive_reopen_and_reconstruction ... ok\ntest completion_and_job_claim_are_durable_before_acknowledgement ... ok\ntest operation_identity::operation_intent_is_durable_idempotent_and_unknown_is_reconciled_without_redispatch ... ok\ntest operation_identity::pending_action_survives_file_store_restart_for_recovery_admission ... ok\ntest operation_identity::complete_action_identity_survives_file_store_reopen ... ok\ntest operation_identity::catalog::legacy_operation_catalog_digest_is_retained_without_inventing_raw_bytes ... ok\ntest provider_reservation_is_conservative_and_completed_decisions_are_reusable ... ok\ntest oversized_result::legacy_null_result_remains_non_replayable_but_readable ... ok\ntest oversized_result::complete_existing_read_rejects_oversized_projection ... ok\ntest recovery::explicit_resume_entrypoint_starts_only_missing_episodes_and_requires_reconciliation ... ok\ntest recovery::fingerprint_mismatch_and_unknown_attempt_never_start_new_work_implicitly ... ok\ntest recovery::missing_or_empty_state_is_not_recreated_as_a_new_execution_epoch ... ok\ntest catalog::checkpoint_reads_reject_oversized_and_malformed_catalog_bytes ... ok\ntest operation_identity::catalog::operation_reads_reject_oversized_and_malformed_payloads_before_materializing_them ... ok\ntest operation_identity::catalog::operation_reads_reject_partial_legacy_action_identity_rows ... ok\ntest worker::completion_is_projected_from_existing_episode_and_ack_is_exactly_idempotent ... ok\ntest worker::duplicate_tuple_is_idempotent_but_conflicting_or_rebound_identity_is_rejected ... ok\ntest worker::stale_pause_and_control_boot_cannot_reopen_admission ... ok\ntest oversized_result::decision_start_read_rejects_oversized_projection ... ok\ntest oversized_result::resume_read_rejects_wrong_sqlite_type ... ok\ntest operation_identity::catalog::operation_reads_reject_matching_digest_malformed_and_hash_mismatch_payloads ... ok\ntest worker::worker_wire_identities_require_canonical_uuid4_and_bounded_component_ids ... ok\ntest worker::worker_admission_binds_control_to_tuple_deployment_owner_and_profile ... ok\ntest worker::unknown_reservation_survives_new_worker_boot_and_stopped_lookup ... ok\ntest worker::unknown_reservation_projects_a_durable_terminal_without_releasing_the_job ... ok\ntest worker_safety::failed_worker_completion_retains_failed_job_state ... ok\ntest provider_result::result_payload_is_bounded_digest_bound_and_tamper_evident ... ok\ntest worker_safety::legacy_null_terminal_record_remains_a_nonterminal_handoff ... ok\ntest worker_safety::execution_permit_is_bound_to_the_store_incarnation ... ok\ntest worker_safety::only_fresh_admission_authorizes_one_worker_execution ... ok\ntest worker_safety::newer_control_fences_an_already_issued_execution_permit ... ok\ntest sqlite_store_is_wal_full_and_survives_reopen_without_resetting_state ... ok\ntest oversized_result::reuse_read_rejects_wrong_sqlite_type ... ok\ntest oversized_result::substantially_oversized_result_blob_is_rejected_before_rust_copy ... ok\ntest provider_result::duplicate_completion_with_conflicting_result_metadata_is_rejected ... ok\ntest worker::worker_tuple_survives_file_reopen_without_replacing_identity ... ok\ntest operation_identity::catalog::operation_reads_reject_stray_malformed_and_oversized_catalog_bytes ... ok\ntest worker::completion_transaction_failure_rolls_back_receipt_and_episode_projection ... ok\ntest worker_safety::reopened_store_can_observe_a_duplicate_but_cannot_use_old_permit ... ok\ntest worker_safety::duplicate_terminal_rejects_incompatible_durable_completion ... ok\ntest worker_safety::terminal_record_projection_rejects_oversized_blobs_and_wrong_storage_types ... ok\ntest worker_safety::terminal_reference_uses_the_wire_utf8_byte_bound_and_roundtrips_ack ... ok\n\ntest result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s\n\n\nrunning 3 tests\ntest p2_f062_provider_write_timeout_retains_ambiguous_attempt_without_retransmit ... ok\ntest p2_f061_crash_after_resume_claim_keeps_unknown_and_denies_new_input ... ok\ntest p2_f063_game_dispatch_reconciles_the_same_operation_without_a_new_id ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n\nrunning 4 tests\ntest replay_fingerprint_binds_evidence_and_every_record_identity ... ok\ntest replay_fingerprint_delimits_adjacent_variable_width_fields ... ok\ntest typed_replay_stops_at_sequence_divergence_and_payload_firewall_rejects_privileged_data ... ok\ntest typed_replay_counts_each_evidence_class_without_merging_unknowns ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+          "stderr_tail": "   Compiling libc v0.2.189\n   Compiling cfg-if v1.0.4\n   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling version_check v0.9.5\n   Compiling typenum v1.20.1\n   Compiling serde_core v1.0.229\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling zmij v1.0.23\n   Compiling getrandom v0.3.4\n   Compiling serde_json v1.0.151\n   Compiling simd-adler32 v0.3.10\n   Compiling smallvec v1.16.0\n   Compiling itoa v1.0.18\n   Compiling find-msvc-tools v0.1.12\n   Compiling shlex v2.0.1\n   Compiling vcpkg v0.2.15\n   Compiling pkg-config v0.3.34\n   Compiling generic-array v0.14.7\n   Compiling cc v1.4.5\n   Compiling adler2 v2.0.1\n   Compiling crc32fast v1.5.1\n   Compiling const-oid v0.10.2\n   Compiling cpufeatures v0.2.17\n   Compiling bitflags v2.13.2\n   Compiling getrandom v0.4.3\n   Compiling subtle v2.6.1\n   Compiling syn v3.0.5\n   Compiling zeroize v1.9.0\n   Compiling miniz_oxide v0.9.1\n   Compiling rustix v1.1.4\n   Compiling opaque-debug v0.3.1\n   Compiling getrandom v0.2.17\n   Compiling errno v0.3.14\n   Compiling rand_core v0.6.4\n   Compiling hybrid-array v0.4.15\n   Compiling cpufeatures v0.3.1\n   Compiling signal-hook-registry v1.4.8\n   Compiling flate2 v1.1.10\n   Compiling crypto-common v0.2.2\n   Compiling crypto-common v0.1.7\n   Compiling inout v0.1.4\n   Compiling block-buffer v0.12.1\n   Compiling universal-hash v0.5.1\n   Compiling cipher v0.4.4\n   Compiling aead v0.5.2\n   Compiling mio v1.2.3\n   Compiling poly1305 v0.8.0\n   Compiling miniz_oxide v0.8.9\n   Compiling fdeflate v0.3.7\n   Compiling linux-raw-sys v0.12.1\n   Compiling chacha20 v0.9.1\n   Compiling bytes v1.12.1\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling fallible-iterator v0.3.0\n   Compiling pin-project-lite v0.2.17\n   Compiling chacha20poly1305 v0.10.1\n   Compiling uuid v1.23.5\n   Compiling libsqlite3-sys v0.38.2\n   Compiling ryu-js v1.0.2\n   Compiling png v0.18.1\n   Compiling autocfg v1.5.1\n   Compiling zerocopy v0.8.57\n   Compiling ahash v0.8.12\n   Compiling parking_lot_core v0.9.12\n   Compiling ref-cast v1.0.27\n   Compiling regex-syntax v0.8.11\n   Compiling aho-corasick v1.1.5\n   Compiling num-traits v0.2.19\n   Compiling once_cell v1.21.4\n   Compiling scopeguard v1.2.0\n   Compiling lock_api v0.4.14\n   Compiling syn v2.0.119\n   Compiling foldhash v0.2.0\n   Compiling heck v0.5.0\n   Compiling unicode-general-category v1.1.0\n   Compiling bit-vec v0.8.0\n   Compiling borrow-or-share v0.2.4\n   Compiling equivalent v1.0.2\n   Compiling allocator-api2 v0.2.21\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling hashbrown v0.17.1\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling bit-set v0.8.0\n   Compiling parking_lot v0.12.5\n   Compiling percent-encoding v2.3.2\n   Compiling micromap v0.3.0\n   Compiling regex-automata v0.4.18\n   Compiling outref v0.5.2\n   Compiling vsimd v0.8.0\n   Compiling num-cmp v0.1.0\n   Compiling bytecount v0.6.9\n   Compiling jsonschema-regex v0.55.1\n   Compiling uuid-simd v0.8.0\n   Compiling data-encoding v2.11.1\n   Compiling serde_derive v1.0.229\n   Compiling tokio-macros v2.7.2\n   Compiling ref-cast-impl v1.0.27\n   Compiling strum_macros v0.28.0\n   Compiling num-rational v0.4.2\n   Compiling num v0.4.3\n   Compiling fraction v0.17.0\n   Compiling tokio v1.53.1\n   Compiling fancy-regex v0.19.1\n   Compiling regex v1.13.1\n   Compiling strum v0.28.0\n   Compiling sts2-protocol v0.0.0 (https://github.com/AI-Ascension/sts2-protocol.git?rev=0bc689eabc5542ede2b09b030d9ea32daa8a73e7#0bc689ea)\n   Compiling fluent-uri v0.4.1\n   Compiling email_address v0.2.9\n   Compiling jsonschema-value v0.55.1\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n   Compiling rusqlite v0.40.2\n   Compiling sts2-harness v0.0.0 (<host-path>\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 22s\n     Running tests/completed_resume_process.rs (<host-path>\n     Running tests/execution_store.rs (<host-path>\n     Running tests/phase2_recovery.rs (<host-path>\n     Running tests/replay.rs (<host-path>\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 276568,
-      "stdout_tail": "",
-      "stderr_tail": "    Blocking waiting for file lock on package cache\n   Compiling cfg-if v1.0.4\n   Compiling libc v0.2.189\n   Compiling typenum v1.20.1\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling zmij v1.0.23\n   Compiling shlex v2.0.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling simd-adler32 v0.3.10\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling cc v1.4.5\n   Compiling pkg-config v0.3.34\n   Compiling adler2 v2.0.1\n   Compiling vcpkg v0.2.15\n   Compiling itoa v1.0.18\n   Compiling serde v1.0.229\n   Compiling zeroize v1.9.0\n   Compiling crc32fast v1.5.1\n   Compiling hybrid-array v0.4.15\n   Compiling generic-array v0.14.7\n   Compiling memchr v2.8.3\n   Compiling cpufeatures v0.3.1\n   Compiling syn v3.0.5\n   Compiling getrandom v0.4.3\n   Compiling subtle v2.6.1\n   Compiling crypto-common v0.2.2\n   Compiling block-buffer v0.12.1\n   Compiling cpufeatures v0.2.17\n   Compiling bitflags v2.13.2\n   Compiling miniz_oxide v0.9.1\n   Compiling rustix v1.1.4\n   Compiling getrandom v0.3.4\n   Compiling getrandom v0.2.17\n   Compiling libsqlite3-sys v0.38.2\n   Compiling errno v0.3.14\n   Compiling opaque-debug v0.3.1\n   Compiling rand_core v0.6.4\n   Compiling signal-hook-registry v1.4.8\n   Compiling flate2 v1.1.10\n   Compiling inout v0.1.4\n   Compiling crypto-common v0.1.7\n   Compiling mio v1.2.3\n   Compiling digest v0.11.3\n   Compiling miniz_oxide v0.8.9\n   Compiling cipher v0.4.4\n   Compiling universal-hash v0.5.1\n   Compiling aead v0.5.2\n   Compiling poly1305 v0.8.0\n   Compiling fdeflate v0.3.7\n   Compiling sha2 v0.11.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling chacha20 v0.9.1\n   Compiling pin-project-lite v0.2.17\n   Compiling fallible-iterator v0.3.0\n   Compiling smallvec v1.16.0\n   Compiling bytes v1.12.1\n   Compiling linux-raw-sys v0.12.1\n   Compiling png v0.18.1\n   Compiling chacha20poly1305 v0.10.1\n   Compiling uuid v1.23.5\n   Compiling ryu-js v1.0.2\n   Compiling winnow v1.0.4\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling windows-link v0.2.1\n   Compiling windows-sys v0.61.2\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling serde_derive v1.0.229\n   Compiling tokio-macros v2.7.2\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-expert-state-package v0.0.0 (<host-path>\n   Compiling tokio v1.53.1\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-harness-windows-boundary v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (https://github.com/AI-Ascension/sts2-protocol.git?rev=0bc689eabc5542ede2b09b030d9ea32daa8a73e7#0bc689ea)\n   Compiling sts2-patch-diff v0.1.0 (<host-path>\n   Compiling rusqlite v0.40.2\n   Compiling sts2-harness v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 4m 35s\n",
       "issues": []
     },
     "sts2-mcp-server": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 11112,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-mcp-server v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 11.03s\n",
+          "issues": []
+        },
+        {
+          "name": "artifact-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-mcp-server",
+            "--test",
+            "runtime_v2_artifact"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 28226,
+          "stdout_tail": "\nrunning 1 test\ntest runtime_v2_mapping_consumes_the_handed_off_artifact_identity ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling autocfg v1.5.1\n   Compiling serde_core v1.0.229\n   Compiling libc v0.2.189\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling zmij v1.0.23\n   Compiling getrandom v0.3.4\n   Compiling zerocopy v0.8.56\n   Compiling version_check v0.9.5\n   Compiling serde_json v1.0.151\n   Compiling regex-syntax v0.8.11\n   Compiling ahash v0.8.12\n   Compiling parking_lot_core v0.9.12\n   Compiling ref-cast v1.0.27\n   Compiling itoa v1.0.18\n   Compiling scopeguard v1.2.0\n   Compiling smallvec v1.16.0\n   Compiling aho-corasick v1.1.5\n   Compiling once_cell v1.21.4\n   Compiling lock_api v0.4.14\n   Compiling borrow-or-share v0.2.4\n   Compiling num-traits v0.2.19\n   Compiling allocator-api2 v0.2.21\n   Compiling unicode-general-category v1.1.0\n   Compiling bit-vec v0.8.0\n   Compiling heck v0.5.0\n   Compiling foldhash v0.2.0\n   Compiling equivalent v1.0.2\n   Compiling bit-set v0.8.0\n   Compiling hashbrown v0.17.1\n   Compiling micromap v0.3.0\n   Compiling bytecount v0.6.9\n   Compiling outref v0.5.2\n   Compiling percent-encoding v2.3.2\n   Compiling vsimd v0.8.0\n   Compiling parking_lot v0.12.5\n   Compiling num-cmp v0.1.0\n   Compiling jsonschema-regex v0.54.0\n   Compiling syn v3.0.4\n   Compiling regex-automata v0.4.18\n   Compiling syn v2.0.119\n   Compiling uuid-simd v0.8.0\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling sts2-mcp-server v0.0.0 (<host-path>\n   Compiling data-encoding v2.11.1\n   Compiling num-rational v0.4.2\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling fancy-regex v0.19.0\n   Compiling regex v1.13.1\n   Compiling num v0.4.3\n   Compiling strum_macros v0.28.0\n   Compiling fraction v0.17.0\n   Compiling strum v0.28.0\n   Compiling fluent-uri v0.4.1\n   Compiling email_address v0.2.9\n   Compiling jsonschema-value v0.54.0\n   Compiling referencing v0.54.0\n   Compiling jsonschema v0.54.0\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.16s\n     Running tests/runtime_v2_artifact.rs (<host-path>\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 34705,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling sts2-mcp-server v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 34.36s\n",
       "issues": []
     },
     "sts2-protocol": {
       "status": "pass",
-      "program": "cargo",
-      "args": [
-        "+1.97.1",
-        "build",
-        "--locked",
-        "--release"
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "build",
+            "--locked",
+            "--release"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 18947,
+          "stdout_tail": "",
+          "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling typenum v1.20.1\n   Compiling winnow v1.0.4\n   Compiling zmij v1.0.23\n   Compiling serde_json v1.0.151\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling serde v1.0.229\n   Compiling const-oid v0.10.2\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling memchr v2.8.3\n   Compiling itoa v1.0.18\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.15\n   Compiling syn v3.0.3\n   Compiling crypto-common v0.2.2\n   Compiling block-buffer v0.12.1\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_derive v1.0.229\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 18.88s\n",
+          "issues": []
+        },
+        {
+          "name": "consumer-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-protocol",
+            "--test",
+            "coop_native_consumer_conformance"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 29991,
+          "stdout_tail": "\nrunning 1 test\ntest serialized_consumer_evidence_registers_three_component_consumers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+          "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling autocfg v1.5.1\n   Compiling serde_core v1.0.229\n   Compiling libc v0.2.189\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling zmij v1.0.23\n   Compiling version_check v0.9.5\n   Compiling serde_json v1.0.151\n   Compiling typenum v1.20.1\n   Compiling zerocopy v0.8.55\n   Compiling getrandom v0.3.4\n   Compiling ref-cast v1.0.26\n   Compiling regex-syntax v0.8.11\n   Compiling itoa v1.0.18\n   Compiling ahash v0.8.12\n   Compiling num-traits v0.2.19\n   Compiling parking_lot_core v0.9.12\n   Compiling aho-corasick v1.1.4\n   Compiling smallvec v1.15.2\n   Compiling once_cell v1.21.4\n   Compiling scopeguard v1.2.0\n   Compiling syn v3.0.3\n   Compiling hybrid-array v0.4.15\n   Compiling lock_api v0.4.14\n   Compiling syn v2.0.119\n   Compiling bit-vec v0.8.0\n   Compiling borrow-or-share v0.2.4\n   Compiling unicode-general-category v1.1.0\n   Compiling allocator-api2 v0.2.21\n   Compiling equivalent v1.0.2\n   Compiling foldhash v0.2.0\n   Compiling num-integer v0.1.46\n   Compiling num-complex v0.4.6\n   Compiling const-oid v0.10.2\n   Compiling crypto-common v0.2.2\n   Compiling block-buffer v0.12.1\n   Compiling heck v0.5.0\n   Compiling parking_lot v0.12.5\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling regex-automata v0.4.18\n   Compiling hashbrown v0.17.1\n   Compiling bit-set v0.8.0\n   Compiling percent-encoding v2.3.2\n   Compiling digest v0.11.3\n   Compiling micromap v0.3.0\n   Compiling vsimd v0.8.0\n   Compiling bytecount v0.6.9\n   Compiling outref v0.5.2\n   Compiling num-cmp v0.1.0\n   Compiling cpufeatures v0.3.1\n   Compiling uuid-simd v0.8.0\n   Compiling sha2 v0.11.0\n   Compiling num-rational v0.4.2\n   Compiling jsonschema-regex v0.55.1\n   Compiling strum_macros v0.28.0\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.26\n   Compiling data-encoding v2.11.0\n   Compiling num v0.4.3\n   Compiling fraction v0.17.0\n   Compiling fancy-regex v0.19.0\n   Compiling regex v1.13.1\n   Compiling strum v0.28.0\n   Compiling fluent-uri v0.4.1\n   Compiling email_address v0.2.9\n   Compiling sts2-protocol v0.0.0 (<host-path>\n   Compiling jsonschema-value v0.55.1\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.94s\n     Running tests/coop_native_consumer_conformance.rs (<host-path>\n",
+          "issues": []
+        }
       ],
-      "working_directory": "<host-path>",
-      "exit_code": 0,
-      "timed_out": false,
-      "duration_millis": 29689,
-      "stdout_tail": "",
-      "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling typenum v1.20.1\n   Compiling zmij v1.0.23\n   Compiling winnow v1.0.4\n   Compiling serde v1.0.229\n   Compiling const-oid v0.10.2\n   Compiling serde_json v1.0.151\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling itoa v1.0.18\n   Compiling memchr v2.8.3\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.15\n   Compiling syn v3.0.3\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_derive v1.0.229\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 29.59s\n",
       "issues": []
     }
   },
