@@ -299,7 +299,7 @@ a source-only, component, fake-host, cross-build, or ignored-test result.
 The cross-machine resume wave is pinned by
 `docs/evidence/current-source-set-20260911.md` and
 `docs/evidence/release-set-verification-20260911.json`. The watchdog source
-commit is `91442893e13023e02dbe7a1cccac53012522c1de` on PR #11. It exposes the
+commit is `06c130726faaef2dd792881c7e9d3d039b6c732f` on PR #11. It exposes the
 already-authenticated quarantine operation through the executable CLI, adds a
 bounded read-only diagnostics command, and makes the Linux protected-tempdir
 fixture portable to minimal containers. Pinned format, standards, check,
@@ -314,10 +314,10 @@ The exact companion source heads are gateway
 `0bc689eabc5542ede2b09b030d9ea32daa8a73e7`, and game-core
 `f5daf69f4f2c43fddbb04e7799d32503f7066110`; each passed isolated locked
 format, strict Clippy, and all-target/all-feature test gates. Observability
-main at `687ad82b7bd6a4e1eefeed08aad901af83e29067` contains the persistent
+main at `630431716ebfbf86280f9fd56f19d6016ad7aeb2` contains the persistent
 bounded Collector queue/WAL and materialization repairs merged in PR #20. Its
 available persistence fixtures and pinned 0.160.0 binary configuration
-validation pass; the minimal static-probe fallback is under review in PR #22.
+validation pass; the minimal static-probe fallback is merged in PR #22.
 Docker/Podman, Compose rendering, image build, live queue recovery, and
 external service execution remain unavailable.
 
@@ -332,6 +332,6 @@ partial or unverified. The separate axes remain
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
 `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = watchdog PR #11 open; observability PR #20 merged
-and PR #22 open; not activated`. Nested-agent depth 2/3 remains unobserved because no
+`REMOTE_DELIVERY_STATUS = watchdog PR #11 open with hosted gates green;
+observability PRs #20 and #22 merged; not activated`. Nested-agent depth 2/3 remains unobserved because no
 spawn surface is exposed; no depth-4 bypass was attempted.

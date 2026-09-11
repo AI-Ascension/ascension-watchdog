@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T06:38:09Z",
+  "captured_at": "2026-09-11T06:53:43Z",
   "classification": "candidate-source-set-component-gates-not-release-admission",
   "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
   "source_set": {
     "ascension-watchdog": {
-      "revision": "91442893e13023e02dbe7a1cccac53012522c1de",
+      "revision": "06c130726faaef2dd792881c7e9d3d039b6c732f",
       "ref": "codex/watchdog-resume-20260911",
       "remote_pr": 11,
       "state": "open; source-tested implementation branch"
@@ -41,10 +41,10 @@
       "state": "current remote main"
     },
     "ai-agent-observability": {
-      "revision": "687ad82b7bd6a4e1eefeed08aad901af83e29067",
+      "revision": "630431716ebfbf86280f9fd56f19d6016ad7aeb2",
       "ref": "main",
       "remote_pr": 20,
-      "state": "merged; persistent Collector queue/WAL and materialization repairs on current main; PR #22 portability follow-up open"
+      "state": "merged; persistent Collector queue/WAL, materialization repairs, and static-probe portability on current main via PRs #20 and #22"
     }
   },
   "component_gates": {
@@ -62,10 +62,10 @@
     "sts2-protocol": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
     "sts2-game-core": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
     "ai-agent-observability": {
-      "fixtures": "pass: validation-regressions, bootstrap, collector-persistence, installer-guards, materialize-guards, query-provision, shell syntax, diff check; health-probe passes on follow-up PR #22",
+      "fixtures": "pass: validation-regressions, bootstrap, collector-persistence, installer-guards, materialize-guards, query-provision, shell syntax, diff check, and health-probe on current main",
       "collector_config": "pass with official otel/opentelemetry-collector-contrib 0.160.0 binary and health component-status feature gate",
       "compose_and_image": "not-run: Docker and Podman unavailable",
-      "remote_delivery": "persistence feature merged in PR #20; static-probe portability follow-up PR #22 open"
+      "remote_delivery": "persistence feature and static-probe portability fix merged in PRs #20 and #22"
     }
   },
   "artifacts": {

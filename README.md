@@ -52,7 +52,7 @@ The current resume wave exposes the authenticated `quarantine` operation and a
 bounded read-only `diagnostics` command. These are source-tested on PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11).
 Persistent OpenTelemetry exporter queues are now present on observability main
 through merged PR [#20](https://github.com/AI-Ascension/ai-agent-observability/pull/20).
-The follow-up portability fix for minimal static-probe environments is PR
+The portability fix for minimal static-probe environments is also merged in PR
 [#22](https://github.com/AI-Ascension/ai-agent-observability/pull/22);
 container rendering, image build, and live queue recovery remain unverified in
 this environment.
