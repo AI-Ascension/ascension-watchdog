@@ -50,20 +50,23 @@ The existing Windows workspace test lane invokes this preflight through
 `crates/watchdog/tests/windows_packaging.rs`. That test is a deployment-script
 gate only: it does not install, start, stop, or remove an SCM service.
 
-Validation from the isolated service-wiring worktree:
+The current Linux workspace validation for the packaging boundary is:
 
 ```text
-cargo fmt --all --check                                      # exit 0
-cargo test --locked -p ascension-watchdog --lib              # exit 0; 53 passed, 1 ignored
-cargo check --locked --target x86_64-pc-windows-gnu \
-  -p ascension-watchdog                                       # exit 0
-cargo clippy --locked --target x86_64-pc-windows-gnu \
-  -p ascension-watchdog --all-targets -- -D warnings         # exit 0
-cargo clippy --locked --target x86_64-pc-windows-gnu \
-  -p ascension-platform-windows --all-targets -- -D warnings # exit 0
-cargo test --locked --target x86_64-pc-windows-gnu \
-  -p ascension-watchdog --all-targets --no-run                # exit 0
+cargo +1.97.1 fmt --all -- --check
+cargo +1.97.1 test --locked -p ascension-watchdog \
+  --all-targets --all-features -- --test-threads=1          # 212 passed, 4 ignored
+cargo +1.97.1 clippy --workspace --all-targets --all-features \
+  --locked -- -D warnings
+cargo +1.97.1 check --locked --target x86_64-pc-windows-gnu \
+  -p ascension-platform-windows --all-targets
+cargo +1.97.1 clippy --locked --target x86_64-pc-windows-gnu \
+  -p ascension-platform-windows --all-targets -- -D warnings
 ```
 
-The Windows target binaries were compiled but not executed because this Linux
-workstation is not an authorized native Windows SCM test host.
+These commands pass locally. The full watchdog GNU-target check/no-run is not
+claimed here because the bundled SQLite build requires MinGW `gcc`, which is
+absent on this Linux workstation. Hosted Windows executes the complete
+workspace lane, including the native ACL reader test and packaging preflight;
+that evidence remains synthetic/native-hosted and does not claim SCM
+installation or live service recovery.

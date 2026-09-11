@@ -290,7 +290,10 @@ fn packaged_service_config_reader_accepts_the_fixed_acl_shape() -> Result<(), Pl
             "/grant:r",
             "*S-1-5-18:(F)",
             "*S-1-5-32-544:(F)",
-            "*S-1-5-80-1-2-3-4-5:(R)",
+            // A real virtual service SID is required because icacls resolves
+            // raw service SIDs before writing the ACE. TrustedInstaller is a
+            // built-in Windows service; no SCM mutation is performed here.
+            "*S-1-5-80-956008885-3418522649-1831038044-1853292635-2271478464:(R)",
         ],
     )?;
     run_icacls(&path, &["/setowner", "*S-1-5-18"])?;

@@ -6,7 +6,23 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$repository = (Resolve-Path -LiteralPath $RepositoryPath).Path
+function ConvertTo-StandardWindowsPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if ($Path.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) {
+        return ('\\' + $Path.Substring(8))
+    }
+    if ($Path.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) {
+        return $Path.Substring(4)
+    }
+    return $Path
+}
+
+$repositoryInput = ConvertTo-StandardWindowsPath -Path $RepositoryPath
+$repository = ConvertTo-StandardWindowsPath -Path ((Resolve-Path -LiteralPath $repositoryInput).Path)
 $installScript = Join-Path $repository 'deploy/windows/install.ps1'
 $uninstallScript = Join-Path $repository 'deploy/windows/uninstall.ps1'
 
