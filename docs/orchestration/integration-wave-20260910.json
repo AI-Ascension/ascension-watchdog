@@ -9,9 +9,9 @@
     "watchdog_source_tested_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_implementation_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
-    "hosted_runs": [34544119259, 34544120308, 34544119194, 34544120329],
-    "hosted_run_status_at_capture": "latest PR #9 Rust/synthetic runs 34544119259 and 34544120308 passed on Ubuntu and Windows; standards runs 34544119194 and 34544120329 passed; native Windows service-session remains UNVERIFIED on runner session 2",
+    "watchdog_last_observed_pr_head": "415907330e0e0ee5a6c13e0056713f730104c930",
+    "hosted_runs": [34544722084, 34544723335, 34544722080, 34544723227],
+    "hosted_run_status_at_capture": "latest PR #9 Rust/synthetic runs 34544722084 and 34544723335 passed on Ubuntu and Windows; standards runs 34544722080 and 34544723227 passed; native Windows service-session remains UNVERIFIED on runner session 2",
     "native_worker_smoke": "harness PR66 hardening 58dede2 (merged main a0ace671) image 5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f; 1 passed in 25.33s; Linux process-boundary only"
   },
   "delegation": {
@@ -45,7 +45,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
         "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Source commits 053d32c and 0542ab8 add release activation/rollback and strict selector/receipt binding; current head f5eaf5e adds collision-safe fixture allocation and records the native worker smoke. Hosted validation runs 34525217061 and 34525218190 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; source commit f5eaf5e with current docs/evidence PR head c1d2269; latest hosted validation runs 34544119259 and 34544120308 plus standards runs 34544119194 and 34544120329 passed"
+      "remote": "pushed to codex/watchdog-integrated-20260910; source commit f5eaf5e with current docs/evidence PR head 4159073; latest hosted validation runs 34544722084 and 34544723335 plus standards runs 34544722080 and 34544723227 passed"
     },
     "gateway": {
       "commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",

@@ -9,7 +9,7 @@ does not declare an implementation or release complete.
 
 The authoritative watchdog source is PR #9 source
 `f5eaf5e35be025015a28da931aa973a0ade8f0ef` with current docs/evidence head
-`e4728391cf66c3a3730c78439238598bb6e76769` (open draft, latest hosted
+`415907330e0e0ee5a6c13e0056713f730104c930` (open draft, latest hosted
 Ubuntu/Windows and standards checks passed). The exact Linux worker producer is
 merged harness PR #66 feature head
 `58dede2eb661133d8910a1f785e8a90346efe8dd`, now harness main

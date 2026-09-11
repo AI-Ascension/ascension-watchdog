@@ -5,7 +5,7 @@
   "supersedes_checkpoint": "transport-review-checkpoint.json",
   "watchdog": {
     "tested_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
-    "pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
+    "pr_head": "415907330e0e0ee5a6c13e0056713f730104c930",
     "integrated_platform_commit": "f5eaf5e",
     "pull_request": 9,
     "root_test_command": "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast",
@@ -18,7 +18,7 @@
     "windows_native_execution": "unverified",
     "scope": "watchdog, authenticated worker handoff, Gateway health binding, Linux broker lifecycle, release staging, backup, launch authority, full synthetic fault fixture",
     "source_matches_tested_platform_commit": true,
-    "hosted_runs": [34544119259, 34544120308, 34544119194, 34544120329],
+    "hosted_runs": [34544722084, 34544723335, 34544722080, 34544723227],
     "hosted_status_at_capture": "Rust/synthetic and standards runs passed on Ubuntu and Windows; Windows service-session is explicitly UNVERIFIED on runner session 2",
     "native_worker_smoke": {
       "harness_pr": 66,
