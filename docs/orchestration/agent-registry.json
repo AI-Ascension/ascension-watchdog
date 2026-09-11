@@ -12,7 +12,7 @@
   "current_integration": {
     "watchdog_branch": "codex/watchdog-resume-20260911",
     "watchdog_commit": "a5bbd7614204c83874dd9ead850829b2f8685b82",
-    "watchdog_last_observed_pr_head": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+    "watchdog_last_observed_pr_head": "1e7abdc363528001980af7c19b54645d549a24fa",
     "watchdog_pull_request": 11,
     "harness_branch": "main",
     "harness_commit": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",

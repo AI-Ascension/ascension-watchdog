@@ -12,7 +12,7 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "a5bbd7614204c83874dd9ead850829b2f8685b82",
-      "last_observed_pr_head": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+      "last_observed_pr_head": "1e7abdc363528001980af7c19b54645d549a24fa",
       "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 11,
