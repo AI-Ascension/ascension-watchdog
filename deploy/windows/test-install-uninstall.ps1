@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$RepositoryPath = (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    [string]$RepositoryPath = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +42,7 @@ foreach ($fragment in @(
         '*S-1-5-32-544',
         'release ACL provisioning',
         'configuration ACL provisioning',
+        'configuration owner provisioning',
         '& $executable service install',
         'service was not started',
         'state and releases were preserved'
@@ -52,6 +53,10 @@ foreach ($fragment in @(
 }
 foreach ($fragment in @(
         '& $executable service uninstall',
+        'ExecutableSha256',
+        'Get-FileHash',
+        'watchdog.exe',
+        'ReparsePoint',
         'data-deletion',
         'state and releases were preserved'
     )) {
@@ -71,7 +76,8 @@ if ($inspectionOffset -lt 0 -or $serviceInstallOffset -le $inspectionOffset) {
 # Exercise the installer gates without invoking SCM. The first attempt must
 # stop at the verifier digest boundary. The second uses a deterministic failing
 # verifier and must stop before the candidate executable/service command. No
-# service, release selector, or owner database is touched by this fixture.
+# service, release selector, or owner database is touched by this fixture;
+# temporary fixture files are cleaned up below.
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('ascension-watchdog-package-' + [Guid]::NewGuid().ToString('N'))
 $release = Join-Path $scratch 'release'
 $config = Join-Path $scratch 'watchdog.json'
@@ -122,14 +128,21 @@ exit /b 7
 }
 
 # A missing config must be rejected before an uninstall command is invoked.
+$uninstallScratch = Join-Path ([IO.Path]::GetTempPath()) ('ascension-watchdog-uninstall-' + [Guid]::NewGuid().ToString('N'))
+$uninstallExecutable = Join-Path $uninstallScratch 'watchdog.exe'
+New-Item -ItemType Directory -Path $uninstallScratch -Force | Out-Null
+Set-Content -LiteralPath $uninstallExecutable -Value 'fixture-watchdog' -NoNewline
+$uninstallDigest = (Get-FileHash -LiteralPath $uninstallExecutable -Algorithm SHA256).Hash
 $uninstallRejected = $false
 try {
-    & $uninstallScript -ExecutablePath $installScript -ConfigPath (Join-Path $repository 'missing-watchdog.json')
+    & $uninstallScript -ExecutablePath $uninstallExecutable -ExecutableSha256 $uninstallDigest -ConfigPath (Join-Path $repository 'missing-watchdog.json')
 } catch {
     $uninstallRejected = $true
+} finally {
+    Remove-Item -LiteralPath $uninstallScratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 if (-not $uninstallRejected) {
     throw 'uninstaller accepted a missing owner-local configuration'
 }
 
-Write-Output 'Windows packaging parser and preflight gates passed; no SCM mutation was attempted.'
+Write-Output 'Windows packaging parser and preflight gates passed; no SCM mutation was attempted and temporary fixtures were removed.'

@@ -68,10 +68,11 @@ release verifier, rejects reparse points throughout the candidate release, and
 finishes `release inspect --manifest ... --root ...` before it mutates SCM; a
 manifest's presence is not release validation. It then resets inherited and
 explicit ACL entries and grants only SYSTEM/Administrators full control plus
-the selected service identity read/execute access to the release and read
-access to the config before registering SCM.
-`deploy/windows/uninstall.ps1` requires the owner-local config. Before opening
-its store or changing state, the native boundary queries SCM and binds the
+the fixed virtual service identity read/execute access to the release and read
+access to a SYSTEM-owned config before registering SCM.
+`deploy/windows/uninstall.ps1` requires a non-reparse `watchdog.exe` and its
+caller-supplied SHA-256, plus the owner-local config. Before opening its store
+or changing state, the native boundary queries SCM and binds the
 fixed service to the canonical executable and exact `daemon --service
 --config PATH` command line. A concrete binding is re-queried before the
 authenticated bounded SCM stop and again before deletion. The stopped service

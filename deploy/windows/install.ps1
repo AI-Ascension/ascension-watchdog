@@ -8,8 +8,8 @@ param(
 
     # This must be an independently protected verifier from the release stage,
     # not the candidate watchdog.exe being installed. Its digest is checked
-    # before execution; deployment still owns the verifier path ACL and the
-    # no-TOCTOU provisioning boundary.
+    # before execution; deployment owns the verifier path checks and ACL
+    # provisioning, while the native release reader remains the final gate.
     [Parameter(Mandatory = $true)]
     [string]$VerifierPath,
 
@@ -24,6 +24,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$defaultServiceAccount = 'NT SERVICE\ascension-watchdog'
+if (-not [StringComparer]::OrdinalIgnoreCase.Equals($ServiceAccount, $defaultServiceAccount)) {
+    throw "Windows packaging only provisions the fixed virtual service account: $defaultServiceAccount"
+}
 
 function Assert-PathIsNotReparse {
     param(
@@ -174,6 +179,11 @@ Invoke-Icacls -Arguments @(
     ('{0}:(R)' -f $ServiceAccount),
     '/C'
 ) -Operation 'configuration ACL provisioning'
+Invoke-Icacls -Arguments @(
+    $config,
+    '/setowner',
+    '*S-1-5-18'
+) -Operation 'configuration owner provisioning'
 
 # The Rust command validates the closed configuration and registers the
 # automatic-start service through the existing SCM API. It never receives a

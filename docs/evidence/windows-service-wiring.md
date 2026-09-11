@@ -19,10 +19,12 @@ rejects reparse points throughout the candidate release, and runs `release
 inspect --manifest ... --root ...` successfully before any SCM mutation; a
 manifest's presence alone is not validation. It then resets inherited/explicit
 ACL entries and protects the release and config for SYSTEM/Administrators while
-granting the selected service identity read-only access before registering SCM.
-Uninstallation first
-queries SCM and requires the fixed service name, own-process/automatic-start
-shape, canonical executable, and exact `daemon --service --config PATH`
+granting the fixed virtual service identity read-only access before registering
+SCM. The config owner is set to SYSTEM so the service's protected config reader
+and the operator's administrative read path agree on the same policy.
+Uninstallation first verifies a non-reparse `watchdog.exe` against the
+caller-supplied SHA-256, then queries SCM and requires the fixed service name,
+own-process/automatic-start shape, canonical executable, and exact `daemon --service --config PATH`
 binding. Only that concrete binding may receive the bounded stop and final
 delete re-query; the owner-local store is opened after SCM stop and must reach
 a clean `Stopped` reconciliation. A missing service is an idempotent no-op.
@@ -36,14 +38,13 @@ or SCM installation succeeded on a host.
 The package preflight is also available as:
 
 ```text
-pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-  -File deploy/windows/test-install-uninstall.ps1 \
-  -RepositoryPath .
+pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File deploy/windows/test-install-uninstall.ps1 -RepositoryPath .
 ```
 
 It parses both wrappers and verifies that mismatched verifier bytes and a
-failed release inspection stop before SCM mutation. It performs no service or
-filesystem installation.
+failed release inspection stop before SCM mutation. It creates only temporary
+fixture files, removes them in a cleanup block, and performs no target service
+or release installation.
 
 The existing Windows workspace test lane invokes this preflight through
 `crates/watchdog/tests/windows_packaging.rs`. That test is a deployment-script

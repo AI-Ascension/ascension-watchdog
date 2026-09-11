@@ -101,6 +101,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const LOCAL_ONLY_PIPE_MODE: u32 =
     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_REJECT_REMOTE_CLIENTS;
 const NONBLOCKING_MESSAGE_MODE: u32 = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+const SYSTEM_SID: &str = "S-1-5-18";
+const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+// The packaged service account receives `(R)` on the configuration file. The
+// mask below is the set of file/security rights that would let that account
+// change, delete, or re-permission the config. SYSTEM and Administrators are
+// intentionally allowed full control by the deployment boundary.
+const SERVICE_CONFIG_WRITE_MASK: u32 = 0x0000_0002 // FILE_WRITE_DATA
+    | 0x0000_0004 // FILE_APPEND_DATA
+    | 0x0000_0010 // FILE_WRITE_EA
+    | 0x0000_0040 // FILE_DELETE_CHILD
+    | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x0100_0000 // ACCESS_SYSTEM_SECURITY
+    | 0x4000_0000 // GENERIC_WRITE
+    | 0x1000_0000; // GENERIC_ALL
 
 /// Identity captured from the authenticated local named-pipe peer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -850,6 +868,41 @@ pub fn read_protected_payload_file(
     read_protected_file_handle(&file, max_bytes)
 }
 
+/// Read the owner-local watchdog configuration through a held Windows file
+/// handle. Credentials and job payloads continue to use
+/// [`read_protected_payload_file`], whose owner-only policy is intentionally
+/// stricter. A packaged config is SYSTEM-owned, has a protected DACL, grants
+/// SYSTEM/Administrators full control, and grants a virtual service SID read
+/// access only. The current-user owner-only ACL remains accepted for local
+/// development and synthetic Windows tests.
+pub fn read_protected_service_config_file(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Vec<u8>, PlatformError> {
+    if max_bytes == 0 || max_bytes > MAX_ADMIN_PIPE_FRAME {
+        return Err(PlatformError::Invalid(
+            "protected configuration bound is outside the platform limit".to_owned(),
+        ));
+    }
+    validate_local_protected_path(path)?;
+    let _ancestors = open_protected_ancestors(path)?;
+    let wide_path = wide_path(path)?;
+    let raw_file = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            GENERIC_READ | FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_SHARE_NONE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        )
+    };
+    let file = OwnedHandle::new(raw_file, "CreateFileW(service configuration)")?;
+    validate_service_config_file_handle(&file, "service configuration")?;
+    read_protected_file_handle(&file, max_bytes)
+}
+
 fn validate_local_protected_path(path: &Path) -> Result<(), PlatformError> {
     let components = path.components().collect::<Vec<_>>();
     if components.is_empty()
@@ -986,6 +1039,36 @@ fn validate_directory_handle(handle: &OwnedHandle) -> Result<(), PlatformError> 
 }
 
 fn validate_protected_file_handle(file: &OwnedHandle, label: &str) -> Result<(), PlatformError> {
+    validate_protected_file_handle_with_policy(file, label, ProtectedFileAcl::Credential)
+}
+
+fn validate_service_config_file_handle(
+    file: &OwnedHandle,
+    label: &str,
+) -> Result<(), PlatformError> {
+    let packaged =
+        validate_protected_file_handle_with_policy(file, label, ProtectedFileAcl::ServiceConfig);
+    if packaged.is_ok() {
+        return Ok(());
+    }
+    // Developer and synthetic Windows tests deliberately use the older
+    // owner-only ACL. Keep that narrow policy as a compatibility path; it
+    // still requires the current token as owner and every explicit ACE to be
+    // an allow entry for that exact SID.
+    validate_protected_file_handle_with_policy(file, label, ProtectedFileAcl::Credential)
+}
+
+#[derive(Clone, Copy)]
+enum ProtectedFileAcl {
+    Credential,
+    ServiceConfig,
+}
+
+fn validate_protected_file_handle_with_policy(
+    file: &OwnedHandle,
+    label: &str,
+    policy: ProtectedFileAcl,
+) -> Result<(), PlatformError> {
     let mut file_information =
         windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(file.raw(), &raw mut file_information) } == 0 {
@@ -1016,7 +1099,7 @@ fn validate_protected_file_handle(file: &OwnedHandle, label: &str) -> Result<(),
     if status != 0 {
         return Err(win32_error(&format!("GetSecurityInfo({label})"), status));
     }
-    let result = validate_credential_acl(owner, dacl, descriptor);
+    let result = validate_protected_acl(owner, dacl, descriptor, policy);
     if !descriptor.is_null() {
         unsafe { LocalFree(descriptor) };
     }
@@ -1072,20 +1155,31 @@ fn read_protected_file_handle(
 }
 
 #[allow(clippy::too_many_lines)]
-fn validate_credential_acl(
+fn validate_protected_acl(
     owner: *mut c_void,
     dacl: *mut windows_sys::Win32::Security::ACL,
     descriptor: *mut c_void,
+    policy: ProtectedFileAcl,
 ) -> Result<(), PlatformError> {
     if owner.is_null() || unsafe { IsValidSid(owner) } == 0 {
         return Err(PlatformError::Invalid(
-            "credential owner SID is invalid".to_owned(),
+            "protected file owner SID is invalid".to_owned(),
         ));
     }
-    let expected_sid = current_user_sid()?;
-    if sid_string(owner)? != expected_sid {
+    let owner_sid = sid_string(owner)?;
+    let expected_sid = match policy {
+        ProtectedFileAcl::Credential => Some(current_user_sid()?),
+        ProtectedFileAcl::ServiceConfig => None,
+    };
+    if let Some(expected_sid) = expected_sid.as_deref() {
+        if owner_sid != expected_sid {
+            return Err(PlatformError::IdentityMismatch(
+                "credential owner is not the service user".to_owned(),
+            ));
+        }
+    } else if owner_sid != SYSTEM_SID {
         return Err(PlatformError::IdentityMismatch(
-            "credential owner is not the service user".to_owned(),
+            "packaged service configuration owner is not SYSTEM".to_owned(),
         ));
     }
     if descriptor.is_null() {
@@ -1120,7 +1214,7 @@ fn validate_credential_acl(
     }
     if info.AceCount == 0 {
         return Err(PlatformError::IdentityMismatch(
-            "credential DACL has no owner allow entry".to_owned(),
+            "protected file DACL has no allow entry".to_owned(),
         ));
     }
     let dacl_address = dacl.cast::<u8>() as usize;
@@ -1138,6 +1232,9 @@ fn validate_credential_acl(
     let dacl_end = dacl_address
         .checked_add(acl_used)
         .ok_or_else(|| PlatformError::Invalid("ACL address range overflow".to_owned()))?;
+    let mut has_system = false;
+    let mut has_administrators = false;
+    let mut has_service = false;
     for index in 0..info.AceCount {
         let mut raw_ace = null_mut();
         if unsafe { GetAce(dacl, index, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
@@ -1189,16 +1286,71 @@ fn validate_credential_acl(
             || sid_length > dacl_end.saturating_sub(sid.cast::<u8>() as usize)
         {
             return Err(PlatformError::Invalid(
-                "credential allow ACE SID exceeds its bounded ACE".to_owned(),
+                "protected file allow ACE SID exceeds its bounded ACE".to_owned(),
             ));
         }
-        if unsafe { IsValidSid(sid) } == 0 || sid_string(sid)? != expected_sid {
+        if unsafe { IsValidSid(sid) } == 0 {
             return Err(PlatformError::IdentityMismatch(
-                "credential DACL grants a different SID".to_owned(),
+                "protected file DACL grants an invalid SID".to_owned(),
+            ));
+        }
+        let sid = sid_string(sid)?;
+        match policy {
+            ProtectedFileAcl::Credential => {
+                if Some(sid.as_str()) != expected_sid.as_deref() {
+                    return Err(PlatformError::IdentityMismatch(
+                        "credential DACL grants a different SID".to_owned(),
+                    ));
+                }
+            }
+            ProtectedFileAcl::ServiceConfig => {
+                let mask =
+                    unsafe { std::ptr::read_unaligned(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) }.Mask;
+                if sid == SYSTEM_SID {
+                    has_system = true;
+                    continue;
+                }
+                if sid == ADMINISTRATORS_SID {
+                    has_administrators = true;
+                    continue;
+                }
+                if !is_virtual_service_sid(&sid) {
+                    return Err(PlatformError::IdentityMismatch(
+                        "packaged service configuration DACL grants an unapproved SID".to_owned(),
+                    ));
+                }
+                has_service = true;
+                if mask & SERVICE_CONFIG_WRITE_MASK != 0 {
+                    return Err(PlatformError::IdentityMismatch(
+                        "packaged service configuration grants service write access".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    if matches!(policy, ProtectedFileAcl::ServiceConfig) {
+        // Require all three roles. SYSTEM and Administrators are the recovery
+        // and operator authorities; a virtual service SID is the sole runtime
+        // reader. A DACL containing only broad operator access must not be
+        // accepted as an installable service configuration.
+        if !has_system || !has_administrators || !has_service {
+            return Err(PlatformError::IdentityMismatch(
+                "packaged service configuration DACL must include SYSTEM, Administrators, and a virtual service SID".to_owned(),
             ));
         }
     }
     Ok(())
+}
+
+fn is_virtual_service_sid(sid: &str) -> bool {
+    let Some(suffix) = sid.strip_prefix("S-1-5-80-") else {
+        return false;
+    };
+    let parts = suffix.split('-').collect::<Vec<_>>();
+    parts.len() == 5
+        && parts
+            .into_iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn set_message_nonblocking(handle: HANDLE) -> Result<(), PlatformError> {
