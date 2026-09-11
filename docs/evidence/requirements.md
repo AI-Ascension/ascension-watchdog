@@ -293,3 +293,44 @@ after the remaining consumer/release adapters are integrated (or the release is
 explicitly scoped to the existing REST contract), followed by the independent
 native/live/reboot/soak matrix. No row above should be changed to complete from
 a source-only, component, fake-host, cross-build, or ignored-test result.
+
+## Resume-wave addendum — 2026-09-11
+
+The cross-machine resume wave is pinned by
+`docs/evidence/current-source-set-20260911.md` and
+`docs/evidence/release-set-verification-20260911.json`. The watchdog source
+commit is `91442893e13023e02dbe7a1cccac53012522c1de` on PR #11. It exposes the
+already-authenticated quarantine operation through the executable CLI, adds a
+bounded read-only diagnostics command, and makes the Linux protected-tempdir
+fixture portable to minimal containers. Pinned format, standards, check,
+warnings-denied Clippy, and serial full workspace all-target/all-feature tests
+pass, including the new diagnostics integration test.
+
+The exact companion source heads are gateway
+`5f531f602298de674bd31ed3f28a88359b02ca9d`, harness
+`00bd9e123a86fca39bbffb65b370aac7ed2c8218`, MCP
+`98ab84b3fad371b45b141e6d81dd9124769a4c59`, game-mod
+`bd8e90542dfc89366f820150c5c755e32716b1b0`, protocol
+`0bc689eabc5542ede2b09b030d9ea32daa8a73e7`, and game-core
+`f5daf69f4f2c43fddbb04e7799d32503f7066110`; each passed isolated locked
+format, strict Clippy, and all-target/all-feature test gates. Observability
+PR #21 is `b4130de9d35816ebbc9f1d3728dcb4f0a42547ca`; its persistent bounded
+Collector queue/WAL changes passed the available fixture suites and pinned
+0.160.0 binary configuration validation. Docker/Podman, Compose rendering,
+image build, live queue recovery, and external service execution remain
+unavailable.
+
+The current `coop-native-v1` schema and conformance bytes agree, but current
+consumer-conformance bindings differ between protocol, gateway/MCP, and
+harness. No unified cross-consumer build was found. Consequently S11, S13,
+S16-G/H, INV-12, FAULT-15, FAULT-21, and the native/live portions of S17 remain
+partial or unverified. The separate axes remain
+`IMPLEMENTATION_COMPLETE = watchdog patch complete; assignment incomplete`,
+`SYNTHETIC_INTEGRATION_VERIFIED = partial`,
+`WINDOWS_SERVICE_VERIFIED = unverified`,
+`LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
+`LIVE_HOST_RECOVERY_VERIFIED = unverified`,
+`COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
+`REMOTE_DELIVERY_STATUS = watchdog PR #11 and observability PR #21 open; not
+merged or activated`. Nested-agent depth 2/3 remains unobserved because no
+spawn surface is exposed; no depth-4 bypass was attempted.

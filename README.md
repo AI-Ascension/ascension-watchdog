@@ -2,9 +2,11 @@
 
 Deterministic Rust deployment supervision and crash recovery for AI-Ascension.
 
-Status: implementation in progress; no service, live-host recovery, reboot or soak
-validation is claimed. See the requirement matrix and evidence records as gates
-are implemented and independently verified.
+Status: watchdog implementation patch is in review; cross-repository release
+admission remains blocked. No service, live-host recovery, reboot or soak
+validation is claimed. See the [current source-set evidence](docs/evidence/current-source-set-20260911.md)
+and [machine-readable release checkpoint](docs/evidence/release-set-verification-20260911.json)
+for exact revisions and independent verification boundaries.
 
 The OS service manager owns the watchdog. The watchdog supervises gateway and
 harness executables. The gateway owns game lifecycle authority and uses a
@@ -46,6 +48,13 @@ integration remain separate delivery gates. The watchdog now source-tests a
 durable protected release selector and authenticated activation/rollback, but
 that is not evidence of a sealed cross-repository or native release handoff.
 
+The current resume wave exposes the authenticated `quarantine` operation and a
+bounded read-only `diagnostics` command. These are source-tested on PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11).
+Persistent OpenTelemetry exporter queues are staged separately in observability
+PR [#21](https://github.com/AI-Ascension/ai-agent-observability/pull/21);
+container rendering, image build, and live queue recovery remain unverified in
+this environment.
+
 An explicitly gated native Linux process-boundary smoke is recorded in
 [`docs/evidence/real-harness-worker.md`](docs/evidence/real-harness-worker.md).
 It launched the merged harness PR #66 hardening image `58dede2` from the watchdog process manager,
@@ -56,8 +65,8 @@ gateway/MCP children were synthetic HTTP-503 and `/usr/bin/true` faults, so it
 does not establish gameplay, provider, service, reboot, release, or soak
 evidence.
 
-The moving companion PR heads captured for the next integration review are
-listed in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json)
-with their non-activation evidence in
-[`docs/evidence/candidate-source-set-20260910.md`](docs/evidence/candidate-source-set-20260910.md).
-That candidate manifest must not be treated as an installed release.
+The moving companion heads captured for the next integration review are listed
+in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json),
+with the dated current record in
+[`docs/evidence/current-source-set-20260911.md`](docs/evidence/current-source-set-20260911.md).
+The candidate manifest must not be treated as an installed release.

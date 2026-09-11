@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-11T06:24:22Z",
+  "classification": "candidate-source-set-component-gates-not-release-admission",
+  "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
+  "source_set": {
+    "ascension-watchdog": {
+      "revision": "91442893e13023e02dbe7a1cccac53012522c1de",
+      "ref": "codex/watchdog-resume-20260911",
+      "remote_pr": 11,
+      "state": "open; source-tested implementation branch"
+    },
+    "sts2-gateway": {
+      "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "sts2-harness": {
+      "revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "sts2-mcp-server": {
+      "revision": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "sts2-game-mod": {
+      "revision": "bd8e90542dfc89366f820150c5c755e32716b1b0",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "sts2-protocol": {
+      "revision": "0bc689eabc5542ede2b09b030d9ea32daa8a73e7",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "sts2-game-core": {
+      "revision": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
+      "ref": "main",
+      "state": "current remote main"
+    },
+    "ai-agent-observability": {
+      "revision": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca",
+      "ref": "codex/collector-persistent-queues-20260911",
+      "remote_pr": 21,
+      "state": "open; review branch, not merged"
+    }
+  },
+  "component_gates": {
+    "watchdog": {
+      "format": "pass",
+      "standards": "pass",
+      "check": "pass",
+      "clippy": "pass",
+      "tests": "pass; serial workspace all-target/all-feature run, 206 library tests plus integration suites"
+    },
+    "sts2-gateway": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "sts2-harness": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "sts2-mcp-server": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "sts2-game-mod": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "sts2-protocol": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "sts2-game-core": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
+    "ai-agent-observability": {
+      "fixtures": "pass: validation-regressions, bootstrap, health-probe, installer-guards, materialize-guards, query-provision, shell syntax, diff check",
+      "collector_config": "pass with official otel/opentelemetry-collector-contrib 0.160.0 binary and health component-status feature gate",
+      "compose_and_image": "not-run: Docker and Podman unavailable"
+    }
+  },
+  "artifacts": {
+    "coop-native-v1": {
+      "schema_sha256": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
+      "conformance_sha256": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
+      "protocol_manifest_sha256": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
+      "protocol_consumer_conformance_sha256": "ca8a60ba24c7cf6664eab71b0f2cb6992125fec45349154df6222c0bccfc3cd9",
+      "gateway_mcp_manifest_sha256": "50a7a2b5debcbdd092741445d649a71e4cbfb8f74caf6a18e9a2882387549d48",
+      "gateway_mcp_consumer_conformance_sha256": "377be44add07fe780a710debc34f901e40e15a75078496335892875f492754fe",
+      "harness_manifest_sha256": "50a7a2b5debcbdd092741445d649a71e4cbfb8f74caf6a18e9a2882387549d48",
+      "harness_consumer_conformance_sha256": "10f71cbc6033a29ece8f41152c35191241ad2a0147eab9cd310c6d0b3a78064a",
+      "result": "schema/conformance equal; consumer bindings differ"
+    }
+  },
+  "verification_boundary": {
+    "cross_repository_clean_build": "not-run; no unified consumer workspace/build exists",
+    "cross_consumer_conformance": "not-run",
+    "windows_service": "not-run",
+    "linux_service": "source and synthetic adapter tests only; installed service not-run",
+    "live_host_recovery": "not-run",
+    "cold_boot_recovery": "not-run",
+    "activation_rollback": "watchdog source-tested only; cross-repository/native handoff not-run",
+    "soak": "not-run",
+    "admission": "blocked until cross-consumer, native, and external-environment gates pass"
+  },
+  "remote_delivery": {
+    "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/11",
+    "observability_pr": "https://github.com/AI-Ascension/ai-agent-observability/pull/21",
+    "merged": false,
+    "activated": false
+  }
+}

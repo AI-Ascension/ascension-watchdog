@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "classification": "candidate-source-set-not-activated",
-  "generated_at": "2026-09-10",
-  "purpose": "Exact source pins captured for cross-repository integration review; this is not an installed or activated release.",
+  "generated_at": "2026-09-11T06:24:22Z",
+  "purpose": "Exact source pins refreshed during the cross-machine resume wave; this is not an installed or activated release.",
   "activation": {
     "activated": false,
     "artifact_digests_verified": false,
@@ -11,83 +11,83 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "cfd06860a77e8be11267eaeb668452ac810a8a22",
-      "last_observed_pr_head": "cfd06860a77e8be11267eaeb668452ac810a8a22",
-      "ref": "codex/watchdog-integrated-20260910",
+      "revision": "91442893e13023e02dbe7a1cccac53012522c1de",
+      "last_observed_pr_head": "91442893e13023e02dbe7a1cccac53012522c1de",
+      "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
-      "pull_request": 9,
-      "state": "open-draft; integrated candidate cfd0686; hosted Ubuntu/Windows validation, standards, and dependency checks pass; clean; not-merged"
+      "pull_request": 11,
+      "state": "open; CLI quarantine/diagnostics patch; pinned local source gates pass; not-merged"
     },
     "sts2-gateway": {
-      "revision": "8ba5521c2ec8f158d437a7104567592703e53259",
+      "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
       "follow_up_revision": "87792cf3f6e2c3b6627d3a34bf380bb337c01373",
       "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
-      "pull_request": 39,
+      "pull_request": 40,
       "feature_pull_requests": [34, 37, 38, 39],
-      "state": "merged; current main 8ba5521 includes the durable host-lease/co-op consumer, recovery echo-response fencing, and restart guard from merged PR #34 at 87792cf; hosted checks and current-main component gates are recorded separately"
+      "state": "merged; current main 5f531f6; component gates pass in isolated worktree"
     },
     "sts2-harness": {
-      "revision": "ce86ced41d8b9e93d19f2c440f28b3223397f3ca",
+      "revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
       "feature_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
       "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
       "recovery_base_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "ref": "main",
       "remote": "AI-Ascension/sts2-harness",
-      "pull_request": 66,
+      "pull_request": 78,
       "recovery_pull_request": 54,
-      "state": "merged; current main ce86ced includes PR #54 durable recovery/catalog/provider repairs plus PR #66 authenticated native Linux worker endpoint, true-EOF bootstrap parsing, bounded auth slots/deadlines, sealed runtime-image snapshots, durable admission/unknown handling, and bootstrap peer proof; endpoint smoke used merged main a0ace671; no deployment or live launch"
+      "state": "merged; current main 00bd9e1; component gates pass in isolated worktree; no deployment or live launch"
     },
     "sts2-mcp-server": {
-      "revision": "037d10def1cbcb1c807e136d31b294355a92c010",
+      "revision": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
       "ref": "main",
       "remote": "AI-Ascension/sts2-mcp-server",
-      "pull_request": 40,
+      "pull_request": 41,
       "feature_pull_requests": [38, 40],
-      "state": "merged; current main 037d10d includes native co-op adapter and canonical pending-rejoin response fencing; hosted checks and component gates are recorded separately"
+      "state": "merged; current main 98ab84b; component gates pass in isolated worktree"
     },
     "sts2-game-mod": {
-      "revision": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "revision": "bd8e90542dfc89366f820150c5c755e32716b1b0",
       "ref": "main",
       "remote": "AI-Ascension/sts2-game-mod",
-      "pull_request": 65,
+      "pull_request": 55,
       "feature_pull_requests": [70, 72],
-      "state": "merged; current main 888b067 includes operation-aware Runtime-v3 admission and dependency refresh; hosted checks and component gates are recorded separately"
+      "state": "merged; current main bd8e905; component gates pass in isolated worktree"
     },
     "sts2-protocol": {
-      "revision": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
+      "revision": "0bc689eabc5542ede2b09b030d9ea32daa8a73e7",
       "ref": "main",
       "remote": "AI-Ascension/sts2-protocol",
-      "pull_request": 38,
+      "pull_request": 20,
       "feature_pull_requests": [33, 38],
-      "state": "merged; current main f22dd72 refreshes coop-native-v1 producer captures and binds gateway/MCP/harness consumer heads; component serialized conformance remains distinct from live host evidence"
+      "state": "merged; current main 0bc689e; component gates pass; consumer bindings remain non-identical across current copies"
     },
     "sts2-game-core": {
-      "revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
+      "revision": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
       "ref": "main",
       "remote": "AI-Ascension/sts2-game-core",
       "pull_request": 9,
-      "state": "merged; PR #9 merge f9db577; hosted-checks-pass; current-main"
+      "state": "merged; current main f5daf69; component gates pass"
     },
     "ai-agent-observability": {
-      "revision": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
-      "ref": "main",
+      "revision": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca",
+      "ref": "codex/collector-persistent-queues-20260911",
       "remote": "AI-Ascension/ai-agent-observability",
-      "pull_request": 19,
-      "state": "merged; current main 89539a6 contains OTLP bind/inode durability repair; no collector-backed watchdog release is activated"
+      "pull_request": 21,
+      "state": "open; persistent bounded Collector queue/WAL patch; static and pinned-binary gates pass; not-merged"
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-11T03:34Z",
-    "component_locked_builds": "verified-in-isolated-source-worktrees",
-    "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
-    "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34558375972, 34558376087],
-    "hosted_watchdog_standards_runs": [34558375948, 34558376119],
-    "hosted_watchdog_status_at_capture": "passed-at-cfd0686 on Ubuntu and Windows; standards runs 34558375948 and 34558376119 passed; native service-session remains separately unverified",
+    "source_pins": "confirmed-from-current-local-worktrees-and-remote-main-or-review-heads-2026-09-11T06:24:22Z",
+    "component_locked_builds": "verified-in-isolated-source-worktrees; observability also validated by pinned Collector binary",
+    "artifact_bytes_cross_component": "schema/conformance equal for inspected coop-native-v1 copies; consumer bindings differ",
+    "cross_consumer_build": "not-run; no unified consumer workspace/build exists",
+    "hosted_watchdog_runs": "not-run-for-current-9144289; prior hosted runs remain historical",
+    "hosted_watchdog_standards_runs": "not-run-for-current-9144289; prior hosted runs remain historical",
+    "hosted_watchdog_status_at_capture": "current local pinned gates pass; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,
-      "watchdog_revision": "cfd06860a77e8be11267eaeb668452ac810a8a22",
+      "watchdog_revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "harness_pr": 66,
       "harness_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
       "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
@@ -95,7 +95,7 @@
       "watchdog_image_sha256": "96d0eca7d22f585fbacb9c6162e09f4bb698c458170501e23308a65f1cb2a4f6",
       "test_image_sha256": "2220833acae0c7d3f88ec9d7dd2dff1637fb0070646274b94b9c5f67d575009d",
       "result": "1 passed, 0 failed, 0 ignored; 9.44s on supplied Train Linux VM; authenticated bootstrap/control/dispatch admission and durable stop/cleanup after endpoint hardening",
-      "classification": "confirmed native Linux process-boundary evidence with synthetic HTTP503 gateway and /usr/bin/true MCP downstream; hardening image from PR #66 head; not gameplay/provider/deployment/reboot/soak"
+      "classification": "historical native Linux process-boundary evidence with synthetic HTTP503 gateway and /usr/bin/true MCP downstream; not rerun for current PR #11 and not gameplay/provider/deployment/reboot/soak"
     },
     "live_host": "not-run",
     "cold_boot": "not-run",

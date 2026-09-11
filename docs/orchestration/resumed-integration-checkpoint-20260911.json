@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-11T06:24:22Z",
+  "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
+  "phase": "exact-source-set-and-boundary-recorded",
+  "root": {
+    "repository": "AI-Ascension/ascension-watchdog",
+    "branch": "codex/watchdog-resume-20260911",
+    "commit": "91442893e13023e02dbe7a1cccac53012522c1de",
+    "pull_request": 11
+  },
+  "source_set": {
+    "sts2-gateway": "5f531f602298de674bd31ed3f28a88359b02ca9d",
+    "sts2-harness": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+    "sts2-mcp-server": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
+    "sts2-game-mod": "bd8e90542dfc89366f820150c5c755e32716b1b0",
+    "sts2-protocol": "0bc689eabc5542ede2b09b030d9ea32daa8a73e7",
+    "sts2-game-core": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
+    "ai-agent-observability": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca"
+  },
+  "completed_in_this_wave": [
+    "exposed authenticated quarantine through the watchdog CLI",
+    "added bounded read-only diagnostics and a no-payload/no-result integration test",
+    "made Linux protected-tempdir fixtures work in minimal containers",
+    "implemented persistent bounded OpenTelemetry exporter queues on an isolated observability branch",
+    "validated all available component source gates",
+    "recorded exact current source and artifact digests",
+    "pushed watchdog PR #11 and observability PR #21"
+  ],
+  "delegation": {
+    "requested_model": "gpt-5.6-luna",
+    "requested_reasoning_effort": "max",
+    "descendant_limit": 12,
+    "required_descendant_depth": 3,
+    "observed_maximum_depth": 1,
+    "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
+  },
+  "verification": {
+    "watchdog": "pass",
+    "companion_component_gates": "pass in isolated worktrees",
+    "observability_collector_config": "pass with pinned 0.160.0 binary",
+    "compose_image_live_volume": "not-run: Docker/Podman unavailable",
+    "unified_cross_consumer_build": "not-run",
+    "native_service": "not-run",
+    "live_host": "not-run",
+    "cold_boot": "not-run",
+    "soak": "not-run"
+  },
+  "blockers": [
+    "no nested-agent spawn capability",
+    "no Docker or Podman executable",
+    "no explicitly authorized native Windows/Linux service or game host",
+    "no unified cross-repository consumer build/conformance target",
+    "current coop-native-v1 consumer-conformance bytes are not one identical current set"
+  ],
+  "evidence": {
+    "source_set": "docs/evidence/current-source-set-20260911.md",
+    "release_set": "docs/evidence/release-set-verification-20260911.json",
+    "historical_records_preserved": true
+  }
+}
