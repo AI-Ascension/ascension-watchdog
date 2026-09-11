@@ -18,6 +18,16 @@ service, live-host, reboot, or soak evidence.
 | `sts2-game-core` | `main` | `f5daf69f4f2c43fddbb04e7799d32503f7066110` | current remote main; component gates pass |
 | `ai-agent-observability` | `main` / merged PR [#20](https://github.com/AI-Ascension/ai-agent-observability/pull/20), [#22](https://github.com/AI-Ascension/ai-agent-observability/pull/22) | `630431716ebfbf86280f9fd56f19d6016ad7aeb2` | current remote main; persistent Collector queue/WAL, materialization repairs, and static-probe portability merged |
 
+A gateway safety follow-up was opened after this source-set capture: PR
+[#42](https://github.com/AI-Ascension/sts2-gateway/pull/42), commit
+`83539a9dd669eb4c8da69033c06d45f114300c45`, is based on gateway main
+`5f531f602298de674bd31ed3f28a88359b02ca9d`. It checks that the durable host
+install and renewal transitions changed exactly one row before exposing a
+host-effect candidate. Its local component gates and hosted Rust quality and
+repository-policy checks pass (workflow run `34573234477` and
+`34573234541`). This pending branch is not part of the exact source set or
+release admission until the owning repository reviews and merges it.
+
 The source set was fetched into isolated worktrees. No changes were made to
 the companion `main` worktrees. The earlier observability review branch PR #21
 was closed as superseded by merged PR #20; its persistence work is represented
@@ -91,7 +101,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with hosted gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with hosted gates green; gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the

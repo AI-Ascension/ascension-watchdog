@@ -321,6 +321,14 @@ validation pass; the minimal static-probe fallback is merged in PR #22.
 Docker/Podman, Compose rendering, image build, live queue recovery, and
 external service execution remain unavailable.
 
+A gateway persist-before-effect follow-up is now open as PR [#42](https://github.com/AI-Ascension/sts2-gateway/pull/42)
+at source commit `83539a9dd669eb4c8da69033c06d45f114300c45`, based on current
+gateway main `5f531f602298de674bd31ed3f28a88359b02ca9d`. It adds affected-row
+checks to host lease install and renewal preparation plus SQLite suppression
+regressions; its local component gates and hosted Rust quality/repository-policy checks pass.
+The branch is intentionally excluded from the exact
+release source set until merged.
+
 The current `coop-native-v1` schema and conformance bytes agree, but current
 consumer-conformance bindings differ between protocol, gateway/MCP, and
 harness. No unified cross-consumer build was found. Consequently S11, S13,
@@ -333,5 +341,6 @@ partial or unverified. The separate axes remain
 `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
 `REMOTE_DELIVERY_STATUS = watchdog PR #11 open with hosted gates green;
+gateway PR #42 open with local and hosted gates green;
 observability PRs #20 and #22 merged; not activated`. Nested-agent depth 2/3 remains unobserved because no
 spawn surface is exposed; no depth-4 bypass was attempted.

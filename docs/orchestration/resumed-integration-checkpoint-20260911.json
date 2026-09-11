@@ -27,6 +27,16 @@
     "recorded exact current source and artifact digests",
     "pushed watchdog PR #11; closed superseded observability PR #21; observability PRs #20 and #22 are merged"
   ],
+  "pending_follow_ups": [
+    {
+      "repository": "AI-Ascension/sts2-gateway",
+      "pull_request": 42,
+      "commit": "83539a9dd669eb4c8da69033c06d45f114300c45",
+      "based_on": "5f531f602298de674bd31ed3f28a88359b02ca9d",
+      "status": "open; local component gates and hosted Rust quality/repository-policy checks pass; excluded from exact source set until reviewed and merged",
+      "scope": "require exactly one durable SQLite row change before exposing host lease install or renewal effect"
+    }
+  ],
   "delegation": {
     "requested_model": "gpt-5.6-luna",
     "requested_reasoning_effort": "max",
@@ -38,6 +48,7 @@
   "verification": {
     "watchdog": "pass",
     "companion_component_gates": "pass in isolated worktrees",
+    "gateway_follow_up_pr42": "local gates pass; hosted Rust quality/repository-policy checks pass",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",
