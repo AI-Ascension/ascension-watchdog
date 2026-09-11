@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "a5bbd7614204c83874dd9ead850829b2f8685b82",
-      "last_observed_pr_head": "1e7abdc363528001980af7c19b54645d549a24fa",
+      "revision": "b4cda14ea578e9ad33f8142698d494aeb9f3a61f",
+      "last_observed_pr_head": "b4cda14ea578e9ad33f8142698d494aeb9f3a61f",
       "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 11,
-      "state": "open; atomic durable job-state transition checks and regressions; local and hosted gates pass (Rust/synthetic run 34574717898; standards run 34574717909); not-merged"
+      "state": "open; atomic durable job-state transitions and exact source-set admission gate; local gates pass; hosted rerun pending; not-merged"
     },
     "sts2-gateway": {
       "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",
@@ -84,8 +84,8 @@
     "component_locked_builds": "verified-in-isolated-source-worktrees; observability main also validated by pinned Collector binary",
     "artifact_bytes_cross_component": "schema/conformance equal for inspected coop-native-v1 copies; consumer bindings differ",
     "cross_consumer_build": "not-run; no unified consumer workspace/build exists",
-    "hosted_watchdog_runs": "pass-for-current-a5bbd76; Ubuntu, Windows, and dependency lanes green in Rust/synthetic run 34574717898",
-    "hosted_watchdog_standards_runs": "pass-for-current-a5bbd76; standards run 34574717909 green",
+    "hosted_watchdog_runs": "pending-for-current-b4cda14; prior Ubuntu, Windows, and dependency lanes were green for a5bbd76",
+    "hosted_watchdog_standards_runs": "pending-for-current-b4cda14; prior standards lane was green for a5bbd76",
     "hosted_watchdog_status_at_capture": "current local and hosted gates pass; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,

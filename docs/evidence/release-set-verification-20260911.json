@@ -5,10 +5,10 @@
   "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
   "source_set": {
     "ascension-watchdog": {
-      "revision": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+      "revision": "b4cda14ea578e9ad33f8142698d494aeb9f3a61f",
       "ref": "codex/watchdog-resume-20260911",
       "remote_pr": 11,
-      "state": "open; atomic durable job-state transition checks and regressions; local and hosted gates pass (Rust/synthetic run 34574717898; standards run 34574717909)"
+      "state": "open; atomic durable job-state transitions and exact source-set admission gate; local gates pass; hosted rerun pending"
     },
     "sts2-gateway": {
       "revision": "5f531f602298de674bd31ed3f28a88359b02ca9d",

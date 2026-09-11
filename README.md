@@ -42,6 +42,8 @@ worktrees. It verifies full commit pins, GitHub remotes, the four
 current consumer-conformance bindings. A failed admission prints the complete
 JSON report to stdout and exits nonzero; the command never fetches, builds,
 installs, activates, or runs a companion.
+The recorded resume-wave result is in
+[`docs/evidence/source-set-gate-20260911.md`](docs/evidence/source-set-gate-20260911.md).
 
 Offline backup rekey is explicit and stopped by construction:
 `watchdog restore --config PATH --backup PATH [--database PATH] --rekey` verifies

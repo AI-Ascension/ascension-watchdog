@@ -6,7 +6,7 @@
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
-    "commit": "a5bbd7614204c83874dd9ead850829b2f8685b82",
+    "commit": "b4cda14ea578e9ad33f8142698d494aeb9f3a61f",
     "pull_request": 11
   },
   "source_set": {
@@ -47,7 +47,7 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally and hosted at a5bbd76; serial workspace gate and strict local lint pass; Rust/synthetic run 34574717898 and standards run 34574717909 are green",
+    "watchdog": "pass locally at b4cda14; serial workspace gate, strict local lint, and source-set CLI gate pass; hosted rerun pending",
     "companion_component_gates": "pass in isolated worktrees",
     "gateway_follow_up_pr42": "local gates pass; hosted Rust quality/repository-policy checks pass",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",

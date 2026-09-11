@@ -10,7 +10,7 @@ live-host, reboot, or soak evidence.
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `a5bbd7614204c83874dd9ead850829b2f8685b82` | open; atomic durable job-state transition checks and regressions; local and hosted gates pass |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `b4cda14ea578e9ad33f8142698d494aeb9f3a61f` | open; atomic durable job-state transitions and exact source-set admission gate; local gates pass; hosted rerun pending |
 | `sts2-gateway` | `main` | `5f531f602298de674bd31ed3f28a88359b02ca9d` | current remote main; component gates pass |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
@@ -106,7 +106,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with local and hosted gates green for a5bbd76 (Rust/synthetic run 34574717898; standards run 34574717909); gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with local gates green for b4cda14 and hosted rerun pending; gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the
