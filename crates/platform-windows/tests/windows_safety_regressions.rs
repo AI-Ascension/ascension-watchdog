@@ -20,6 +20,22 @@ fn placeholder_executable() -> PathBuf {
     }
 }
 
+#[cfg(windows)]
+fn fixture() -> PathBuf {
+    // Cross-built tests are copied together with the checked-in synthetic
+    // executable into one fresh Windows directory.  The build-host path
+    // embedded by `env!(CARGO_BIN_EXE_platform_synthetic)` is not meaningful
+    // inside that guest, while native Cargo execution keeps its usual path.
+    let adjacent = std::env::current_exe()
+        .expect("native test image path")
+        .with_file_name("platform_synthetic.exe");
+    if adjacent.is_file() {
+        adjacent
+    } else {
+        PathBuf::from(env!("CARGO_BIN_EXE_platform_synthetic"))
+    }
+}
+
 fn config(max_arguments: usize, max_environment: usize) -> WindowsPlatformConfig {
     let executable = placeholder_executable();
     let mut allowlisted_executables = BTreeMap::new();
@@ -156,10 +172,6 @@ mod native_owner_death {
 
     const HELPER_ENV: &str = "WINDOWS_OWNER_DEATH_HELPER";
     const IDENTITY_ENV: &str = "WINDOWS_OWNER_DEATH_IDENTITY";
-
-    fn fixture() -> PathBuf {
-        PathBuf::from(env!("CARGO_BIN_EXE_platform_synthetic"))
-    }
 
     fn native_config(executable: &Path) -> WindowsPlatformConfig {
         let mut allowlisted_executables = BTreeMap::new();

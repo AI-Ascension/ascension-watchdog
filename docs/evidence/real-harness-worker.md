@@ -213,3 +213,43 @@ bounded authentication slots/deadlines, and sealed runtime-image snapshots.
 The gateway remained an HTTP-503 fixture and MCP remained `/usr/bin/true`; no
 gameplay, provider settlement, installed service, release activation, reboot,
 or soak claim follows.
+
+## Train native VM validation, 2026-09-11
+
+The integrated candidate was exercised on the supplied Train guests with fresh
+guest-side copies of the test binaries.  These runs are native process-boundary
+evidence only; they do not install a service, launch the game, invoke a model
+provider, reboot a host, or establish live recovery.
+
+On `sts.home.complete.tech-slay-the-spire`, the explicitly gated ignored test
+`real_watchdog_native_launch_reaches_built_harness_worker` completed with
+**1 passed, 0 failed, 0 ignored** in **9.44 seconds**.  The guest used the
+watchdog image SHA-256
+`96d0eca7d22f585fbacb9c6162e09f4bb698c458170501e23308a65f1cb2a4f6`, the
+harness endpoint image SHA-256
+`5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`, and the
+fresh test executable SHA-256
+`2220833acae0c7d3f88ec9d7dd2dff1637fb0070646274b94b9c5f67d575009d`.  The
+run verified authenticated worker admission, durable stop intent, daemon and
+worker teardown, and exact original-cgroup cleanup.  The endpoint printed a
+bounded `runtime-v3 execution store is busy` diagnostic during the intentional
+stop race; the assertions still passed.  The gateway and MCP inputs remained
+the documented HTTP-503 and `/usr/bin/true` fault fixtures, so this is not an
+episode-settlement or gameplay result.  Earlier failed fixture directories were
+retained for inspection.
+
+On `sts.home.complete.tech-windows`, fresh native guest execution passed the
+cross-built suites: synthetic process recovery **7/7**, worker bootstrap **4/4**,
+gateway health/bootstrap **4/4**, and current-process identity **2/2**.  The
+Windows safety regression suite passed **5** default tests with **2** expected
+ignored tests; the explicitly invoked interactive owner-death case then passed
+**1/1**.  The adjacent synthetic fixture used by that case was the exact
+cross-built `platform_synthetic.exe` image, SHA-256
+`958438bc1f9303ce006a640876cf8d1b3505adf8d97c8305e6794ac9bd777e10`.
+Cross-target locked Clippy also passed.  These results cover native Windows
+process and identity/cleanup behavior, not SCM installation, session-0 service
+operation, reboot recovery, game execution, or provider settlement.
+
+The Linux cgroup boundary test requiring a separately provisioned protected
+bootstrap remains explicitly gated; a prior stale protected-bootstrap attempt
+failed before exercising the requested boundary and is not reported as a pass.

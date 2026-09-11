@@ -722,7 +722,6 @@ impl OriginalCgroup {
     /// Return whether the original pathname is still the original inode.
     /// `false` means it is present; `true` means it was positively unlinked.
     fn verify_path(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        self.verify_retained_handles()?;
         let path = cgroup_path(&self.control_group)?;
         match fs::metadata(path) {
             Ok(metadata) => {
@@ -735,16 +734,58 @@ impl OriginalCgroup {
                     )
                     .into());
                 }
+                self.verify_retained_handles()?;
                 Ok(false)
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound || is_enodev(&error) => {
+                // Once systemd removes a cgroup, a retained directory or
+                // events descriptor may report ENODEV rather than remaining
+                // stat-able.  Accept that only after the original pathname
+                // is gone and the descriptor identifies this same cgroup (or
+                // the kernel has positively invalidated that descriptor).
+                match self.directory.metadata() {
+                    Ok(metadata)
+                        if metadata.is_dir()
+                            && metadata.dev() == self.directory_dev
+                            && metadata.ino() == self.directory_ino => {}
+                    Err(error) if is_enodev(&error) => return Ok(true),
+                    Ok(_) => {
+                        return Err(
+                            io::Error::other("retained cgroup directory identity changed").into(),
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                match self.events.metadata() {
+                    Ok(metadata)
+                        if metadata.dev() == self.events_dev
+                            && metadata.ino() == self.events_ino => {}
+                    Err(error) if is_enodev(&error) => return Ok(true),
+                    Ok(_) => {
+                        return Err(
+                            io::Error::other("retained cgroup.events identity changed").into()
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                Ok(true)
+            }
             Err(error) => Err(error.into()),
         }
     }
 
     fn empty(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
         let unlinked = self.verify_path()?;
-        self.events.seek(SeekFrom::Start(0))?;
+        if let Err(error) = self.events.seek(SeekFrom::Start(0)) {
+            if is_enodev(&error) {
+                // A removed cgroup can invalidate an already-open events
+                // descriptor between verify_path and seek.  Recheck the
+                // pathname so ENODEV is accepted only with positive proof
+                // that this exact retained cgroup was unlinked.
+                return self.verify_path();
+            }
+            return Err(error.into());
+        }
         let mut text = String::new();
         match self.events.read_to_string(&mut text) {
             Ok(_) => {}

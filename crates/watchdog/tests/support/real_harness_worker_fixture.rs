@@ -114,11 +114,18 @@ impl Fixture {
         let gateway = GatewayFixture::new()?;
         let gateway_address = gateway.address().to_owned();
         let daemon_image = temp.path().join("watchdog");
-        let daemon_source = Path::new(env!("CARGO_BIN_EXE_watchdog"));
+        // A native test launched from a separately provisioned guest cannot
+        // resolve the build-host path embedded by Cargo.  Keep Cargo's path
+        // as the default for ordinary runs, while allowing the operator to
+        // pin the exact staged watchdog image explicitly for that guest.
+        let daemon_source = std::env::var_os("ASCENSION_WATCHDOG_EXECUTABLE").map_or_else(
+            || PathBuf::from(env!("CARGO_BIN_EXE_watchdog")),
+            PathBuf::from,
+        );
         copy_immutable_image(
-            daemon_source,
+            &daemon_source,
             &daemon_image,
-            &hash_regular_file(daemon_source)?.0,
+            &hash_regular_file(&daemon_source)?.0,
         )?;
         let worker_namespace = temp.path().join("worker");
         fs::create_dir(&worker_namespace)?;
@@ -144,7 +151,7 @@ impl Fixture {
             .to_str()
             .ok_or_else(|| io::Error::other("MCP fixture path is not UTF-8"))?;
         let runtime_digest = runtime_config_digest(mcp, &gateway_address)?;
-        let environment = worker_environment(
+        let mut environment = worker_environment(
             namespace,
             &credential_path,
             &mcp_image,
@@ -153,6 +160,14 @@ impl Fixture {
             &approved.sha256,
             &gateway_address,
         )?;
+        let runtime = harness_image
+            .to_str()
+            .ok_or_else(|| io::Error::other("worker runtime path is not UTF-8"))?;
+        environment.insert("STS2_WORKER_RUNTIME_BINARY".to_owned(), runtime.to_owned());
+        environment.insert(
+            "STS2_WORKER_RUNTIME_SHA256".to_owned(),
+            approved.sha256.clone(),
+        );
         let config = WatchdogConfig {
             deployment_id: "watchdog-real-harness-smoke".to_owned(),
             database: temp.path().join("watchdog.sqlite3"),
