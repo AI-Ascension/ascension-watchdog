@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-source-state-not-a-release",
+  "purpose": "Resumable source inventory; no binary activation authority",
+  "root_code_commit": "3a63b44735b65676d1d9a69234d4680b88354b6b",
+  "source_heads_at_inventory": {
+    "sts2-gateway": "0e21fe3b72598e6ddbdcdb0621010801e36fe845",
+    "sts2-harness": "084f8f7d7748febfe317ce6c51d2aaf1d9aa3744",
+    "sts2-mcp-server": "ebe82e391bf0e996e3b23fd9e8158b7a54a75783",
+    "sts2-game-mod": "9f44b8d57eb6a9bfb773aacd9e136be973d996ff",
+    "sts2-protocol": "2a30eb96240f579eea9c776b3291d31a3bd9ac38",
+    "ai-agent-observability": "b3a9fa64f51aa249f387190ce76df8c80a02af4b"
+  },
+  "source_inventory": {
+    "dirty": ["sts2-gateway", "sts2-game-mod"],
+    "clean": ["sts2-harness", "sts2-mcp-server", "sts2-protocol", "ai-agent-observability"],
+    "warning": "Active writers may advance these worktrees. Dirty heads do not identify complete source; revalidate before release or remote writes."
+  },
+  "pending_unintegrated_work": [
+    "W9 binary subprocess and protected payload-file follow-up",
+    "P5R native Supervisor implementation",
+    "P6L Linux identity-safe signaling, executable barrier and uncertain cleanup",
+    "P6W Windows IPC, FFI and service security repairs",
+    "G4R actual gateway host-ticket and witness integration",
+    "G3R preserved managed/native host admission and journal changes",
+    "H6R advertised-schema negative tests and evidence sanitization",
+    "V14 full synthetic fixture source review before accepting commit 3738b24"
+  ],
+  "root_verified": [
+    "W9 source commit 3555a2a was fully reviewed and integrated locally as ce7d22d",
+    "Migration regression reproduced receipt sequence 3 instead of 101; b0c0004 preserves the durable AUTOINCREMENT high-water mark",
+    "Twenty-seven targeted admin, job, stop and storage tests passed after the migration fix",
+    "Six job-submission tests and strict Linux workspace all-target all-feature Clippy passed after the test helper extraction in 3a63b44",
+    "Job submission tests exercise CLI library routing and real local IPC, not separate CLI/daemon binaries; that subprocess campaign remains a follow-up",
+    "MCP ebe82e3 full eight-file diff reviewed; twelve focused recovery tests and strict policy rerun passed (148 files, zero warnings/errors)",
+    "Windows-GNU workspace all-target all-feature Clippy passed at 3a63b44; this is cross-compilation, not native execution",
+    "Fixture 3738b24 serial suite passed eighteen tests and strict Clippy; independent source review and integration remain pending"
+  ],
+  "independent_review_findings": [
+    "V13 reproduced missing hidden-helper binary dispatch and the legacy descendant-cleanup failure",
+    "Native identity encoding and ownership proof binding are not integrated",
+    "Linux graceful PID signaling, failed-launch cleanup errors and path execution require boundary repairs",
+    "Windows IPC authentication/replay, FFI bounds/alignment and service behavior require independently verified repairs",
+    "Portable tests and Windows cross-compilation do not establish native service/process behavior"
+  ],
+  "known_unmet_gates": [
+    "Actual gateway/harness/MCP/mod recovery flow has not passed integrated verification",
+    "Full operational CLI, archival and long-run retention remain incomplete",
+    "No native service install, live recovery, cold reboot, release activation or soak is established by this checkpoint",
+    "Three descendant layers remain unavailable in recorded native capability evidence",
+    "Resumed model settings are requested and accepted, not newly observed in execution metadata"
+  ],
+  "deployment_status": "not-installed-not-activated",
+  "remote_actions_this_checkpoint": "none",
+  "completion": "unverified"
+}

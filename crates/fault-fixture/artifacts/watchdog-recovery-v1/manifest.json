@@ -1,0 +1,58 @@
+{
+  "artifact": "sts2-protocol/watchdog-recovery-v1",
+  "contract": "watchdog-recovery-v1",
+  "protocol_version": "watchdog-recovery-v1",
+  "version": 1,
+  "schema": "schema.json",
+  "schema_digest": "fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217",
+  "provenance": {
+    "source": "schemas/watchdog-recovery-v1.schema.json",
+    "generator": "hand-authored approved sideband contract fd32e9d",
+    "license": "MIT"
+  },
+  "canonicalization": "RCJ-1 for action payloads; exact bytes for immutable artifacts",
+  "digest_algorithm": "SHA-256",
+  "limits": {
+    "max_frame_bytes": 262144,
+    "max_action_bytes": 65536,
+    "max_auth_proof_bytes": 512,
+    "max_wire_integer": 9007199254740991
+  },
+  "consumers": [
+    "ascension-watchdog",
+    "sts2-game-mod",
+    "sts2-gateway",
+    "sts2-harness",
+    "sts2-mcp-server"
+  ],
+  "frozen_dependency": "runtime-v3-gameplay",
+  "mixed_digest_policy": "reject",
+  "goldens": [
+    "fixtures/valid/bootstrap-request.json",
+    "fixtures/valid/bootstrap-response.json",
+    "fixtures/valid/host-fence-request.json",
+    "fixtures/valid/host-fence-response.json",
+    "fixtures/valid/lease-acquire-request.json",
+    "fixtures/valid/lease-acquire-response.json",
+    "fixtures/valid/lease-renew-request.json",
+    "fixtures/valid/lease-renew-response.json",
+    "fixtures/valid/lease-revoke-request.json",
+    "fixtures/valid/lease-revoke-response.json",
+    "fixtures/valid/operation-intent-request.json",
+    "fixtures/valid/operation-intent-response.json",
+    "fixtures/valid/operation-dispatch-request.json",
+    "fixtures/valid/operation-dispatch-response.json",
+    "fixtures/valid/operation-lookup-request.json",
+    "fixtures/valid/operation-lookup-response.json",
+    "fixtures/valid/operation-reconcile-request.json",
+    "fixtures/valid/operation-reconcile-response.json"
+  ],
+  "invalid": [
+    "fixtures/invalid/oversized-action.json",
+    "fixtures/invalid/stale-contract.json",
+    "fixtures/invalid/unknown-field.json"
+  ],
+  "rcj_vectors": "rcj-vectors.json",
+  "conformance": "conformance.json",
+  "checksums": "SHA256SUMS"
+}

@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-11T00:24:00Z",
+  "classification": "component-build-and-artifact-audit-not-release-admission",
+  "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
+  "source_set": {
+    "ascension-watchdog": {
+      "tested_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "implementation_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+      "remote_pr": 9,
+      "remote_pr_head_at_capture": "62bf0fc49d7656e1207dc592a34a4fcd76994ee4",
+      "ref": "codex/watchdog-integrated-20260910"
+    },
+    "sts2-gateway": {
+      "tested_source": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+      "selected_remote_revision": "8ba5521c2ec8f158d437a7104567592703e53259",
+      "remote_pr": 39,
+      "ref": "main"
+    },
+    "sts2-harness": {
+      "tested_source": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+      "selected_remote_revision": "ce86ced41d8b9e93d19f2c440f28b3223397f3ca",
+      "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
+      "recovery_base_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "remote_pr": 66,
+      "ref": "main",
+      "state": "merged; current main ce86ced includes recovery/catalog PR #54; endpoint feature head 58dede2 merged as a0ace671"
+    },
+    "sts2-mcp-server": {
+      "selected_remote_revision": "037d10def1cbcb1c807e136d31b294355a92c010",
+      "remote_pr": 40,
+      "ref": "main"
+    },
+    "sts2-game-mod": {
+      "tested_source": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "selected_remote_revision": "888b06702021cd2bbd22773b0267733766c3b04a",
+      "remote_pr": 65,
+      "ref": "main"
+    },
+    "sts2-protocol": {
+      "tested_source": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
+      "selected_remote_revision": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
+      "remote_pr": 38,
+      "ref": "main",
+      "state": "merged"
+    },
+    "sts2-game-core": {
+      "tested_source": "f9db577530a4d159b066d3facbd780d61c044eb0",
+      "selected_remote_revision": "f9db577530a4d159b066d3facbd780d61c044eb0",
+      "remote_pr": 9,
+      "ref": "main"
+    },
+    "ai-agent-observability": {
+      "selected_remote_revision": "89539a6e7754b389f8eac148ba8a49c3892cddd8",
+      "remote_pr": 19,
+      "ref": "main"
+    }
+  },
+  "component_gates": {
+    "watchdog": {
+      "commands": [
+        "cargo +1.97.1 fmt --all -- --check",
+        "cargo +1.97.1 run --locked --manifest-path standards/tools/standards-sync/Cargo.toml -- validate --root .",
+        "cargo +1.97.1 check --locked --offline --workspace --all-targets --all-features",
+        "cargo +1.97.1 clippy --workspace --all-targets --all-features --locked --offline -- -D warnings",
+        "cargo +1.97.1 test --workspace --all-targets --all-features --locked --offline --no-fail-fast",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
+        "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
+      ],
+      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34545569428 and 34545569573 passed on Ubuntu and Windows; standards runs 34545569465 and 34545569607 passed; native service-session remains unverified"
+    },
+    "sts2-gateway": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "current remote main 8ba5521; PR #34 head 87792cf passed hosted quality/policy and local 270-test validation before merge; no unified cross-repository gate is claimed here"
+    },
+    "sts2-harness": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "PR #54 recovery/catalog feature head 4a0c7be passed hosted quality/policy runs 34545367683 and 34545367662 and merged to current main ce86ced; PR #66 endpoint hardening hosted runs 34542578041 and 34542578085 pass and merged as a0ace671; native worker smoke rerun separately"
+    },
+    "sts2-game-mod": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "current remote main 888b067; prior locked component gates pass; latest dependency refresh is source-pinned"
+    },
+    "sts2-protocol": {
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "result": "current remote main f22dd72; serialized co-op artifact refresh and component conformance tests pass"
+    }
+  },
+  "artifact_byte_comparison": {
+    "compared_worktrees": [
+      "sts2-gateway",
+      "sts2-harness",
+      "sts2-game-mod",
+      "sts2-protocol"
+    ],
+    "comparison_method": "sha256sum of each artifact manifest.json and schema.json; coop-native-v1 also includes conformance.json and consumer-conformance.json",
+    "artifacts": {
+      "runtime-v3-gameplay": {
+        "manifest_sha256": "92e5167a53000da7bcd068821ef7a7287b293640cd926b4100b9c725c86c8ab8",
+        "schema_sha256": "8e99cea36b7ede97532348fd8efe302ca79260895265a7bf14ddf7e006d8ff63"
+      },
+      "runtime-v4-expert-action": {
+        "manifest_sha256": "d0d8c8be38787fc3b8c11657bca6e627a56be31aa858a8cd9cfab8253a4e97f5",
+        "schema_sha256": "393318bda8c3522c0ecbacc78b95471a9f4dc3f825169d2048f4c74a7b7f2929"
+      },
+      "runtime-v4-expert-rest-action": {
+        "manifest_sha256": "a552ce46256513fa8bc9b4dbd24cd05540c01dbd8e48f68dbe579a975ecf296d",
+        "schema_sha256": "bb3555fae28eb1f79d08a15e9884696a579e4c20836f5016509f17e0f4c36fbd"
+      },
+      "runtime-v4-expert": {
+        "manifest_sha256": "20465efcafbc5aa6245c8e37024ce64c25a2dec04d0df7424d6aa2d9aa9a3275",
+        "schema_sha256": "0ee034d5da83f34e9fa0ba23038738d56ef8cfccb1c6e752af3ab63d212c8e42"
+      },
+      "seeded-run-v1": {
+        "manifest_sha256": "1b504a25c1f1f0cd8bf4a61d07b8457c32e3f481c0810f407d750510c692fc09",
+        "schema_sha256": "5c659f344be78f84e8d783986925d462714f933cac95d18943358992f7d3e2b8"
+      },
+      "runtime-v2": {
+        "manifest_sha256": "3aa96568f6b810170862b95e262b65201f5568723cba410139f1c1cf1d154152",
+        "schema_sha256": "f7963b19c8ed5bbdc02c08e83c7a2e16c4771ed5eb798b29a8208d7a917a86c2"
+      },
+      "coop-native-v1": {
+        "manifest_sha256": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
+        "schema_sha256": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
+        "conformance_sha256": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
+        "consumer_conformance_sha256": "ca8a60ba24c7cf6664eab71b0f2cb6992125fec45349154df6222c0bccfc3cd9"
+      }
+    },
+    "result": "byte-identical frozen artifacts across the inspected component copies; the serialized protocol snapshot binds earlier gateway c8be3a7, MCP 037d10d, and harness 63dc563 component heads, while current gateway/harness mains are 8ba5521/ce86ced; merged worker endpoint PR #66 remains a separate native process-boundary contract; no live host conformance"
+  },
+  "native_worker_smoke": {
+    "watchdog_revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
+    "harness_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
+    "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+    "harness_image_sha256": "5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f",
+    "command_result": "1 passed, 0 failed, 0 ignored; 25.33s",
+    "scope": "native Linux watchdog-to-harness bootstrap/control/dispatch admission and durable stop/cleanup after endpoint hardening with synthetic HTTP503 gateway and /usr/bin/true MCP; no gameplay/provider/release/service/reboot/soak"
+  },
+  "release_boundary": {
+    "cross_repository_clean_build": "not-run; component worktrees were checked independently and no unified consumer build exists",
+    "cross_consumer_conformance": "not-run; protocol/gateway and MCP expose source-level coop-native-v1 adapters, but harness/game-mod native consumer coverage and one unified clean release build are absent",
+    "native_windows_service": "not-run; hosted service-session step unverified on runner session 2",
+    "native_linux_service": "not-run",
+    "live_host": "not-run",
+    "cold_boot": "not-run",
+    "activation_rollback": "source-tested-watchdog-selector; native-and-cross-repository-handoff-not-run",
+    "soak": "not-run",
+    "admission": "blocked-until-cross-consumer-and-native-gates"
+  }
+}

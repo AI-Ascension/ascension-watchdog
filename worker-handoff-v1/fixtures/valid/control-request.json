@@ -1,0 +1,16 @@
+{
+  "contract": "ascension-watchdog-worker-handoff-v1",
+  "schema_digest": "bb13d15f6c0e4b8d0f58f7391fe4ba319ebc57a0a09effc06d73ea718bbff4cf",
+  "direction": "request",
+  "command": "set_control_mode",
+  "scope": "control",
+  "request_id": "88888888-8888-4888-8888-888888888888",
+  "timeout_ms": 1000,
+  "watchdog_boot_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "worker_boot_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "deployment_id": "watchdog-deployment-1",
+  "worker_owner_id": "harness",
+  "worker_profile_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "mode": "running",
+  "mode_sequence": 1
+}

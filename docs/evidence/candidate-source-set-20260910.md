@@ -1,0 +1,42 @@
+# Candidate source set — 2026-09-10
+
+This record pins the remote pull-request heads used for the next integration
+review. It is deliberately a candidate source set, not an activated release:
+the JSON manifest records each exact revision, ref, PR, and current state in
+`workspace-manifest.candidate.json`.
+
+The pins were refreshed from authoritative remote PR and branch metadata on
+2026-09-11T00:24Z. The watchdog integration branch is draft PR #9 with source
+`f5eaf5e35be025015a28da931aa973a0ade8f0ef` and current docs/evidence head
+`62bf0fc49d7656e1207dc592a34a4fcd76994ee4`; its durable exact-digest release
+selector, strict selector/receipt binding, request-collision rejection,
+authenticated activation/rollback boundary, and collision-safe Windows fixture
+allocation are source-tested. Latest hosted validation runs `34545569428` and
+`34545569573` passed on Ubuntu and Windows; standards runs `34545569465` and
+`34545569607` passed. Native service-session remains explicitly `UNVERIFIED`
+and is not native service proof.
+
+The selected revisions are gateway `8ba5521c2ec8f158d437a7104567592703e53259`,
+MCP `037d10def1cbcb1c807e136d31b294355a92c010`, game-mod
+`888b06702021cd2bbd22773b0267733766c3b04a`, protocol
+`f22dd7216f65de91a0ffa27f50bc2036be6c8b24`, game-core
+`f9db577530a4d159b066d3facbd780d61c044eb0`, and observability
+`89539a6e7754b389f8eac148ba8a49c3892cddd8`. The harness entry is merged PR
+#66: feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`, now on main at
+`ce86ced41d8b9e93d19f2c440f28b3223397f3ca`; PR #66's merged endpoint source
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1` is the exact hardening source
+used by the native worker smoke, while PR #54's recovery/catalog repairs are
+now on current harness main. Locked component gates and
+runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
+[`release-set-verification-20260910.json`](release-set-verification-20260910.json).
+The current protocol artifact records serialized component conformance for the
+gateway/MCP/harness heads, while the worker endpoint is a separate Linux
+process-boundary contract. The exact watchdog-to-harness smoke passed with
+image SHA-256 `5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f`,
+but the downstream gateway/MCP inputs were synthetic faults. No claim is made
+that the full set composes, installs, activates, or runs a live game host.
+
+Required next gate: rebuild and test this exact set together, verify immutable
+artifact digests, then run the separately authorized native Windows/Linux/WSL,
+activation/rollback, cold-boot, and soak lanes. Until those gates pass, do not
+change the manifest classification to an activated release.

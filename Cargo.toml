@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/watchdog", "crates/fault-fixture", "crates/platform-windows", "crates/platform-linux-descriptors"]
+default-members = ["crates/watchdog"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

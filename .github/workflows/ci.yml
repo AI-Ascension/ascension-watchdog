@@ -1,0 +1,71 @@
+name: Rust and synthetic validation
+
+on:
+  pull_request:
+  push:
+    branches: [bootstrap]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watchdog-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rust:
+    name: Rust and synthetic processes (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt --no-self-update
+      - name: Verify whitespace
+        run: git diff --check
+      - name: Verify formatting
+        run: cargo fmt --all --check
+      - name: Lint all targets
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Run unit and synthetic tests
+        run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
+      - name: Run service-session synthetic worker admission when available
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          if ($session -ne 0) {
+            Write-Output "UNVERIFIED: session-0 worker admission requires a session-0 runner; current session is $session. No service or session change will be attempted."
+            exit 0
+          }
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child -- --exact --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job -- --exact --ignored --nocapture
+          exit $LASTEXITCODE
+      - name: Build exact locked release
+        run: cargo build --workspace --release --locked
+
+  dependencies:
+    name: Dependency security and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
+      - name: Install pinned dependency checker
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: Check dependency advisories and licenses
+        run: cargo deny --locked check advisories licenses bans sources

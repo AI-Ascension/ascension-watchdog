@@ -1,0 +1,12 @@
+{
+  "contract": "watchdog-admin-v1",
+  "schema_version": 1,
+  "request": "request.schema.json",
+  "response": "response.schema.json",
+  "max_frame_bytes": 262144,
+  "max_payload_bytes": 65536,
+  "max_clients": 16,
+  "max_queue": 64,
+  "max_idempotency_records": 256,
+  "classification": "confirmed-contract-source; implementation evidence remains separate"
+}

@@ -1,0 +1,67 @@
+{
+  "peer": {
+    "uid": 1000,
+    "gid": 1000,
+    "executable": "/opt/ascension-watchdog/current/watchdog",
+    "executable_sha256": "REPLACE_WITH_RELEASE_SHA256_______________________________"
+  },
+  "components": {
+    "gateway": {
+      "executable": "/opt/ascension-gateway/current/gateway",
+      "executable_sha256": "REPLACE_WITH_GATEWAY_SHA256______________________________",
+      "arguments": [],
+      "working_directory": "/var/lib/ascension-watchdog/gateway",
+      "environment": [],
+      "target_uid": 1101,
+      "target_gid": 1101,
+      "capabilities": {
+        "bounding_set": 0,
+        "ambient_set": 0,
+        "no_new_privileges": true
+      },
+      "cgroup": {
+        "tasks_max": 128,
+        "memory_max_bytes": 1073741824
+      },
+      "timeout_ms": 15000
+    },
+    "harness": {
+      "executable": "/opt/ascension-harness/current/harness",
+      "executable_sha256": "REPLACE_WITH_HARNESS_SHA256______________________________",
+      "arguments": [],
+      "working_directory": "/var/lib/ascension-watchdog/harness",
+      "environment": [],
+      "target_uid": 1102,
+      "target_gid": 1102,
+      "capabilities": {
+        "bounding_set": 0,
+        "ambient_set": 0,
+        "no_new_privileges": true
+      },
+      "cgroup": {
+        "tasks_max": 128,
+        "memory_max_bytes": 1073741824
+      },
+      "timeout_ms": 15000
+    },
+    "hostbroker": {
+      "executable": "/opt/ascension-host-broker/current/host-broker",
+      "executable_sha256": "REPLACE_WITH_HOST_BROKER_SHA256__________________________",
+      "arguments": [],
+      "working_directory": "/var/lib/ascension-watchdog/host-broker",
+      "environment": [],
+      "target_uid": 1103,
+      "target_gid": 1103,
+      "capabilities": {
+        "bounding_set": 0,
+        "ambient_set": 0,
+        "no_new_privileges": true
+      },
+      "cgroup": {
+        "tasks_max": 128,
+        "memory_max_bytes": 1073741824
+      },
+      "timeout_ms": 15000
+    }
+  }
+}

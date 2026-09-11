@@ -1,0 +1,17 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 12
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "max"
+
+[agents.watchdog_lead]
+description = "Luna Max watchdog workstream lead; root-reserved descendants only"
+config_file = "agents/lead.toml"
+
+[agents.watchdog_coordinator]
+description = "Luna Max bounded package coordinator; one reserved leaf only"
+config_file = "agents/coordinator.toml"
+
+[agents.watchdog_leaf]
+description = "Luna Max depth-three leaf; no child delegation"
+config_file = "agents/leaf.toml"

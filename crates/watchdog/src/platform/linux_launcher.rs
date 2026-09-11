@@ -1,0 +1,3873 @@
+//! Race-free Linux launch handoff.
+//!
+//! A normal `Command::spawn` starts the requested program before a caller can
+//! write its PID to a cgroup.  That ordering is not an ownership proof.  This
+//! module instead starts the trusted watchdog executable in a barrier mode.
+//! The helper accepts one bounded request frame, waits for a nonce-bound `GO`,
+//! and only then starts the approved component.  The parent places the helper
+//! in the durable cgroup and verifies membership before sending `GO`.
+//!
+//! The helper calls the safe Unix `CommandExt::exec` operation only after the
+//! complete request and cgroup membership have been checked.  `exec` replaces
+//! the helper in place, preserving the PID and all inherited stream handles;
+//! there is no second target process or post-spawn PID move to authorize.
+
+use super::contract::{AdapterError, ComponentKind, LaunchSpec, SessionSelector};
+use super::gateway_health::{
+    GatewayHealthBootstrap, GatewayHealthBootstrapError, GatewayHealthFrameBinding,
+};
+use crate::worker_bootstrap::{ExpectedPeer, WorkerBootstrapLaunch};
+use rustix::fs::{
+    MemfdFlags, OFlags, SealFlags, fcntl_add_seals, fcntl_getfl, fcntl_setfl, fstatfs, memfd_create,
+};
+use rustix::pipe::{PipeFlags, pipe_with};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+use uuid::{Uuid, Version};
+
+const FRAME_MAGIC: &[u8; 8] = b"ASC-LNX1";
+const FRAME_VERSION: u8 = 1;
+const GO_MAGIC: &[u8; 8] = b"ASC-GO01";
+const READY_MAGIC: &[u8; 8] = b"ASC-RDY1";
+const HELPER_ARGUMENT: &str = "--ascension-linux-launch-helper";
+const PARENT_BOOTSTRAP_PID_ARGUMENT: &str = "--ascension-linux-parent-bootstrap-pid";
+const PROTECTED_CONFIG_ARGUMENT: &str = "--ascension-linux-protected-config";
+const DELEGATED_CGROUP_ROOT_ARGUMENT: &str = "--ascension-linux-delegated-cgroup-root";
+const WORKER_PIPE_ARGUMENT: &str = "--ascension-linux-worker-pipe";
+const WORKER_BOOT_ID_ARGUMENT: &str = "--ascension-linux-worker-boot-id";
+const WORKER_FRAME_SHA256_ARGUMENT: &str = "--ascension-linux-worker-frame-sha256";
+const GATEWAY_HEALTH_PIPE_ARGUMENT: &str = "--ascension-linux-gateway-health-pipe";
+const MAX_FRAME_BYTES: usize = 256 * 1024;
+const MAX_FIELD_BYTES: usize = 16 * 1024;
+const MAX_ARGUMENTS: usize = 64;
+const MAX_ENVIRONMENT: usize = 64;
+const MAX_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
+const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+const CHILD_CLEANUP_POLL: Duration = Duration::from_millis(10);
+const MIN_INHERITED_FD: RawFd = 3;
+const O_DIRECTORY: i32 = 0o200_000;
+const O_NONBLOCK: i32 = 0o4_000;
+const O_NOFOLLOW: i32 = 0o400_000;
+const O_CLOEXEC: i32 = 0o2_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProtectedFileIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    mode: u32,
+    size: u64,
+}
+
+/// Immutable bootstrap context supplied separately from the untrusted launch
+/// frame.  The real watchdog binds an already-open configuration file and
+/// delegated cgroup root before spawning the helper.
+#[derive(Clone, Debug)]
+pub struct LinuxHelperBootstrap {
+    protected_config_path: PathBuf,
+    protected_config: Arc<File>,
+    protected_config_identity: ProtectedFileIdentity,
+    delegated_cgroup_root_path: Option<PathBuf>,
+    delegated_cgroup_root: Option<Arc<File>>,
+    delegated_cgroup_root_identity: Option<ProtectedFileIdentity>,
+    worker_boot_id: Option<String>,
+    worker_frame_sha256: Option<String>,
+    worker_reader: Option<Arc<File>>,
+    gateway_health_reader: Option<Arc<File>>,
+}
+
+impl PartialEq for LinuxHelperBootstrap {
+    fn eq(&self, other: &Self) -> bool {
+        self.protected_config_path == other.protected_config_path
+            && self.protected_config_identity == other.protected_config_identity
+            && self.delegated_cgroup_root_path == other.delegated_cgroup_root_path
+            && self.delegated_cgroup_root_identity == other.delegated_cgroup_root_identity
+            && self.worker_boot_id == other.worker_boot_id
+            && self.worker_frame_sha256 == other.worker_frame_sha256
+    }
+}
+
+impl Eq for LinuxHelperBootstrap {}
+
+impl LinuxHelperBootstrap {
+    /// Validate and canonicalize an owner-protected configuration path.
+    ///
+    /// The path must already exist as a regular, non-symlink file and must not
+    /// be writable by group or other users.  This check is only a bootstrap
+    /// guard; the caller still has to bind the resulting descriptor to its
+    /// fixed configuration before reading durable launch intent.
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, AdapterError> {
+        let path = path.into();
+        if !path.is_absolute() || path.as_os_str().is_empty() {
+            return Err(AdapterError::Invalid(
+                "Linux protected config path must be absolute".to_owned(),
+            ));
+        }
+        let (file, canonical, identity) = open_protected_config_path(&path)?;
+        if canonical != path {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux protected config path is not canonical".to_owned(),
+            ));
+        }
+        Ok(Self {
+            protected_config_path: canonical,
+            protected_config: Arc::new(file),
+            protected_config_identity: identity,
+            delegated_cgroup_root_path: None,
+            delegated_cgroup_root: None,
+            delegated_cgroup_root_identity: None,
+            worker_boot_id: None,
+            worker_frame_sha256: None,
+            worker_reader: None,
+            gateway_health_reader: None,
+        })
+    }
+
+    fn from_parent_fds(
+        parent_pid: u32,
+        config_fd: RawFd,
+        root_fd: RawFd,
+        ready_fd: RawFd,
+        worker_fd: Option<RawFd>,
+        worker_boot_id: Option<String>,
+        worker_frame_sha256: Option<String>,
+        gateway_health_fd: Option<RawFd>,
+    ) -> Result<(Self, HelperReadyChannel), AdapterError> {
+        let actual_parent_pid =
+            rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_pid()).ok());
+        if actual_parent_pid != Some(parent_pid) {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux helper bootstrap parent process is unexpected".to_owned(),
+            ));
+        }
+        if config_fd < MIN_INHERITED_FD
+            || root_fd < MIN_INHERITED_FD
+            || ready_fd < MIN_INHERITED_FD
+            || config_fd == root_fd
+            || config_fd == ready_fd
+            || root_fd == ready_fd
+            || worker_fd.is_some_and(|fd| {
+                fd < MIN_INHERITED_FD || fd == config_fd || fd == root_fd || fd == ready_fd
+            })
+            || gateway_health_fd.is_some_and(|fd| {
+                fd < MIN_INHERITED_FD
+                    || fd == config_fd
+                    || fd == root_fd
+                    || fd == ready_fd
+                    || worker_fd.is_some_and(|worker_fd| fd == worker_fd)
+            })
+        {
+            return Err(AdapterError::Invalid(
+                "Linux helper bootstrap descriptors are invalid".to_owned(),
+            ));
+        }
+        // The trusted parent keeps these descriptors open while the helper
+        // starts, but does not make them inheritable.  Opening through the
+        // parent's proc-fd view duplicates the exact already-open file
+        // descriptions into CLOEXEC handles owned only by this helper.  This
+        // avoids a process-wide inheritable-fd window and leaves no raw
+        // bootstrap descriptor for the eventual target exec to inherit.
+        let ready = open_parent_ready_descriptor(parent_pid, ready_fd)?;
+        let ready_metadata = ready.metadata().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux helper readiness descriptor metadata failed: {error}"
+            ))
+        })?;
+        if !ready_metadata.is_file() || ready_metadata.len() != 0 {
+            return Err(AdapterError::Invalid(
+                "Linux helper readiness descriptor is not a fresh regular file".to_owned(),
+            ));
+        }
+        let config = open_parent_descriptor(parent_pid, config_fd, false)?;
+        let root = open_parent_descriptor(parent_pid, root_fd, true)?;
+        let config_identity = validate_protected_config_handle(&config)?;
+        let root_metadata = root.metadata().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root metadata failed: {error}"
+            ))
+        })?;
+        let root_identity = protected_file_identity(&root_metadata);
+        if !root_metadata.is_dir() || root_identity.mode & 0o022 != 0 {
+            return Err(AdapterError::Invalid(
+                "Linux delegated cgroup root descriptor is unsafe".to_owned(),
+            ));
+        }
+        let config_path = canonical_parent_fd_path(parent_pid, config_fd)?;
+        let root_path = canonical_parent_fd_path(parent_pid, root_fd)?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            let metadata = fs::symlink_metadata(parent_fd_child(
+                parent_pid,
+                root_fd,
+                std::ffi::OsStr::new(control),
+            ))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux delegated cgroup root lacks {control}: {error}"
+                ))
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(AdapterError::Invalid(format!(
+                    "Linux delegated cgroup root has invalid {control}"
+                )));
+            }
+        }
+        let worker_reader = match worker_fd {
+            None if worker_boot_id.is_none() && worker_frame_sha256.is_none() => None,
+            Some(fd) if worker_boot_id.is_some() && worker_frame_sha256.is_some() => {
+                let boot_id = worker_boot_id.as_deref().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
+                })?;
+                let frame_sha256 = worker_frame_sha256.as_deref().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker frame metadata is missing".to_owned())
+                })?;
+                validate_worker_boot_metadata(boot_id, frame_sha256)?;
+                Some(Arc::new(open_parent_worker_descriptor(parent_pid, fd)?))
+            }
+            _ => {
+                return Err(AdapterError::Invalid(
+                    "Linux worker pipe metadata must be supplied as one complete set".to_owned(),
+                ));
+            }
+        };
+        let gateway_health_reader = gateway_health_fd
+            .map(|fd| open_parent_gateway_health_descriptor(parent_pid, fd))
+            .transpose()?;
+        if gateway_health_reader.is_some() && worker_reader.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health pipes cannot be combined".to_owned(),
+            ));
+        }
+        Ok((
+            Self {
+                protected_config_path: config_path,
+                protected_config: Arc::new(config),
+                protected_config_identity: config_identity,
+                delegated_cgroup_root_path: Some(root_path),
+                delegated_cgroup_root: Some(Arc::new(root)),
+                delegated_cgroup_root_identity: Some(root_identity),
+                worker_boot_id,
+                worker_frame_sha256,
+                worker_reader,
+                gateway_health_reader: gateway_health_reader.map(Arc::new),
+            },
+            HelperReadyChannel { file: ready },
+        ))
+    }
+
+    /// Return the canonical path that was validated for helper bootstrap.
+    #[must_use]
+    pub fn protected_config_path(&self) -> &Path {
+        &self.protected_config_path
+    }
+
+    /// Return the worker watchdog boot UUID supplied in the helper metadata,
+    /// when this invocation carries a dedicated worker bootstrap pipe.
+    #[must_use]
+    pub fn worker_boot_id(&self) -> Option<&str> {
+        self.worker_boot_id.as_deref()
+    }
+
+    /// Return the exact SHA-256 digest of the worker bootstrap frame supplied
+    /// in the helper metadata, when present.
+    #[must_use]
+    pub fn worker_frame_sha256(&self) -> Option<&str> {
+        self.worker_frame_sha256.as_deref()
+    }
+
+    /// Alias naming the frame represented by [`Self::worker_frame_sha256`].
+    #[must_use]
+    pub fn worker_bootstrap_frame_sha256(&self) -> Option<&str> {
+        self.worker_frame_sha256()
+    }
+
+    /// Attach the exact delegated cgroup root used by the parent adapter.
+    /// The directory is opened before the helper is spawned and retained by
+    /// the parent, so a helper cannot substitute a sibling root by changing a
+    /// caller-controlled path or by winning a rename race.
+    pub fn with_delegated_cgroup_root(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        let path = path.into();
+        let (directory, canonical, identity) = open_delegated_cgroup_root(&path)?;
+        self.delegated_cgroup_root_path = Some(canonical);
+        self.delegated_cgroup_root = Some(Arc::new(directory));
+        self.delegated_cgroup_root_identity = Some(identity);
+        Ok(self)
+    }
+
+    /// Return the exact cgroup root path bound to this bootstrap.
+    #[must_use]
+    pub(crate) fn delegated_cgroup_root_path(&self) -> Option<&Path> {
+        self.delegated_cgroup_root_path.as_deref()
+    }
+
+    /// Read from the descriptor opened when this bootstrap was validated.
+    /// The returned handle is still bound to the original inode.
+    pub(crate) fn protected_config_file(&self) -> Result<File, AdapterError> {
+        self.protected_config.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux protected config descriptor cannot be cloned: {error}"
+            ))
+        })
+    }
+
+    fn worker_pipe_file(&self) -> Result<Option<File>, AdapterError> {
+        self.worker_reader
+            .as_ref()
+            .map(|file| {
+                file.try_clone().map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux worker pipe descriptor cannot be cloned: {error}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn gateway_health_pipe_file(&self) -> Result<Option<File>, AdapterError> {
+        self.gateway_health_reader
+            .as_ref()
+            .map(|file| {
+                file.try_clone().map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux Gateway health pipe descriptor cannot be cloned: {error}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn parent_descriptors(
+        &self,
+        worker: Option<&WorkerBootstrapLaunch>,
+        gateway_health: Option<&GatewayHealthBootstrap>,
+    ) -> Result<ParentBootstrap, AdapterError> {
+        if worker.is_some() && gateway_health.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health pipes cannot be combined".to_owned(),
+            ));
+        }
+        let Some(root) = self.delegated_cgroup_root.as_ref() else {
+            return Err(AdapterError::Invalid(
+                "Linux helper requires an exact delegated cgroup root bootstrap".to_owned(),
+            ));
+        };
+        let config = self.protected_config.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux protected config descriptor cannot be cloned: {error}"
+            ))
+        })?;
+        let root = root.try_clone().map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root descriptor cannot be cloned: {error}"
+            ))
+        })?;
+        let config_fd = config.as_raw_fd();
+        let root_fd = root.as_raw_fd();
+        let ready = File::from(
+            memfd_create("ascension-linux-helper-ready", MemfdFlags::CLOEXEC).map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux helper readiness descriptor cannot be created: {error}"
+                ))
+            })?,
+        );
+        let ready_fd = ready.as_raw_fd();
+        if config_fd < MIN_INHERITED_FD
+            || root_fd < MIN_INHERITED_FD
+            || ready_fd < MIN_INHERITED_FD
+            || config_fd == root_fd
+            || config_fd == ready_fd
+            || root_fd == ready_fd
+        {
+            return Err(AdapterError::Unavailable(
+                "Linux helper bootstrap descriptor is reserved for stdio".to_owned(),
+            ));
+        }
+        let (worker_reader, worker_writer, worker_reader_fd) = if let Some(worker) = worker {
+            if !matches!(worker.bootstrap().expected_peer, ExpectedPeer::Linux(_)) {
+                return Err(AdapterError::Unsupported(
+                    "Linux worker bootstrap requires a Linux expected peer".to_owned(),
+                ));
+            }
+            let (reader, writer) =
+                pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux worker bootstrap pipe cannot be created: {error}"
+                    ))
+                })?;
+            let reader = File::from(reader);
+            let writer = File::from(writer);
+            let reader_fd = reader.as_raw_fd();
+            if invalid_parent_pipe_fd(
+                reader_fd,
+                writer.as_raw_fd(),
+                config_fd,
+                root_fd,
+                ready_fd,
+                None,
+            ) {
+                return Err(AdapterError::Unavailable(
+                    "Linux worker bootstrap descriptor is reserved for stdio".to_owned(),
+                ));
+            }
+            (Some(reader), Some(writer), Some(reader_fd))
+        } else {
+            (None, None, None)
+        };
+        let (gateway_health_reader, gateway_health_writer, gateway_health_reader_fd) =
+            if gateway_health.is_some() {
+                let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)
+                    .map_err(|error| {
+                        AdapterError::Unavailable(format!(
+                            "Linux Gateway health bootstrap pipe cannot be created: {error}"
+                        ))
+                    })?;
+                let reader = File::from(reader);
+                let writer = File::from(writer);
+                let reader_fd = reader.as_raw_fd();
+                if invalid_parent_pipe_fd(
+                    reader_fd,
+                    writer.as_raw_fd(),
+                    config_fd,
+                    root_fd,
+                    ready_fd,
+                    worker_reader_fd,
+                ) {
+                    return Err(AdapterError::Unavailable(
+                        "Linux Gateway health descriptor is reserved for stdio".to_owned(),
+                    ));
+                }
+                (Some(reader), Some(writer), Some(reader_fd))
+            } else {
+                (None, None, None)
+            };
+        Ok(ParentBootstrap {
+            config,
+            config_fd,
+            root,
+            root_fd,
+            ready,
+            ready_fd,
+            worker_reader,
+            worker_reader_fd,
+            worker_writer,
+            gateway_health_reader,
+            gateway_health_reader_fd,
+            gateway_health_writer,
+        })
+    }
+}
+
+fn invalid_parent_pipe_fd(
+    reader_fd: RawFd,
+    writer_fd: RawFd,
+    config_fd: RawFd,
+    root_fd: RawFd,
+    ready_fd: RawFd,
+    other_reader_fd: Option<RawFd>,
+) -> bool {
+    reader_fd < MIN_INHERITED_FD
+        || writer_fd < MIN_INHERITED_FD
+        || reader_fd == writer_fd
+        || [config_fd, root_fd, ready_fd]
+            .into_iter()
+            .any(|fd| fd == reader_fd || fd == writer_fd)
+        || other_reader_fd.is_some_and(|fd| fd == reader_fd || fd == writer_fd)
+}
+
+/// CLOEXEC parent-owned descriptors kept alive until the helper has opened
+/// their proc-fd views.  They are never made inheritable by the parent.
+struct ParentBootstrap {
+    config: File,
+    config_fd: RawFd,
+    root: File,
+    root_fd: RawFd,
+    ready: File,
+    ready_fd: RawFd,
+    worker_reader: Option<File>,
+    worker_reader_fd: Option<RawFd>,
+    worker_writer: Option<File>,
+    gateway_health_reader: Option<File>,
+    gateway_health_reader_fd: Option<RawFd>,
+    gateway_health_writer: Option<File>,
+}
+
+impl std::fmt::Debug for ParentBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ParentBootstrap")
+            .field("config", &self.config)
+            .field("config_fd", &self.config_fd)
+            .field("root", &self.root)
+            .field("root_fd", &self.root_fd)
+            .field("ready", &self.ready)
+            .field("ready_fd", &self.ready_fd)
+            .field("worker_reader", &self.worker_reader)
+            .field("worker_reader_fd", &self.worker_reader_fd)
+            .field("worker_writer", &self.worker_writer)
+            .field("gateway_health_reader", &self.gateway_health_reader)
+            .field("gateway_health_reader_fd", &self.gateway_health_reader_fd)
+            .field("gateway_health_writer", &self.gateway_health_writer)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ParentBootstrap {
+    fn wait_for_ready(
+        &mut self,
+        launch_nonce: &str,
+        timeout: Duration,
+    ) -> Result<(), AdapterError> {
+        let expected_length = READY_MAGIC
+            .len()
+            .checked_add(2)
+            .and_then(|length| length.checked_add(launch_nonce.len()))
+            .ok_or_else(|| {
+                AdapterError::Invalid("Linux helper readiness frame length overflow".to_owned())
+            })?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        loop {
+            let metadata = self.ready.metadata().map_err(|error| {
+                AdapterError::Unavailable(format!(
+                    "Linux helper readiness descriptor cannot be inspected: {error}"
+                ))
+            })?;
+            let expected_bytes = u64::try_from(expected_length).map_err(|_| {
+                AdapterError::Invalid("Linux helper readiness size exceeds bounds".to_owned())
+            })?;
+            if metadata.len() > expected_bytes {
+                return Err(AdapterError::IdentityMismatch(
+                    "Linux helper readiness acknowledgement contains trailing bytes".to_owned(),
+                ));
+            }
+            if metadata.len() == expected_bytes {
+                self.ready.seek(SeekFrom::Start(0)).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness descriptor cannot be rewound: {error}"
+                    ))
+                })?;
+                let mut frame = vec![0_u8; expected_length];
+                self.ready.read_exact(&mut frame).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness acknowledgement cannot be read: {error}"
+                    ))
+                })?;
+                let mut cursor = Cursor::new(frame);
+                let mut magic = [0_u8; READY_MAGIC.len()];
+                cursor.read_exact(&mut magic).map_err(|error| {
+                    AdapterError::Unavailable(format!(
+                        "Linux helper readiness acknowledgement is truncated: {error}"
+                    ))
+                })?;
+                if magic != *READY_MAGIC {
+                    return Err(AdapterError::IdentityMismatch(
+                        "Linux helper readiness acknowledgement has the wrong magic".to_owned(),
+                    ));
+                }
+                let acknowledged_nonce = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+                if acknowledged_nonce != launch_nonce {
+                    return Err(AdapterError::IdentityMismatch(
+                        "Linux helper readiness acknowledgement nonce differs".to_owned(),
+                    ));
+                }
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(AdapterError::Timeout(
+                    "Linux helper did not acknowledge protected bootstrap readiness".to_owned(),
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+        }
+    }
+}
+
+struct HelperReadyChannel {
+    file: File,
+}
+
+impl HelperReadyChannel {
+    fn send(&mut self, launch_nonce: &str) -> Result<(), AdapterError> {
+        let mut frame = Vec::with_capacity(READY_MAGIC.len() + 2 + launch_nonce.len());
+        frame.extend_from_slice(READY_MAGIC);
+        put_string_io(&mut frame, launch_nonce).map_err(|error| {
+            AdapterError::Io(format!(
+                "Linux helper readiness acknowledgement failed: {error}"
+            ))
+        })?;
+        self.file.write_all(&frame).map_err(|error| {
+            AdapterError::Io(format!(
+                "Linux helper readiness acknowledgement failed: {error}"
+            ))
+        })
+    }
+}
+
+fn protected_file_identity(metadata: &std::fs::Metadata) -> ProtectedFileIdentity {
+    ProtectedFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        uid: metadata.uid(),
+        mode: metadata.mode(),
+        size: metadata.len(),
+    }
+}
+
+fn validate_protected_config_handle(file: &File) -> Result<ProtectedFileIdentity, AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("Linux protected config metadata failed: {error}"))
+    })?;
+    let identity = protected_file_identity(&metadata);
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux protected config must be a regular file".to_owned(),
+        ));
+    }
+    if identity.uid != rustix::process::geteuid().as_raw()
+        || identity.mode & 0o077 != 0
+        || identity.mode & 0o400 == 0
+    {
+        return Err(AdapterError::Invalid(
+            "Linux protected config must be owner-readable and owner-only".to_owned(),
+        ));
+    }
+    if identity.size > 65_536 {
+        return Err(AdapterError::Invalid(
+            "Linux protected config exceeds the bounded read size".to_owned(),
+        ));
+    }
+    Ok(identity)
+}
+
+fn open_protected_config_path(
+    path: &Path,
+) -> Result<(File, PathBuf, ProtectedFileIdentity), AdapterError> {
+    let file = open_regular_path_without_links(path, "Linux protected config")?;
+    let identity = validate_protected_config_handle(&file)?;
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux protected config cannot be resolved: {error}"
+        ))
+    })?;
+    let opened = canonical_fd_path(file.as_raw_fd())?;
+    if opened != canonical {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux protected config was replaced while it was opened".to_owned(),
+        ));
+    }
+    Ok((file, canonical, identity))
+}
+
+fn open_delegated_cgroup_root(
+    path: &Path,
+) -> Result<(File, PathBuf, ProtectedFileIdentity), AdapterError> {
+    let file = open_directory_path_without_links(path, "Linux delegated cgroup root")?;
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux delegated cgroup root metadata failed: {error}"
+        ))
+    })?;
+    let identity = protected_file_identity(&metadata);
+    if !metadata.is_dir() {
+        return Err(AdapterError::Invalid(
+            "Linux delegated cgroup root must be a directory".to_owned(),
+        ));
+    }
+    if identity.mode & 0o022 != 0 {
+        return Err(AdapterError::Invalid(
+            "Linux delegated cgroup root must not be group/other writable".to_owned(),
+        ));
+    }
+    for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+        let control_path = proc_fd_child(file.as_raw_fd(), std::ffi::OsStr::new(control));
+        let metadata = fs::symlink_metadata(&control_path).map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux delegated cgroup root lacks {control}: {error}"
+            ))
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(AdapterError::Invalid(format!(
+                "Linux delegated cgroup root has invalid {control}"
+            )));
+        }
+    }
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux delegated cgroup root cannot be resolved: {error}"
+        ))
+    })?;
+    if canonical_fd_path(file.as_raw_fd())? != canonical {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux delegated cgroup root was replaced while it was opened".to_owned(),
+        ));
+    }
+    Ok((file, canonical, identity))
+}
+
+fn open_regular_path_without_links(path: &Path, label: &str) -> Result<File, AdapterError> {
+    if !path.is_absolute() {
+        return Err(AdapterError::Invalid(format!(
+            "{label} path must be absolute"
+        )));
+    }
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+        .open("/")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("{label} root is unavailable: {error}"))
+        })?;
+    let components = checked_path_components(path, label)?;
+    let Some((last, parents)) = components.split_last() else {
+        return Err(AdapterError::Invalid(format!("{label} path is empty")));
+    };
+    for component in parents {
+        directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+            .open(proc_fd_child(directory.as_raw_fd(), component))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!("{label} parent is unavailable: {error}"))
+            })?;
+    }
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+        .open(proc_fd_child(directory.as_raw_fd(), last))
+        .map_err(|error| AdapterError::Unavailable(format!("{label} is unavailable: {error}")))
+}
+
+fn open_directory_path_without_links(path: &Path, label: &str) -> Result<File, AdapterError> {
+    if !path.is_absolute() {
+        return Err(AdapterError::Invalid(format!(
+            "{label} path must be absolute"
+        )));
+    }
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+        .open("/")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("{label} root is unavailable: {error}"))
+        })?;
+    for component in checked_path_components(path, label)? {
+        directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+            .open(proc_fd_child(directory.as_raw_fd(), &component))
+            .map_err(|error| {
+                AdapterError::Unavailable(format!("{label} directory is unavailable: {error}"))
+            })?;
+    }
+    Ok(directory)
+}
+
+fn checked_path_components(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<std::ffi::OsString>, AdapterError> {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::RootDir => None,
+            std::path::Component::Normal(value) => Some(Ok(value.to_os_string())),
+            _ => Some(Err(AdapterError::Invalid(format!(
+                "{label} path contains traversal or an unsupported component"
+            )))),
+        })
+        .collect()
+}
+
+fn proc_fd_child(fd: RawFd, component: &std::ffi::OsStr) -> PathBuf {
+    let mut path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    path.push(component);
+    path
+}
+
+fn canonical_fd_path(fd: RawFd) -> Result<PathBuf, AdapterError> {
+    canonical_descriptor_path(format!("/proc/self/fd/{fd}"))
+}
+
+fn canonical_parent_fd_path(parent_pid: u32, fd: RawFd) -> Result<PathBuf, AdapterError> {
+    canonical_descriptor_path(parent_fd_path(parent_pid, fd))
+}
+
+fn canonical_descriptor_path(path: impl AsRef<Path>) -> Result<PathBuf, AdapterError> {
+    fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux bootstrap descriptor target is unavailable: {error}"
+        ))
+    })
+}
+
+fn parent_fd_path(parent_pid: u32, fd: RawFd) -> PathBuf {
+    PathBuf::from(format!("/proc/{parent_pid}/fd/{fd}"))
+}
+
+fn parent_fd_child(parent_pid: u32, fd: RawFd, component: &std::ffi::OsStr) -> PathBuf {
+    let mut path = parent_fd_path(parent_pid, fd);
+    path.push(component);
+    path
+}
+
+fn open_parent_descriptor(
+    parent_pid: u32,
+    fd: RawFd,
+    directory: bool,
+) -> Result<File, AdapterError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    if directory {
+        options.custom_flags(O_DIRECTORY | O_NONBLOCK | O_CLOEXEC);
+    } else {
+        options.custom_flags(O_NONBLOCK | O_CLOEXEC);
+    }
+    options
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent bootstrap descriptor cannot be opened: {error}"
+            ))
+        })
+}
+
+/// Hidden command-line argument recognized by the watchdog's real executable
+/// entrypoint.  The normal CLI must dispatch this before parsing user input.
+#[must_use]
+pub const fn helper_argument() -> &'static str {
+    HELPER_ARGUMENT
+}
+
+/// Hidden argument carrying the parent-owned separately validated config fd.
+#[must_use]
+pub const fn protected_config_argument() -> &'static str {
+    PROTECTED_CONFIG_ARGUMENT
+}
+
+/// How a launched component's standard stream is connected.
+///
+/// The launcher never reads a component stream in a detached thread.  When a
+/// stream is [`OutputMode::Piped`], ownership remains with the returned
+/// [`Child`] and the caller is responsible for bounded draining.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputMode {
+    Null,
+    Inherit,
+    Piped,
+}
+
+impl OutputMode {
+    fn into_stdio(self) -> Stdio {
+        match self {
+            Self::Null => Stdio::null(),
+            Self::Inherit => Stdio::inherit(),
+            Self::Piped => Stdio::piped(),
+        }
+    }
+}
+
+/// Standard-stream policy for one trusted launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LauncherStreams {
+    pub stdout: OutputMode,
+    pub stderr: OutputMode,
+}
+
+impl LauncherStreams {
+    /// Keep component output disabled, matching the platform adapter default.
+    #[must_use]
+    pub const fn null() -> Self {
+        Self {
+            stdout: OutputMode::Null,
+            stderr: OutputMode::Null,
+        }
+    }
+}
+
+impl Default for LauncherStreams {
+    fn default() -> Self {
+        Self::null()
+    }
+}
+
+/// The request supplied to the root-owned durable-intent authorizer.
+///
+/// A caller must authorize the complete specification and exact cgroup path;
+/// authorizing only the launch nonce or executable path is insufficient.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHelperRequest {
+    pub specification: LaunchSpec,
+    pub cgroup_path: PathBuf,
+}
+
+/// Authorization returned by the root-owned durable-intent lookup.
+///
+/// The helper compares the request to this value, canonicalizes the approved
+/// role path, and hashes the executable again immediately before launch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHelperAuthorization {
+    pub specification: LaunchSpec,
+    pub cgroup_path: PathBuf,
+    pub allowlisted_executables: BTreeMap<ComponentKind, PathBuf>,
+}
+
+impl LinuxHelperAuthorization {
+    /// Validate the closed helper authorization surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit error when the durable authorization is malformed,
+    /// has no role allowlist entry, or names an untrusted cgroup path.
+    pub fn validate(&self) -> Result<(), AdapterError> {
+        self.specification.validate()?;
+        if !self.cgroup_path.is_absolute() {
+            return Err(AdapterError::Invalid(
+                "Linux helper cgroup path must be absolute".to_owned(),
+            ));
+        }
+        let Some(approved) = self
+            .allowlisted_executables
+            .get(&self.specification.component)
+        else {
+            return Err(AdapterError::Unsupported(
+                "Linux helper role is not allowlisted".to_owned(),
+            ));
+        };
+        if !approved.is_absolute() {
+            return Err(AdapterError::Invalid(
+                "Linux helper allowlist path must be absolute".to_owned(),
+            ));
+        }
+        if self.specification.executable_sha256.len() != 64
+            || !self
+                .specification
+                .executable_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(AdapterError::Invalid(
+                "Linux helper executable digest is not SHA-256".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A helper process that has received its frame but not yet been released.
+///
+/// Dropping a pending launch kills the exact helper handle.  The cgroup owner
+/// must still remove the cgroup or use `cgroup.kill` when a post-release error
+/// occurs.
+pub(crate) struct PendingLaunch {
+    child: Option<Child>,
+    request_frame: Option<Vec<u8>>,
+    stdin: Option<ChildStdin>,
+    parent_bootstrap: Option<ParentBootstrap>,
+    worker_writer: Option<File>,
+    worker_launch: Option<WorkerBootstrapLaunch>,
+    gateway_health_writer: Option<File>,
+    gateway_health_frame: Option<zeroize::Zeroizing<[u8; super::gateway_health::FRAME_BYTES]>>,
+    launch_nonce: String,
+    timeout: Duration,
+    released: bool,
+}
+
+impl std::fmt::Debug for PendingLaunch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingLaunch")
+            .field("pid", &self.child.as_ref().map(Child::id))
+            .field("released", &self.released)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingLaunch {
+    /// Return the helper PID that must be assigned before release.
+    #[must_use]
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
+    /// Return the helper's nonce-bound launch timeout.
+    #[must_use]
+    pub(crate) const fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Send `GO` after the parent has proved exact cgroup membership.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the helper closed its anonymous pipe or the
+    /// nonce-bound control frame could not be written.
+    pub(crate) fn release_gate(&mut self) -> Result<(), AdapterError> {
+        if self.released {
+            return Err(AdapterError::Invalid(
+                "Linux helper release was already sent".to_owned(),
+            ));
+        }
+        // Do not perform any helper-control I/O while the child is only owned
+        // by this launcher.  The caller must first put the exact child into
+        // its durable cgroup and verify membership; otherwise a bounded write
+        // failure could leave an uncontained helper behind.  Retain the frame
+        // until this point so every post-spawn I/O failure still returns with
+        // the exact Child handle in PendingLaunch for cgroup cleanup.
+        {
+            let Some(stdin) = self.stdin.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux helper stdin is unavailable".to_owned(),
+                ));
+            };
+            let Some(request_frame) = self.request_frame.as_ref() else {
+                return Err(AdapterError::Invalid(
+                    "Linux helper request frame is unavailable".to_owned(),
+                ));
+            };
+            set_nonblocking(&*stdin, "Linux helper stdin")?;
+            write_bounded(
+                stdin,
+                request_frame,
+                self.timeout.min(Duration::from_secs(5)),
+                "Linux helper request handoff",
+            )?;
+        }
+        self.request_frame.take();
+        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
+            let ready_result = bootstrap.wait_for_ready(&self.launch_nonce, self.timeout);
+            // READY proves the helper owns its duplicate. Keeping our reader
+            // would conceal a rejected/exited helper from the bounded writer.
+            bootstrap.worker_reader.take();
+            // The health pipe has the same ownership rule as the worker pipe:
+            // after READY, only the helper may retain a read end. Otherwise a
+            // dead helper could leave the parent's read end open and make a
+            // bounded health-frame write appear successful.
+            bootstrap.gateway_health_reader.take();
+            ready_result?;
+        }
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(AdapterError::Invalid(
+                "Linux helper stdin is unavailable".to_owned(),
+            ));
+        };
+        let mut go = Vec::with_capacity(GO_MAGIC.len() + 2 + self.launch_nonce.len());
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, &self.launch_nonce).map_err(|error| {
+            AdapterError::Io(format!("Linux helper GO handoff failed: {error}"))
+        })?;
+        write_bounded(
+            stdin,
+            &go,
+            self.timeout.min(Duration::from_secs(5)),
+            "Linux helper GO handoff",
+        )?;
+        if let Some(worker_launch) = self.worker_launch.as_ref() {
+            let Some(worker_writer) = self.worker_writer.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux worker bootstrap writer is unavailable".to_owned(),
+                ));
+            };
+            write_worker_frame(
+                worker_writer,
+                worker_launch.frame(),
+                self.timeout.min(Duration::from_secs(5)),
+            )?;
+            self.worker_writer.take();
+        }
+        if let Some(gateway_health_frame) = self.gateway_health_frame.as_ref() {
+            let Some(gateway_health_writer) = self.gateway_health_writer.as_mut() else {
+                return Err(AdapterError::Invalid(
+                    "Linux Gateway health bootstrap writer is unavailable".to_owned(),
+                ));
+            };
+            write_gateway_health_frame(
+                gateway_health_writer,
+                gateway_health_frame.as_ref(),
+                self.timeout.min(Duration::from_secs(5)),
+            )?;
+            self.gateway_health_writer.take();
+        }
+        self.released = true;
+        Ok(())
+    }
+
+    /// Consume the barrier and return the exact helper child handle.
+    ///
+    /// The helper is replaced in place by the target after the gate.  The
+    /// returned handle therefore remains authoritative for the target PID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the gate was not released or the child handle was
+    /// unexpectedly unavailable.
+    pub(crate) fn take_child(&mut self) -> Result<Child, AdapterError> {
+        if !self.released {
+            return Err(AdapterError::Invalid(
+                "Linux helper cannot be consumed before GO".to_owned(),
+            ));
+        }
+        self.stdin.take();
+        self.worker_writer.take();
+        self.gateway_health_writer.take();
+        // The helper parsed and opened both parent descriptors before it could
+        // read the frame or accept GO, so the parent-side keepalive can close
+        // before returning the target handle.  The target never inherited
+        // these CLOEXEC parent descriptors in the first place.
+        self.parent_bootstrap.take();
+        self.child.take().ok_or_else(|| {
+            AdapterError::Unavailable("Linux helper child handle was lost".to_owned())
+        })
+    }
+
+    /// Close every parent-side handoff descriptor before a caller performs
+    /// explicit launch-failure cleanup.  Keeping a reader or writer alive can
+    /// make a dead helper/cgroup look reachable and can hide a failed pipe
+    /// handoff from the cleanup proof.
+    pub(crate) fn close_handoff_descriptors(&mut self) {
+        self.stdin.take();
+        self.worker_writer.take();
+        self.gateway_health_writer.take();
+        if let Some(bootstrap) = self.parent_bootstrap.as_mut() {
+            bootstrap.worker_reader.take();
+            bootstrap.worker_writer.take();
+            bootstrap.gateway_health_reader.take();
+            bootstrap.gateway_health_writer.take();
+        }
+    }
+
+    /// Borrow the exact helper child for explicit cgroup cleanup while this
+    /// pending launch still owns all of its transport descriptors.
+    pub(crate) fn child_mut(&mut self) -> Option<&mut Child> {
+        self.child.as_mut()
+    }
+}
+
+impl Drop for PendingLaunch {
+    fn drop(&mut self) {
+        // The adapter normally calls `close_handoff_descriptors` and performs
+        // a fallible cgroup cleanup while it still owns this object.  Drop is
+        // only the final best-effort guard for callers that abandon a pending
+        // launch without entering that explicit error path.
+        self.close_handoff_descriptors();
+        if let Some(child) = self.child.as_mut() {
+            terminate_child_bounded(child, CHILD_CLEANUP_TIMEOUT);
+        }
+    }
+}
+
+/// Kill and reap a helper without allowing a launch-error path or `Drop` to
+/// block forever.  The cgroup owner remains responsible for a later
+/// `cgroup.kill` reconciliation when this best-effort reap cannot be proved.
+fn terminate_child_bounded(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let _ = child.kill();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Ok(None) => return,
+        }
+    }
+}
+
+/// Trusted current-executable helper launcher.
+#[derive(Clone, Debug)]
+pub struct TrustedLinuxLauncher {
+    helper_executable: PathBuf,
+    helper_executable_sha256: String,
+    helper_argument: String,
+    bootstrap: Option<LinuxHelperBootstrap>,
+    streams: LauncherStreams,
+    timeout: Duration,
+}
+
+impl TrustedLinuxLauncher {
+    /// Construct a launcher around a canonical trusted watchdog executable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Unavailable`] if the executable cannot be
+    /// canonicalized or is not a regular file.
+    pub fn new(helper_executable: impl Into<PathBuf>) -> Result<Self, AdapterError> {
+        let helper_executable = helper_executable.into();
+        let canonical = fs::canonicalize(&helper_executable).map_err(|error| {
+            AdapterError::Unavailable(format!("Linux helper executable is unavailable: {error}"))
+        })?;
+        let helper_executable_sha256 = hash_file(&canonical)?;
+        Ok(Self {
+            helper_executable: canonical,
+            helper_executable_sha256,
+            helper_argument: HELPER_ARGUMENT.to_owned(),
+            bootstrap: None,
+            streams: LauncherStreams::default(),
+            timeout: Duration::from_secs(10),
+        })
+    }
+
+    /// Construct a launcher from the executable containing the watchdog main.
+    ///
+    /// The root executable must dispatch [`helper_argument`] before normal CLI
+    /// parsing.  This constructor does not silently fall back to direct target
+    /// spawning when that dispatch is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit platform error when the current executable cannot
+    /// be trusted as a regular file.
+    pub fn current_executable() -> Result<Self, AdapterError> {
+        Self::new(env::current_exe().map_err(|error| {
+            AdapterError::Unavailable(format!("current Linux helper is unavailable: {error}"))
+        })?)
+    }
+
+    /// Set the bounded helper barrier timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Invalid`] for a zero or overlarge timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Result<Self, AdapterError> {
+        if timeout.is_zero() || timeout > MAX_TIMEOUT {
+            return Err(AdapterError::Invalid(
+                "Linux helper timeout is outside bounds".to_owned(),
+            ));
+        }
+        self.timeout = timeout;
+        Ok(self)
+    }
+
+    /// Set the caller-owned standard-stream policy.
+    #[must_use]
+    pub fn with_streams(mut self, streams: LauncherStreams) -> Self {
+        self.streams = streams;
+        self
+    }
+
+    /// Bind a protected configuration path to every helper invocation.
+    ///
+    /// The path is opened and validated immediately; a parent-owned descriptor
+    /// is kept alive and referenced by a fixed argument, never accepted from
+    /// the launch frame.  The companion cgroup-root binding must be added for
+    /// production helper launches.
+    pub fn with_protected_config_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        self.bootstrap = Some(LinuxHelperBootstrap::new(path)?);
+        Ok(self)
+    }
+
+    /// Bind the exact delegated cgroup root to the already protected config
+    /// bootstrap.  Both descriptors are opened by the helper through the
+    /// trusted parent's proc-fd view and remain CLOEXEC in the target.
+    pub fn with_delegated_cgroup_root(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AdapterError> {
+        let bootstrap = self.bootstrap.take().ok_or_else(|| {
+            AdapterError::Invalid(
+                "delegated cgroup root requires a protected config bootstrap".to_owned(),
+            )
+        })?;
+        self.bootstrap = Some(bootstrap.with_delegated_cgroup_root(path)?);
+        Ok(self)
+    }
+
+    /// Bind a previously validated helper bootstrap context.
+    #[must_use]
+    pub fn with_bootstrap(mut self, bootstrap: LinuxHelperBootstrap) -> Self {
+        self.bootstrap = Some(bootstrap);
+        self
+    }
+
+    /// Return the protected context bound to this launcher, if configured.
+    #[must_use]
+    pub fn bootstrap(&self) -> Option<&LinuxHelperBootstrap> {
+        self.bootstrap.as_ref()
+    }
+
+    /// Return the canonical helper executable path.
+    #[must_use]
+    pub fn helper_executable(&self) -> &Path {
+        &self.helper_executable
+    }
+
+    /// Return the digest bound to the sealed helper snapshot.
+    #[must_use]
+    pub(crate) fn helper_executable_sha256(&self) -> &str {
+        &self.helper_executable_sha256
+    }
+
+    /// Spawn only the trusted helper and retain its bounded request frame.
+    ///
+    /// The caller must assign [`PendingLaunch::pid`] to the exact durable
+    /// cgroup, verify membership, and call [`PendingLaunch::release_gate`],
+    /// which performs the initial control handoff only after that proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit error for malformed launch data, an oversized
+    /// frame, or helper process/pipe failure.
+    pub(crate) fn prepare(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+    ) -> Result<PendingLaunch, AdapterError> {
+        self.prepare_inner(specification, cgroup_path, None, None)
+    }
+
+    /// Spawn a helper with a dedicated Linux worker bootstrap pipe.
+    ///
+    /// The worker frame is retained immutably until the parent has sent GO;
+    /// its bytes never enter the helper control pipe, command line, or
+    /// environment.  The protected helper bootstrap must be configured for
+    /// this overload so the helper can bind and validate the pipe descriptor.
+    pub(crate) fn prepare_with_worker_bootstrap(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        worker: &WorkerBootstrapLaunch,
+    ) -> Result<PendingLaunch, AdapterError> {
+        if specification.component != ComponentKind::Harness {
+            return Err(AdapterError::Unsupported(
+                "Linux worker bootstrap is only valid for the Harness role".to_owned(),
+            ));
+        }
+        if worker.bootstrap().launch_nonce.to_string() != specification.launch_nonce
+            || worker.bootstrap().component_id != specification.instance_id
+        {
+            return Err(AdapterError::IdentityMismatch(
+                "Linux worker bootstrap differs from the launch identity".to_owned(),
+            ));
+        }
+        if self.bootstrap.is_none() {
+            return Err(AdapterError::Invalid(
+                "Linux worker bootstrap requires a protected helper bootstrap".to_owned(),
+            ));
+        }
+        self.prepare_inner(specification, cgroup_path, Some(worker), None)
+    }
+
+    /// Spawn a Gateway helper with a dedicated one-shot health bootstrap pipe.
+    ///
+    /// The fixed health frame is never written to the helper control stdin,
+    /// command line, environment, or protected configuration.  The helper
+    /// validates the frame after the existing nonce-bound GO barrier and
+    /// installs only the validated bytes as the target Gateway's stdin.
+    pub(crate) fn prepare_with_gateway_health_bootstrap(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        gateway_health: &GatewayHealthBootstrap,
+    ) -> Result<PendingLaunch, AdapterError> {
+        if specification.component != ComponentKind::Gateway {
+            return Err(AdapterError::Unsupported(
+                "Gateway health bootstrap is only valid for the Gateway role".to_owned(),
+            ));
+        }
+        if self.bootstrap.is_none() {
+            return Err(AdapterError::Invalid(
+                "Gateway health bootstrap requires a protected helper bootstrap".to_owned(),
+            ));
+        }
+        gateway_health.validate_for_launch(specification)?;
+        self.prepare_inner(specification, cgroup_path, None, Some(gateway_health))
+    }
+
+    fn prepare_inner(
+        &self,
+        specification: &LaunchSpec,
+        cgroup_path: &Path,
+        worker: Option<&WorkerBootstrapLaunch>,
+        gateway_health: Option<&GatewayHealthBootstrap>,
+    ) -> Result<PendingLaunch, AdapterError> {
+        if worker.is_some() && gateway_health.is_some() {
+            return Err(AdapterError::Invalid(
+                "Linux worker and Gateway health bootstraps cannot be combined".to_owned(),
+            ));
+        }
+        specification.validate()?;
+        let frame = encode_frame(specification, cgroup_path)?;
+        // Open and hash the helper through one file descriptor immediately
+        // before spawning.  The child is invoked through `/proc/self/fd/N`,
+        // so replacing the canonical path after this point cannot substitute
+        // another helper binary between validation and exec.
+        let (helper_file, helper_fd_path) =
+            open_verified_executable(&self.helper_executable, &self.helper_executable_sha256)?;
+        let mut command = Command::new(&helper_fd_path);
+        command.arg0(&self.helper_executable);
+        command.arg(&self.helper_argument);
+        let mut parent_bootstrap = if let Some(bootstrap) = &self.bootstrap {
+            let parent = bootstrap.parent_descriptors(worker, gateway_health)?;
+            command
+                .arg(PARENT_BOOTSTRAP_PID_ARGUMENT)
+                .arg(std::process::id().to_string())
+                .arg(PROTECTED_CONFIG_ARGUMENT)
+                .arg(parent.config_fd.to_string())
+                .arg(DELEGATED_CGROUP_ROOT_ARGUMENT)
+                .arg(parent.root_fd.to_string())
+                .arg(parent.ready_fd.to_string());
+            if let Some(worker) = worker {
+                let worker_fd = parent.worker_reader_fd.ok_or_else(|| {
+                    AdapterError::Unavailable(
+                        "Linux worker bootstrap reader was not created".to_owned(),
+                    )
+                })?;
+                command
+                    .arg(WORKER_PIPE_ARGUMENT)
+                    .arg(worker_fd.to_string())
+                    .arg(WORKER_BOOT_ID_ARGUMENT)
+                    .arg(worker.bootstrap().watchdog_boot_id.to_string())
+                    .arg(WORKER_FRAME_SHA256_ARGUMENT)
+                    .arg(worker.frame_sha256());
+            }
+            if let Some(_gateway_health) = gateway_health {
+                let health_fd = parent.gateway_health_reader_fd.ok_or_else(|| {
+                    AdapterError::Unavailable(
+                        "Linux Gateway health reader was not created".to_owned(),
+                    )
+                })?;
+                command
+                    .arg(GATEWAY_HEALTH_PIPE_ARGUMENT)
+                    .arg(health_fd.to_string());
+            }
+            Some(parent)
+        } else {
+            None
+        };
+        command
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(self.streams.stdout.into_stdio())
+            .stderr(self.streams.stderr.into_stdio());
+        let mut child = command
+            .spawn()
+            .map_err(|error| AdapterError::Io(format!("Linux helper spawn failed: {error}")))?;
+        drop(helper_file);
+        let stdin = child.stdin.take();
+        let worker_writer = parent_bootstrap
+            .as_mut()
+            .and_then(|parent| parent.worker_writer.take());
+        let gateway_health_writer = parent_bootstrap
+            .as_mut()
+            .and_then(|parent| parent.gateway_health_writer.take());
+        Ok(PendingLaunch {
+            child: Some(child),
+            request_frame: Some(frame),
+            stdin,
+            parent_bootstrap,
+            worker_writer,
+            worker_launch: worker.cloned(),
+            gateway_health_writer,
+            gateway_health_frame: gateway_health.map(GatewayHealthBootstrap::encoded_frame),
+            launch_nonce: specification.launch_nonce.clone(),
+            timeout: self.timeout,
+            released: false,
+        })
+    }
+}
+
+/// Return true only for the exact hidden helper invocation.
+#[must_use]
+pub fn helper_invocation_requested() -> bool {
+    let mut arguments = env::args();
+    let _ = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|value| value == HELPER_ARGUMENT)
+}
+
+fn parse_helper_bootstrap()
+-> Result<Option<(LinuxHelperBootstrap, HelperReadyChannel)>, AdapterError> {
+    parse_helper_bootstrap_arguments(env::args())
+}
+
+fn parse_helper_bootstrap_arguments(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<Option<(LinuxHelperBootstrap, HelperReadyChannel)>, AdapterError> {
+    let _ = arguments.next();
+    let Some(argument) = arguments.next() else {
+        return Ok(None);
+    };
+    if argument != HELPER_ARGUMENT {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let parent_argument = arguments.next().ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper parent bootstrap process identifier is missing".to_owned(),
+        )
+    })?;
+    if parent_argument != PARENT_BOOTSTRAP_PID_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid parent bootstrap argument".to_owned(),
+        ));
+    }
+    let parent_pid = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid(
+                "Linux helper parent bootstrap process identifier is missing".to_owned(),
+            )
+        })?
+        .parse::<u32>()
+        .map_err(|_| {
+            AdapterError::Invalid(
+                "Linux helper parent bootstrap process identifier is invalid".to_owned(),
+            )
+        })?;
+    let Some(config_argument) = arguments.next() else {
+        return Ok(None);
+    };
+    if config_argument != PROTECTED_CONFIG_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid bootstrap argument".to_owned(),
+        ));
+    }
+    let config_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid("Linux helper protected config descriptor is missing".to_owned())
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid("Linux helper protected config descriptor is invalid".to_owned())
+        })?;
+    let root_argument = arguments.next().ok_or_else(|| {
+        AdapterError::Invalid("Linux helper delegated cgroup root descriptor is missing".to_owned())
+    })?;
+    if root_argument != DELEGATED_CGROUP_ROOT_ARGUMENT {
+        return Err(AdapterError::Invalid(
+            "Linux helper invocation has an invalid cgroup root bootstrap argument".to_owned(),
+        ));
+    }
+    let root_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid(
+                "Linux helper delegated cgroup root descriptor is missing".to_owned(),
+            )
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid(
+                "Linux helper delegated cgroup root descriptor is invalid".to_owned(),
+            )
+        })?;
+    let ready_fd = arguments
+        .next()
+        .ok_or_else(|| {
+            AdapterError::Invalid("Linux helper readiness descriptor is missing".to_owned())
+        })?
+        .parse::<RawFd>()
+        .map_err(|_| {
+            AdapterError::Invalid("Linux helper readiness descriptor is invalid".to_owned())
+        })?;
+    let (worker_fd, worker_boot_id, worker_frame_sha256, gateway_health_fd) =
+        if let Some(worker_argument) = arguments.next() {
+            if worker_argument == GATEWAY_HEALTH_PIPE_ARGUMENT {
+                let gateway_health_fd = arguments
+                    .next()
+                    .ok_or_else(|| {
+                        AdapterError::Invalid(
+                            "Linux Gateway health pipe descriptor is missing".to_owned(),
+                        )
+                    })?
+                    .parse::<RawFd>()
+                    .map_err(|_| {
+                        AdapterError::Invalid(
+                            "Linux Gateway health pipe descriptor is invalid".to_owned(),
+                        )
+                    })?;
+                if arguments.next().is_some() {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has unexpected arguments".to_owned(),
+                    ));
+                }
+                (None, None, None, Some(gateway_health_fd))
+            } else if worker_argument != WORKER_PIPE_ARGUMENT {
+                return Err(AdapterError::Invalid(
+                    "Linux helper invocation has an invalid worker pipe argument".to_owned(),
+                ));
+            } else {
+                let worker_fd = arguments
+                    .next()
+                    .ok_or_else(|| {
+                        AdapterError::Invalid("Linux worker pipe descriptor is missing".to_owned())
+                    })?
+                    .parse::<RawFd>()
+                    .map_err(|_| {
+                        AdapterError::Invalid("Linux worker pipe descriptor is invalid".to_owned())
+                    })?;
+                let boot_argument = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid(
+                        "Linux worker boot metadata argument is missing".to_owned(),
+                    )
+                })?;
+                if boot_argument != WORKER_BOOT_ID_ARGUMENT {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has an invalid worker boot argument".to_owned(),
+                    ));
+                }
+                let worker_boot_id = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker boot metadata is missing".to_owned())
+                })?;
+                let digest_argument = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid(
+                        "Linux worker frame digest argument is missing".to_owned(),
+                    )
+                })?;
+                if digest_argument != WORKER_FRAME_SHA256_ARGUMENT {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has an invalid worker frame argument".to_owned(),
+                    ));
+                }
+                let worker_frame_sha256 = arguments.next().ok_or_else(|| {
+                    AdapterError::Invalid("Linux worker frame digest is missing".to_owned())
+                })?;
+                if arguments.next().is_some() {
+                    return Err(AdapterError::Invalid(
+                        "Linux helper invocation has unexpected arguments".to_owned(),
+                    ));
+                }
+                (
+                    Some(worker_fd),
+                    Some(worker_boot_id),
+                    Some(worker_frame_sha256),
+                    None,
+                )
+            }
+        } else {
+            (None, None, None, None)
+        };
+    LinuxHelperBootstrap::from_parent_fds(
+        parent_pid,
+        config_fd,
+        root_fd,
+        ready_fd,
+        worker_fd,
+        worker_boot_id,
+        worker_frame_sha256,
+        gateway_health_fd,
+    )
+    .map(Some)
+}
+
+/// Run the hidden helper after root code has authorized its frame.
+///
+/// The authorizer is deliberately called after the frame is decoded and must
+/// resolve the launch nonce against durable intent.  It must not authorize a
+/// request solely because the executable or role is familiar.
+///
+/// # Errors
+///
+/// Returns an explicit error for malformed input, authorization mismatch,
+/// cgroup mismatch, GO timeout/nonce mismatch, or target launch failure.
+pub fn run_hidden_helper_with_authorizer<F>(authorizer: F) -> Result<i32, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    if parse_helper_bootstrap()?.is_some() {
+        return Err(AdapterError::Invalid(
+            "Linux helper protected bootstrap requires the bootstrap authorizer API".to_owned(),
+        ));
+    }
+    run_hidden_helper_core(None, None, None, |request, _| authorizer(request))
+}
+
+/// Run the hidden helper with the separately supplied protected-config
+/// context.  The authorizer receives both the decoded frame and this context,
+/// allowing it to perform a read-only launch-intent lookup against the exact
+/// root-configured store rather than trusting a path from the frame.
+pub fn run_hidden_helper_with_bootstrap_authorizer<F>(authorizer: F) -> Result<i32, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
+        )
+    })?;
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, gateway_health| {
+            if gateway_health.is_some() && request.specification.component == ComponentKind::Gateway
+            {
+                return Err(AdapterError::Invalid(
+                    "Gateway health bootstrap requires the Gateway health authorizer API"
+                        .to_owned(),
+                ));
+            }
+            authorizer(request, &bootstrap)
+        },
+    )
+}
+
+/// Run a protected helper with optional health binding and a held admission guard.
+///
+/// The real watchdog dispatcher uses the optional-binding variant below to
+/// admit both ordinary worker helpers and explicitly configured health helpers.
+pub fn run_hidden_helper_if_requested_with_health_authorizer<F, G>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<(LinuxHelperAuthorization, G), AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid("Linux helper requires protected config bootstrap".to_owned())
+    })?;
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    let mut admission_guard = None;
+    let result = run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, observed| {
+            let (authorization, guard) = authorizer(request, &bootstrap, observed)?;
+            admission_guard = Some(guard);
+            Ok(authorization)
+        },
+    );
+    // Successful exec replaces this process while the guard still exists.
+    // Its native descriptors must be CLOEXEC. Errors release it here, after
+    // the core can no longer execute the target. No launch follows Drop.
+    drop(admission_guard);
+    result.map(Some)
+}
+
+/// Run the hidden helper with a required dedicated Gateway health binding.
+///
+/// The callback receives only the non-secret binding derived from the fixed
+/// frame after GO.  It must independently load the expected launch nonce and
+/// frame digest from the owner-local durable launch-intent store and compare
+/// them before returning [`LinuxHelperAuthorization`].  The transport frame
+/// is never an authorization source by itself, and this entrypoint rejects a
+/// helper invocation that did not carry the dedicated health pipe.
+pub fn run_hidden_helper_with_bootstrap_and_gateway_health_authorizer<F>(
+    authorizer: F,
+) -> Result<i32, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        &GatewayHealthFrameBinding,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Err(AdapterError::Unsupported(
+            "Linux helper entrypoint was not requested".to_owned(),
+        ));
+    }
+    let (bootstrap, ready) = parse_helper_bootstrap()?.ok_or_else(|| {
+        AdapterError::Invalid(
+            "Linux helper requires a separately supplied protected config bootstrap".to_owned(),
+        )
+    })?;
+    let worker_reader = bootstrap.worker_pipe_file()?;
+    let gateway_health_reader = bootstrap.gateway_health_pipe_file()?;
+    run_hidden_helper_core(
+        Some(ready),
+        worker_reader,
+        gateway_health_reader,
+        |request, gateway_health| {
+            let gateway_health = gateway_health.ok_or_else(|| {
+                AdapterError::Invalid(
+                    "Linux Gateway health authorizer requires the dedicated health pipe".to_owned(),
+                )
+            })?;
+            authorizer(request, &bootstrap, gateway_health)
+        },
+    )
+}
+
+fn run_hidden_helper_core<F>(
+    mut ready: Option<HelperReadyChannel>,
+    worker_reader: Option<File>,
+    mut gateway_health_reader: Option<File>,
+    authorizer: F,
+) -> Result<i32, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    let started = Instant::now();
+    let mut control_stdin = open_helper_control_stdin()?;
+    let request = read_frame_bounded(&mut control_stdin, remaining_timeout(started, MAX_TIMEOUT))?;
+    if worker_reader.is_some() && request.specification.component != ComponentKind::Harness {
+        drop(worker_reader);
+        drop(gateway_health_reader);
+        return Err(AdapterError::Unsupported(
+            "Linux worker bootstrap pipe requires the Harness role".to_owned(),
+        ));
+    }
+    if gateway_health_reader.is_some() && request.specification.component != ComponentKind::Gateway
+    {
+        drop(worker_reader);
+        drop(gateway_health_reader);
+        return Err(AdapterError::Unsupported(
+            "Linux Gateway health bootstrap pipe requires the Gateway role".to_owned(),
+        ));
+    }
+    if worker_reader.is_some() && gateway_health_reader.is_some() {
+        drop(worker_reader);
+        drop(gateway_health_reader);
+        return Err(AdapterError::Invalid(
+            "Linux worker and Gateway health pipes cannot be combined".to_owned(),
+        ));
+    }
+    if let Some(channel) = ready.as_mut() {
+        channel.send(&request.specification.launch_nonce)?;
+    }
+    let (authorization, gateway_health) = authorize_after_release_with_health(
+        &request,
+        &mut control_stdin,
+        started,
+        gateway_health_reader.as_mut(),
+        authorizer,
+    )?;
+    verify_current_cgroup(&authorization.cgroup_path)?;
+    spawn_authorized_target(&authorization, worker_reader, gateway_health.as_ref()).map(|()| 0)
+}
+
+#[cfg(test)]
+fn authorize_after_release<F>(
+    request: &LinuxHelperRequest,
+    control_stdin: &mut impl Read,
+    started: Instant,
+    authorizer: F,
+) -> Result<LinuxHelperAuthorization, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    authorize_after_release_with_health(request, control_stdin, started, None, |request, _| {
+        authorizer(request)
+    })
+    .map(|(authorization, _)| authorization)
+}
+
+fn authorize_after_release_with_health<F>(
+    request: &LinuxHelperRequest,
+    control_stdin: &mut impl Read,
+    started: Instant,
+    gateway_health_reader: Option<&mut File>,
+    authorizer: F,
+) -> Result<(LinuxHelperAuthorization, Option<GatewayHealthBootstrap>), AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        Option<&GatewayHealthFrameBinding>,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    // The request frame can arrive before the parent has assigned this helper
+    // to the cgroup. GO is sent only after that assignment and its verification.
+    // Checking membership before GO races the parent's legitimate handoff.
+    // Query durable authorization after the barrier too: stop may have been
+    // committed while this helper was waiting, invalidating earlier approval.
+    let go = read_go_bounded(control_stdin, remaining_timeout(started, MAX_TIMEOUT))?;
+    if go != request.specification.launch_nonce {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper GO nonce does not match the authorized launch".to_owned(),
+        ));
+    }
+    let gateway_health = gateway_health_reader
+        .map(|reader| {
+            read_gateway_health_frame(reader, request, remaining_timeout(started, MAX_TIMEOUT))
+        })
+        .transpose()?;
+    let gateway_health_binding = gateway_health
+        .as_ref()
+        .map(GatewayHealthFrameBinding::from_bootstrap);
+    let authorization = authorizer(request, gateway_health_binding.as_ref())?;
+    authorize_request(request, &authorization)?;
+    Ok((authorization, gateway_health))
+}
+
+/// Run the hidden helper if the current process was invoked in helper mode.
+///
+/// This convenience function is intended for the real watchdog `main`: when
+/// it returns `Ok(false)`, normal CLI parsing may continue.  The authorizer
+/// remains root-owned so this module cannot invent durable intent.
+///
+/// # Errors
+///
+/// Returns the same bounded helper errors as
+/// [`run_hidden_helper_with_authorizer`].
+pub fn run_hidden_helper_if_requested<F>(authorizer: F) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(&LinuxHelperRequest) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_authorizer(authorizer).map(Some)
+}
+
+/// Run the hidden helper with protected bootstrap context when requested.
+pub fn run_hidden_helper_if_requested_with_bootstrap_authorizer<F>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_bootstrap_authorizer(authorizer).map(Some)
+}
+
+/// Run the required-health helper path when the current process was invoked
+/// in helper mode.
+pub fn run_hidden_helper_if_requested_with_bootstrap_and_gateway_health_authorizer<F>(
+    authorizer: F,
+) -> Result<Option<i32>, AdapterError>
+where
+    F: FnOnce(
+        &LinuxHelperRequest,
+        &LinuxHelperBootstrap,
+        &GatewayHealthFrameBinding,
+    ) -> Result<LinuxHelperAuthorization, AdapterError>,
+{
+    if !helper_invocation_requested() {
+        return Ok(None);
+    }
+    run_hidden_helper_with_bootstrap_and_gateway_health_authorizer(authorizer).map(Some)
+}
+
+fn open_helper_control_stdin() -> Result<File, AdapterError> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open("/proc/self/fd/0")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux helper control stdin cannot be opened for bounded I/O: {error}"
+            ))
+        })
+}
+
+fn remaining_timeout(started: Instant, limit: Duration) -> Duration {
+    limit.checked_sub(started.elapsed()).unwrap_or_default()
+}
+
+fn read_exact_bounded(
+    reader: &mut impl Read,
+    bytes: &mut [u8],
+    deadline: Instant,
+    label: &str,
+) -> Result<(), AdapterError> {
+    let mut received = 0_usize;
+    while received < bytes.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(format!("{label} timed out")));
+        }
+        match reader.read(&mut bytes[received..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(format!(
+                    "{label} closed before completion"
+                )));
+            }
+            Ok(count) => {
+                received = received
+                    .checked_add(count)
+                    .ok_or_else(|| AdapterError::Invalid(format!("{label} byte count overflow")))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(format!("{label} timed out")));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(protocol_io(&error)),
+        }
+    }
+    Ok(())
+}
+
+fn read_frame_bounded(
+    reader: &mut impl Read,
+    timeout: Duration,
+) -> Result<LinuxHelperRequest, AdapterError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut length = [0_u8; 4];
+    read_exact_bounded(reader, &mut length, deadline, "Linux helper frame")?;
+    let length = u32::from_le_bytes(length);
+    let length = usize::try_from(length)
+        .map_err(|_| AdapterError::Invalid("Linux helper frame length overflow".to_owned()))?;
+    if length == 0 || length > MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame exceeds bounds".to_owned(),
+        ));
+    }
+    let mut payload = vec![0_u8; length];
+    read_exact_bounded(reader, &mut payload, deadline, "Linux helper frame")?;
+    decode_frame(&payload)
+}
+
+fn read_go_bounded(reader: &mut impl Read, timeout: Duration) -> Result<String, AdapterError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut magic = [0_u8; GO_MAGIC.len()];
+    read_exact_bounded(reader, &mut magic, deadline, "Linux helper GO")?;
+    if &magic != GO_MAGIC {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper received an invalid GO marker".to_owned(),
+        ));
+    }
+    let mut length = [0_u8; 2];
+    read_exact_bounded(reader, &mut length, deadline, "Linux helper GO nonce")?;
+    let length = usize::from(u16::from_le_bytes(length));
+    if length == 0 || length > MAX_FIELD_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper GO nonce exceeds bounds".to_owned(),
+        ));
+    }
+    let mut value = vec![0_u8; length];
+    read_exact_bounded(reader, &mut value, deadline, "Linux helper GO nonce")?;
+    String::from_utf8(value)
+        .map_err(|_| AdapterError::Invalid("Linux helper GO nonce is not UTF-8".to_owned()))
+}
+
+fn validate_worker_boot_metadata(boot_id: &str, frame_sha256: &str) -> Result<(), AdapterError> {
+    let boot = Uuid::parse_str(boot_id).map_err(|_| {
+        AdapterError::Invalid("Linux worker boot metadata is not a UUIDv4".to_owned())
+    })?;
+    if boot.is_nil()
+        || boot.get_version() != Some(Version::Random)
+        || boot.get_variant() != uuid::Variant::RFC4122
+        || boot.to_string() != boot_id
+    {
+        return Err(AdapterError::Invalid(
+            "Linux worker boot metadata is not a canonical UUIDv4".to_owned(),
+        ));
+    }
+    if frame_sha256.len() != 64
+        || !frame_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(AdapterError::Invalid(
+            "Linux worker frame metadata is not a lowercase SHA-256".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn open_parent_worker_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent worker pipe cannot be opened: {error}"
+            ))
+        })?;
+    validate_worker_pipe_handle(&file)?;
+    Ok(file)
+}
+
+fn open_parent_gateway_health_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent Gateway health pipe cannot be opened: {error}"
+            ))
+        })?;
+    validate_gateway_health_pipe_handle(&file)?;
+    Ok(file)
+}
+
+fn validate_worker_pipe_handle(file: &File) -> Result<(), AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe metadata failed: {error}"))
+    })?;
+    if !metadata.file_type().is_fifo() {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap descriptor is not a FIFO".to_owned(),
+        ));
+    }
+    let filesystem = fstatfs(file).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux worker pipe filesystem metadata failed: {error}"
+        ))
+    })?;
+    // Linux UAPI PIPEFS_MAGIC, compared in the platform field's native type.
+    if filesystem.f_type != 0x5049_5045 {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap descriptor is not a kernel pipe".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_gateway_health_pipe_handle(file: &File) -> Result<(), AdapterError> {
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health pipe metadata failed: {error}"
+        ))
+    })?;
+    if !metadata.file_type().is_fifo() {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health descriptor is not a FIFO".to_owned(),
+        ));
+    }
+    let filesystem = fstatfs(file).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health pipe filesystem metadata failed: {error}"
+        ))
+    })?;
+    if filesystem.f_type != 0x5049_5045 {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health descriptor is not a kernel pipe".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn set_worker_reader_blocking(file: &File) -> Result<(), AdapterError> {
+    let mut flags = fcntl_getfl(file).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe flags cannot be read: {error}"))
+    })?;
+    flags.remove(OFlags::NONBLOCK);
+    fcntl_setfl(file, flags).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux worker pipe cannot become blocking: {error}"))
+    })
+}
+
+fn set_nonblocking<Fd: AsFd>(fd: Fd, label: &str) -> Result<(), AdapterError> {
+    let mut flags = fcntl_getfl(&fd).map_err(|error| {
+        AdapterError::Unavailable(format!("{label} flags cannot be read: {error}"))
+    })?;
+    flags.insert(OFlags::NONBLOCK);
+    fcntl_setfl(&fd, flags).map_err(|error| {
+        AdapterError::Unavailable(format!("{label} cannot become nonblocking: {error}"))
+    })
+}
+
+/// Write one bounded protocol message to a nonblocking descriptor.
+///
+/// The helper request and GO messages are written through this loop so a
+/// child that never reads stdin cannot pin the launcher indefinitely.  The
+/// descriptor is expected to have `O_NONBLOCK`; the function also preserves a
+/// single deadline across short writes and `WouldBlock` polls.
+fn write_bounded(
+    writer: &mut impl Write,
+    bytes: &[u8],
+    timeout: Duration,
+    label: &str,
+) -> Result<(), AdapterError> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut written = 0_usize;
+    while written < bytes.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(format!("{label} timed out")));
+        }
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(format!(
+                    "{label} closed before completion"
+                )));
+            }
+            Ok(count) => {
+                written = written
+                    .checked_add(count)
+                    .ok_or_else(|| AdapterError::Invalid(format!("{label} byte count overflow")))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(format!("{label} timed out")));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!("{label} failed: {error}")));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_worker_frame(
+    writer: &mut File,
+    frame: &[u8],
+    timeout: Duration,
+) -> Result<(), AdapterError> {
+    if frame.is_empty() || frame.len() > crate::worker_bootstrap::MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux worker bootstrap frame exceeds bounds".to_owned(),
+        ));
+    }
+    write_bounded(
+        writer,
+        frame,
+        timeout,
+        "Linux worker bootstrap frame handoff",
+    )
+}
+
+fn write_gateway_health_frame(
+    writer: &mut File,
+    frame: &[u8],
+    timeout: Duration,
+) -> Result<(), AdapterError> {
+    if frame.len() != super::gateway_health::FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux Gateway health bootstrap frame has an invalid length".to_owned(),
+        ));
+    }
+    write_bounded(
+        writer,
+        frame,
+        timeout,
+        "Linux Gateway health bootstrap frame handoff",
+    )
+}
+
+fn read_gateway_health_frame(
+    reader: &mut File,
+    request: &LinuxHelperRequest,
+    timeout: Duration,
+) -> Result<GatewayHealthBootstrap, AdapterError> {
+    if request.specification.component != ComponentKind::Gateway {
+        return Err(AdapterError::Unsupported(
+            "Linux Gateway health bootstrap pipe requires the Gateway role".to_owned(),
+        ));
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let mut frame = zeroize::Zeroizing::new([0_u8; super::gateway_health::FRAME_BYTES]);
+    let mut received = 0_usize;
+    while received < frame.len() {
+        if Instant::now() >= deadline {
+            return Err(AdapterError::Timeout(
+                "Linux Gateway health bootstrap frame read timed out".to_owned(),
+            ));
+        }
+        match reader.read(&mut frame[received..]) {
+            Ok(0) => {
+                return Err(AdapterError::Unavailable(
+                    "Linux Gateway health bootstrap frame was truncated".to_owned(),
+                ));
+            }
+            Ok(count) => {
+                received = received.checked_add(count).ok_or_else(|| {
+                    AdapterError::Invalid("Linux Gateway health frame read overflow".to_owned())
+                })?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(
+                        "Linux Gateway health bootstrap frame read timed out".to_owned(),
+                    ));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!(
+                    "Linux Gateway health bootstrap frame read failed: {error}"
+                )));
+            }
+        }
+    }
+    let mut trailing = [0_u8; 1];
+    loop {
+        match reader.read(&mut trailing) {
+            Ok(0) => break,
+            Ok(_) => {
+                return Err(AdapterError::Invalid(
+                    "Linux Gateway health bootstrap frame has trailing bytes".to_owned(),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::Timeout(
+                        "Linux Gateway health frame close was not observed".to_owned(),
+                    ));
+                }
+                thread::sleep(CHILD_CLEANUP_POLL.min(remaining));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(AdapterError::Io(format!(
+                    "Linux Gateway health frame trailing-byte check failed: {error}"
+                )));
+            }
+        }
+    }
+    let bootstrap = GatewayHealthBootstrap::from_frame(frame.as_ref()).map_err(|error| {
+        map_gateway_health_bootstrap_error(error, "Linux Gateway health bootstrap frame")
+    })?;
+    bootstrap.validate_for_launch(&request.specification)?;
+    Ok(bootstrap)
+}
+
+fn map_gateway_health_bootstrap_error(
+    error: GatewayHealthBootstrapError,
+    prefix: &str,
+) -> AdapterError {
+    match error {
+        GatewayHealthBootstrapError::WrongRole => {
+            AdapterError::Unsupported(format!("{prefix} requires the Gateway role"))
+        }
+        GatewayHealthBootstrapError::NonceMismatch => {
+            AdapterError::IdentityMismatch(format!("{prefix} nonce differs from the launch"))
+        }
+        _ => AdapterError::Invalid(format!("{prefix} is invalid")),
+    }
+}
+
+fn encode_frame(specification: &LaunchSpec, cgroup_path: &Path) -> Result<Vec<u8>, AdapterError> {
+    if !cgroup_path.is_absolute() {
+        return Err(AdapterError::Invalid(
+            "Linux helper cgroup path must be absolute".to_owned(),
+        ));
+    }
+    let mut payload = Vec::with_capacity(1024);
+    payload.extend_from_slice(FRAME_MAGIC);
+    payload.push(FRAME_VERSION);
+    payload.push(component_code(specification.component));
+    match specification.session {
+        SessionSelector::ActiveUser => payload.push(0),
+        SessionSelector::Explicit(session) => {
+            payload.push(1);
+            payload.extend_from_slice(&session.to_le_bytes());
+        }
+    }
+    payload.push(0);
+    put_string(&mut payload, &specification.deployment_id)?;
+    put_string(&mut payload, &specification.instance_id)?;
+    put_string(&mut payload, &specification.incarnation)?;
+    put_string(&mut payload, &specification.launch_nonce)?;
+    put_path(&mut payload, cgroup_path)?;
+    put_path(&mut payload, &specification.executable)?;
+    put_string(&mut payload, &specification.executable_sha256)?;
+    payload.extend_from_slice(
+        &u64::try_from(specification.graceful_timeout.as_millis())
+            .map_err(|_| AdapterError::Invalid("Linux graceful timeout overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    payload.extend_from_slice(
+        &u64::try_from(specification.force_timeout.as_millis())
+            .map_err(|_| AdapterError::Invalid("Linux force timeout overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    match specification.working_directory.as_deref() {
+        Some(path) => {
+            payload.push(1);
+            put_path(&mut payload, path)?;
+        }
+        None => payload.push(0),
+    }
+    put_count(&mut payload, specification.arguments.len(), MAX_ARGUMENTS)?;
+    for argument in &specification.arguments {
+        put_string(&mut payload, argument)?;
+    }
+    put_count(
+        &mut payload,
+        specification.environment.len(),
+        MAX_ENVIRONMENT,
+    )?;
+    for (name, value) in &specification.environment {
+        put_string(&mut payload, name)?;
+        put_string(&mut payload, value)?;
+    }
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame exceeds bounds".to_owned(),
+        ));
+    }
+    let mut frame = Vec::with_capacity(payload.len() + 4);
+    frame.extend_from_slice(
+        &u32::try_from(payload.len())
+            .map_err(|_| AdapterError::Invalid("Linux helper frame length overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+fn decode_frame(payload: &[u8]) -> Result<LinuxHelperRequest, AdapterError> {
+    let mut cursor = Cursor::new(payload);
+    let mut magic = [0_u8; FRAME_MAGIC.len()];
+    cursor
+        .read_exact(&mut magic)
+        .map_err(|error| protocol_io(&error))?;
+    if &magic != FRAME_MAGIC {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame magic is invalid".to_owned(),
+        ));
+    }
+    let version = read_byte(&mut cursor)?;
+    if version != FRAME_VERSION {
+        return Err(AdapterError::Unsupported(
+            "Linux helper frame version is unsupported".to_owned(),
+        ));
+    }
+    let component = component_from_code(read_byte(&mut cursor)?)?;
+    let session_code = read_byte(&mut cursor)?;
+    let session = match session_code {
+        0 => SessionSelector::ActiveUser,
+        1 => SessionSelector::Explicit(read_u32(&mut cursor)?),
+        _ => {
+            return Err(AdapterError::Invalid(
+                "Linux helper session selector is invalid".to_owned(),
+            ));
+        }
+    };
+    let reserved = read_byte(&mut cursor)?;
+    if reserved != 0 {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame reserved byte is nonzero".to_owned(),
+        ));
+    }
+    let deployment_id = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let instance_id = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let incarnation = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let launch_nonce = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let cgroup_path = read_path(&mut cursor)?;
+    let executable = read_path(&mut cursor)?;
+    let executable_sha256 = read_string(&mut cursor, MAX_FIELD_BYTES)?;
+    let graceful_timeout = Duration::from_millis(read_u64(&mut cursor)?);
+    let force_timeout = Duration::from_millis(read_u64(&mut cursor)?);
+    let working_directory = match read_byte(&mut cursor)? {
+        0 => None,
+        1 => Some(read_path(&mut cursor)?),
+        _ => {
+            return Err(AdapterError::Invalid(
+                "Linux helper working-directory marker is invalid".to_owned(),
+            ));
+        }
+    };
+    let argument_count = read_count(&mut cursor, MAX_ARGUMENTS)?;
+    let mut arguments = Vec::with_capacity(argument_count);
+    for _ in 0..argument_count {
+        arguments.push(read_string(&mut cursor, MAX_FIELD_BYTES)?);
+    }
+    let environment_count = read_count(&mut cursor, MAX_ENVIRONMENT)?;
+    let mut environment = Vec::with_capacity(environment_count);
+    for _ in 0..environment_count {
+        environment.push((
+            read_string(&mut cursor, MAX_FIELD_BYTES)?,
+            read_string(&mut cursor, MAX_FIELD_BYTES)?,
+        ));
+    }
+    if cursor.position() != u64::try_from(payload.len()).unwrap_or(u64::MAX) {
+        return Err(AdapterError::Invalid(
+            "Linux helper frame contains trailing bytes".to_owned(),
+        ));
+    }
+    let specification = LaunchSpec {
+        deployment_id,
+        instance_id,
+        component,
+        incarnation,
+        launch_nonce,
+        executable,
+        executable_sha256,
+        arguments,
+        working_directory,
+        environment,
+        session,
+        graceful_timeout,
+        force_timeout,
+    };
+    specification.validate()?;
+    Ok(LinuxHelperRequest {
+        specification,
+        cgroup_path,
+    })
+}
+
+fn open_parent_ready_descriptor(parent_pid: u32, fd: RawFd) -> Result<File, AdapterError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_NONBLOCK | O_CLOEXEC)
+        .open(parent_fd_path(parent_pid, fd))
+        .map_err(|error| {
+            AdapterError::Unavailable(format!(
+                "Linux parent readiness descriptor cannot be opened: {error}"
+            ))
+        })
+}
+
+fn authorize_request(
+    request: &LinuxHelperRequest,
+    authorization: &LinuxHelperAuthorization,
+) -> Result<(), AdapterError> {
+    authorization.validate()?;
+    if request.specification != authorization.specification
+        || request.cgroup_path != authorization.cgroup_path
+    {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper request differs from durable authorization".to_owned(),
+        ));
+    }
+    let approved = fs::canonicalize(
+        authorization
+            .allowlisted_executables
+            .get(&request.specification.component)
+            .ok_or_else(|| {
+                AdapterError::Unsupported("Linux helper role is not allowlisted".to_owned())
+            })?,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!("Linux helper allowlist unavailable: {error}"))
+    })?;
+    let requested = fs::canonicalize(&request.specification.executable).map_err(|error| {
+        AdapterError::Invalid(format!(
+            "Linux helper executable cannot be resolved: {error}"
+        ))
+    })?;
+    if approved != requested {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper executable is outside the role allowlist".to_owned(),
+        ));
+    }
+    let digest = hash_file(&requested)?;
+    if digest != request.specification.executable_sha256 {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper executable digest changed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn spawn_authorized_target(
+    authorization: &LinuxHelperAuthorization,
+    worker_reader: Option<File>,
+    gateway_health: Option<&GatewayHealthBootstrap>,
+) -> Result<(), AdapterError> {
+    let specification = &authorization.specification;
+    if specification.component == ComponentKind::HostBroker {
+        return Err(AdapterError::Unsupported(
+            "Linux helper does not launch graphical HostBroker sessions".to_owned(),
+        ));
+    }
+    if let SessionSelector::Explicit(session) = specification.session
+        && session != 0
+    {
+        return Err(AdapterError::Unsupported(
+            "Linux helper does not select Windows user sessions".to_owned(),
+        ));
+    }
+    let approved = fs::canonicalize(
+        authorization
+            .allowlisted_executables
+            .get(&specification.component)
+            .ok_or_else(|| {
+                AdapterError::Unsupported("Linux helper role is not allowlisted".to_owned())
+            })?,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux helper target allowlist is unavailable: {error}"
+        ))
+    })?;
+    let requested = fs::canonicalize(&specification.executable).map_err(|error| {
+        AdapterError::Invalid(format!("Linux helper target cannot be resolved: {error}"))
+    })?;
+    if approved != requested {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper target differs from the authorized role path".to_owned(),
+        ));
+    }
+    let (executable_file, executable_fd_path) =
+        open_verified_executable(&approved, &specification.executable_sha256)?;
+    if let Some(reader) = worker_reader.as_ref() {
+        set_worker_reader_blocking(reader)?;
+    }
+    if worker_reader.is_some() && gateway_health.is_some() {
+        return Err(AdapterError::Invalid(
+            "Linux worker and Gateway health stdin cannot be combined".to_owned(),
+        ));
+    }
+    let gateway_health_reader = gateway_health.map(gateway_health_stdin).transpose()?;
+    let mut command = Command::new(&executable_fd_path);
+    command.arg0(&specification.executable);
+    command.args(&specification.arguments).env_clear().envs(
+        specification
+            .environment
+            .iter()
+            .map(|(name, value)| (name, value)),
+    );
+    // A worker or Gateway health launch receives its exclusive one-shot
+    // bootstrap stream.  Ordinary targets must never inherit the helper's
+    // request/GO control stdin; explicitly disconnect it at the exec boundary.
+    if let Some(reader) = worker_reader {
+        command.stdin(Stdio::from(reader));
+    } else if let Some(reader) = gateway_health_reader {
+        command.stdin(Stdio::from(reader));
+    } else {
+        command.stdin(Stdio::null());
+    }
+    if let Some(path) = specification.working_directory.as_deref() {
+        let canonical = fs::canonicalize(path).map_err(|error| {
+            AdapterError::Invalid(format!(
+                "Linux helper working directory is invalid: {error}"
+            ))
+        })?;
+        command.current_dir(canonical);
+    }
+    let error = command.exec();
+    drop(executable_file);
+    Err(AdapterError::Io(format!(
+        "Linux target exec failed: {error}"
+    )))
+}
+
+fn gateway_health_stdin(bootstrap: &GatewayHealthBootstrap) -> Result<File, AdapterError> {
+    let (reader, writer) = pipe_with(PipeFlags::CLOEXEC).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux Gateway health target stdin pipe cannot be created: {error}"
+        ))
+    })?;
+    let reader = File::from(reader);
+    let mut writer = File::from(writer);
+    let frame = bootstrap.encoded_frame();
+    writer.write_all(frame.as_ref()).map_err(|error| {
+        AdapterError::Io(format!(
+            "Linux Gateway health target stdin handoff failed: {error}"
+        ))
+    })?;
+    drop(writer);
+    Ok(reader)
+}
+
+fn verify_current_cgroup(expected: &Path) -> Result<(), AdapterError> {
+    let expected = fs::canonicalize(expected).map_err(|error| {
+        AdapterError::Unavailable(format!("Linux helper cgroup cannot be resolved: {error}"))
+    })?;
+    let current = discover_current_cgroup()?;
+    if current != expected {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper is not in the authorized cgroup".to_owned(),
+        ));
+    }
+    let pid = std::process::id();
+    let pids = fs::read_to_string(expected.join("cgroup.procs")).map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux helper cgroup membership is unreadable: {error}"
+        ))
+    })?;
+    if !pids
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .any(|member| member == pid)
+    {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux helper PID is not present in the authorized cgroup".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn discover_current_cgroup() -> Result<PathBuf, AdapterError> {
+    let mountpoint = fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("cgroup mountinfo unavailable: {error}"))
+        })?
+        .lines()
+        .find_map(parse_cgroup2_mountpoint)
+        .ok_or_else(|| AdapterError::Unavailable("no cgroup v2 mount is available".to_owned()))?;
+    let relative = fs::read_to_string("/proc/self/cgroup")
+        .map_err(|error| AdapterError::Unavailable(format!("process cgroup unavailable: {error}")))?
+        .lines()
+        .find_map(|line| line.strip_prefix("0::").map(str::to_owned))
+        .ok_or_else(|| AdapterError::Unavailable("process has no cgroup v2 path".to_owned()))?;
+    let relative = relative.trim_start_matches('/');
+    if relative
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(AdapterError::Unavailable(
+            "process cgroup path is malformed".to_owned(),
+        ));
+    }
+    let path = if relative.is_empty() {
+        mountpoint
+    } else {
+        mountpoint.join(relative)
+    };
+    fs::canonicalize(path).map_err(|error| {
+        AdapterError::Unavailable(format!("current cgroup cannot be resolved: {error}"))
+    })
+}
+
+fn parse_cgroup2_mountpoint(line: &str) -> Option<PathBuf> {
+    let mut sections = line.split(" - ");
+    let pre = sections.next()?;
+    let post = sections.next()?;
+    if post.split_whitespace().next()? != "cgroup2" {
+        return None;
+    }
+    let fields = pre.split_whitespace().collect::<Vec<_>>();
+    fields
+        .get(4)
+        .map(|field| PathBuf::from(unescape_mountinfo(field)))
+}
+
+fn unescape_mountinfo(value: &str) -> String {
+    value
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\134", "\\")
+}
+
+/// Open an approved executable once, copy the verified bytes into a sealed
+/// executable memfd, and return its `/proc/self/fd` path.  The source handle
+/// is opened nonblocking and all metadata checks are made on that handle, so
+/// a FIFO or device cannot make verification hang.  The sealed snapshot makes
+/// an in-place source mutation after verification irrelevant to the exec.
+fn open_verified_executable(
+    path: &Path,
+    expected_digest: &str,
+) -> Result<(File, PathBuf), AdapterError> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AdapterError::Invalid(format!("Linux executable cannot be resolved: {error}"))
+    })?;
+    let mut source = open_nonblocking_read(&canonical)?;
+    let metadata = source.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("Linux executable metadata failed: {error}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux executable is not a regular file".to_owned(),
+        ));
+    }
+    if metadata.len() > MAX_HASH_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux executable exceeds the hash size bound".to_owned(),
+        ));
+    }
+    let snapshot_fd = create_executable_snapshot()?;
+    let mut snapshot = File::from(snapshot_fd);
+    let digest = hash_and_copy(&mut source, &mut snapshot)?;
+    if digest != expected_digest {
+        return Err(AdapterError::IdentityMismatch(
+            "Linux executable bytes changed before descriptor-bound exec".to_owned(),
+        ));
+    }
+    fcntl_add_seals(
+        &snapshot,
+        SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL,
+    )
+    .map_err(|error| {
+        AdapterError::Unavailable(format!(
+            "Linux executable snapshot cannot be sealed: {error}"
+        ))
+    })?;
+    let fd = snapshot.as_raw_fd();
+    if fd < 0 {
+        return Err(AdapterError::Io(
+            "Linux executable descriptor has an invalid number".to_owned(),
+        ));
+    }
+    let fd_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    Ok((snapshot, fd_path))
+}
+
+fn create_executable_snapshot() -> Result<rustix::fd::OwnedFd, AdapterError> {
+    let base_flags = MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING;
+    match memfd_create(
+        "ascension-verified-executable",
+        base_flags | MemfdFlags::EXEC,
+    ) {
+        Ok(fd) => Ok(fd),
+        Err(error) if error == rustix::io::Errno::INVAL => {
+            // MFD_EXEC was added in Linux 6.3.  Older kernels either permit
+            // executable memfds by default or reject them through a host
+            // memfd_noexec policy; retain the latter error below.
+            memfd_create("ascension-verified-executable", base_flags).map_err(|fallback| {
+                AdapterError::Unavailable(format!(
+                    "Linux executable snapshot cannot be created: {fallback}"
+                ))
+            })
+        }
+        Err(error) => Err(AdapterError::Unavailable(format!(
+            "Linux executable snapshot cannot be created: {error}"
+        ))),
+    }
+}
+
+fn hash_file(path: &Path) -> Result<String, AdapterError> {
+    let file = open_nonblocking_read(path)?;
+    let metadata = file.metadata().map_err(|error| {
+        AdapterError::Unavailable(format!("cannot inspect Linux executable bytes: {error}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(AdapterError::Invalid(
+            "Linux executable is not a regular file".to_owned(),
+        ));
+    }
+    if metadata.len() > MAX_HASH_BYTES {
+        return Err(AdapterError::Invalid(
+            "Linux executable exceeds the hash size bound".to_owned(),
+        ));
+    }
+    hash_reader(file)
+}
+
+fn open_nonblocking_read(path: &Path) -> Result<File, AdapterError> {
+    let flags = rustix::fs::OFlags::NONBLOCK
+        .bits()
+        .try_into()
+        .map_err(|_| AdapterError::Invalid("Linux nonblocking flag is out of range".to_owned()))?;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .map_err(|error| {
+            AdapterError::Unavailable(format!("cannot open Linux executable bytes: {error}"))
+        })
+}
+
+fn hash_reader(reader: impl Read) -> Result<String, AdapterError> {
+    hash_stream(reader, None)
+}
+
+fn hash_and_copy(reader: impl Read, writer: &mut impl Write) -> Result<String, AdapterError> {
+    hash_stream(reader, Some(writer))
+}
+
+fn hash_stream(
+    mut reader: impl Read,
+    mut writer: Option<&mut dyn Write>,
+) -> Result<String, AdapterError> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total_read = 0_u64;
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| AdapterError::Io(format!("cannot hash Linux executable: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        total_read = total_read
+            .checked_add(u64::try_from(read).map_err(|_| {
+                AdapterError::Invalid("Linux executable read size exceeds bounds".to_owned())
+            })?)
+            .ok_or_else(|| {
+                AdapterError::Invalid("Linux executable exceeds the hash size bound".to_owned())
+            })?;
+        if total_read > MAX_HASH_BYTES {
+            return Err(AdapterError::Invalid(
+                "Linux executable exceeds the hash size bound".to_owned(),
+            ));
+        }
+        if let Some(writer) = writer.as_deref_mut() {
+            writer.write_all(&buffer[..read]).map_err(|error| {
+                AdapterError::Io(format!("cannot create Linux executable snapshot: {error}"))
+            })?;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn protocol_io(error: &io::Error) -> AdapterError {
+    if error.kind() == io::ErrorKind::UnexpectedEof {
+        AdapterError::Unavailable("Linux helper pipe closed before the next frame".to_owned())
+    } else {
+        AdapterError::Io(format!("Linux helper protocol I/O failed: {error}"))
+    }
+}
+
+fn component_code(component: ComponentKind) -> u8 {
+    match component {
+        ComponentKind::Gateway => 1,
+        ComponentKind::Harness => 2,
+        ComponentKind::HostBroker => 3,
+        ComponentKind::Synthetic => 4,
+    }
+}
+
+fn component_from_code(code: u8) -> Result<ComponentKind, AdapterError> {
+    match code {
+        1 => Ok(ComponentKind::Gateway),
+        2 => Ok(ComponentKind::Harness),
+        3 => Ok(ComponentKind::HostBroker),
+        4 => Ok(ComponentKind::Synthetic),
+        _ => Err(AdapterError::Unsupported(
+            "Linux helper component role is unsupported".to_owned(),
+        )),
+    }
+}
+
+fn put_count(bytes: &mut Vec<u8>, count: usize, maximum: usize) -> Result<(), AdapterError> {
+    if count > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper collection exceeds bounds".to_owned(),
+        ));
+    }
+    bytes.extend_from_slice(
+        &u16::try_from(count)
+            .map_err(|_| {
+                AdapterError::Invalid("Linux helper collection length overflow".to_owned())
+            })?
+            .to_le_bytes(),
+    );
+    Ok(())
+}
+
+fn read_count(reader: &mut impl Read, maximum: usize) -> Result<usize, AdapterError> {
+    let mut bytes = [0_u8; 2];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    let count = usize::from(u16::from_le_bytes(bytes));
+    if count > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper collection exceeds bounds".to_owned(),
+        ));
+    }
+    Ok(count)
+}
+
+fn put_path(bytes: &mut Vec<u8>, path: &Path) -> Result<(), AdapterError> {
+    let value = path.to_str().ok_or_else(|| {
+        AdapterError::Invalid("Linux helper paths must be valid UTF-8".to_owned())
+    })?;
+    put_string(bytes, value)
+}
+
+fn read_path(reader: &mut impl Read) -> Result<PathBuf, AdapterError> {
+    Ok(PathBuf::from(read_string(reader, MAX_FIELD_BYTES)?))
+}
+
+fn put_string(bytes: &mut Vec<u8>, value: &str) -> Result<(), AdapterError> {
+    if value.is_empty() || value.len() > MAX_FIELD_BYTES || value.contains('\0') {
+        return Err(AdapterError::Invalid(
+            "Linux helper string is outside bounds".to_owned(),
+        ));
+    }
+    bytes.extend_from_slice(
+        &u16::try_from(value.len())
+            .map_err(|_| AdapterError::Invalid("Linux helper string length overflow".to_owned()))?
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn put_string_io(writer: &mut impl Write, value: &str) -> io::Result<()> {
+    let length = u16::try_from(value.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "string is too long"))?;
+    writer.write_all(&length.to_le_bytes())?;
+    writer.write_all(value.as_bytes())
+}
+
+fn read_string(reader: &mut impl Read, maximum: usize) -> Result<String, AdapterError> {
+    let mut length = [0_u8; 2];
+    reader
+        .read_exact(&mut length)
+        .map_err(|error| protocol_io(&error))?;
+    let length = usize::from(u16::from_le_bytes(length));
+    if length == 0 || length > maximum {
+        return Err(AdapterError::Invalid(
+            "Linux helper string is outside bounds".to_owned(),
+        ));
+    }
+    let mut bytes = vec![0_u8; length];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    String::from_utf8(bytes)
+        .map_err(|_| AdapterError::Invalid("Linux helper string is not UTF-8".to_owned()))
+}
+
+fn read_byte(reader: &mut impl Read) -> Result<u8, AdapterError> {
+    let mut byte = [0_u8; 1];
+    reader
+        .read_exact(&mut byte)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(byte[0])
+}
+
+fn read_u64(reader: &mut impl Read) -> Result<u64, AdapterError> {
+    let mut bytes = [0_u8; 8];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_u32(reader: &mut impl Read) -> Result<u32, AdapterError> {
+    let mut bytes = [0_u8; 4];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| protocol_io(&error))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    fn specification() -> LaunchSpec {
+        LaunchSpec {
+            deployment_id: "deployment".to_owned(),
+            instance_id: "instance".to_owned(),
+            component: ComponentKind::Synthetic,
+            incarnation: "incarnation".to_owned(),
+            launch_nonce: "nonce-1".to_owned(),
+            executable: PathBuf::from("/bin/true"),
+            executable_sha256: "a".repeat(64),
+            arguments: vec!["--fixture".to_owned()],
+            working_directory: None,
+            environment: vec![("PATH".to_owned(), "/usr/bin".to_owned())],
+            session: SessionSelector::Explicit(0),
+            graceful_timeout: Duration::from_secs(1),
+            force_timeout: Duration::from_secs(2),
+        }
+    }
+
+    #[test]
+    fn frame_round_trip_preserves_exact_spec_and_cgroup() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let specification = specification();
+        let path = PathBuf::from("/sys/fs/cgroup/ascension-test");
+        let frame = encode_frame(&specification, &path)?;
+        let payload_length = u32::from_le_bytes(frame[..4].try_into()?);
+        assert_eq!(usize::try_from(payload_length)?, frame.len() - 4);
+        let request = decode_frame(&frame[4..])?;
+        assert_eq!(request.specification, specification);
+        assert_eq!(request.cgroup_path, path);
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_nonce_go_is_rejected_before_target_spawn() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(GO_MAGIC);
+        assert!(put_string_io(&mut bytes, "wrong").is_ok());
+        let mut cursor = Cursor::new(bytes);
+        let result = read_go_bounded(&mut cursor, Duration::from_secs(1));
+        assert_eq!(result.as_deref(), Ok("wrong"));
+        assert_ne!(result.as_deref(), Ok("nonce-1"));
+    }
+
+    #[test]
+    fn eof_before_go_is_a_hard_failure() {
+        let mut cursor = Cursor::new(Vec::<u8>::new());
+        assert!(matches!(
+            read_go_bounded(&mut cursor, Duration::from_secs(1)),
+            Err(AdapterError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn unsupported_component_cannot_be_authorized() {
+        let mut specification = specification();
+        specification.component = ComponentKind::HostBroker;
+        let authorization = LinuxHelperAuthorization {
+            specification,
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+            allowlisted_executables: BTreeMap::new(),
+        };
+        assert!(matches!(
+            authorization.validate(),
+            Err(AdapterError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn durable_authorization_mismatch_is_rejected_before_hashing() {
+        let specification = specification();
+        let request = LinuxHelperRequest {
+            specification: specification.clone(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let mut authorized = specification;
+        authorized.launch_nonce = "different-nonce".to_owned();
+        let mut allowlist = BTreeMap::new();
+        allowlist.insert(ComponentKind::Synthetic, PathBuf::from("/bin/true"));
+        let authorization = LinuxHelperAuthorization {
+            specification: authorized,
+            cgroup_path: request.cgroup_path.clone(),
+            allowlisted_executables: allowlist,
+        };
+        assert!(matches!(
+            authorize_request(&request, &authorization),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn timeout_is_bounded() {
+        let result = TrustedLinuxLauncher::new("/bin/true")
+            .and_then(|launcher| launcher.with_timeout(Duration::from_secs(16)));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bootstrap_reads_the_opened_config_inode_after_path_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let path = directory.path().join("watchdog.json");
+        fs::write(&path, b"trusted-config")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        let bootstrap = LinuxHelperBootstrap::new(&path)?;
+
+        fs::rename(&path, directory.path().join("watchdog.json.original"))?;
+        fs::write(&path, b"attacker-config")?;
+
+        let mut bytes = String::new();
+        bootstrap
+            .protected_config_file()?
+            .read_to_string(&mut bytes)?;
+        assert_eq!(bytes, "trusted-config");
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_rejects_group_readable_or_foreign_shape_config()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let path = directory.path().join("watchdog.json");
+        fs::write(&path, b"config")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))?;
+        assert!(matches!(
+            LinuxHelperBootstrap::new(&path),
+            Err(AdapterError::Invalid(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn parent_bootstrap_handles_remain_cloexec_and_invisible_to_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let config_path = directory.path().join("watchdog.json");
+        fs::write(&config_path, b"trusted-config")?;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
+        let root_path = directory.path().join("cgroup");
+        fs::create_dir(&root_path)?;
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            fs::write(root_path.join(control), b"")?;
+        }
+
+        let bootstrap =
+            LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
+        let parent = bootstrap.parent_descriptors(None, None)?;
+        assert!(rustix::io::fcntl_getfd(&parent.config)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&parent.root)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&parent.ready)?.contains(rustix::io::FdFlags::CLOEXEC));
+
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "test ! -e /proc/self/fd/$1 && test ! -e /proc/self/fd/$2 && test ! -e /proc/self/fd/$3",
+                "fd-check",
+                &parent.config_fd.to_string(),
+                &parent.root_fd.to_string(),
+                &parent.ready_fd.to_string(),
+            ])
+            .status()?;
+        assert!(status.success(), "target observed a parent bootstrap fd");
+        Ok(())
+    }
+
+    #[test]
+    fn parent_bootstrap_drop_closes_keepalive_descriptors() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let config_path = directory.path().join("watchdog.json");
+        fs::write(&config_path, b"trusted-config")?;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
+        let root_path = directory.path().join("cgroup");
+        fs::create_dir(&root_path)?;
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))?;
+        for control in ["cgroup.procs", "cgroup.events", "cgroup.kill"] {
+            fs::write(root_path.join(control), b"")?;
+        }
+
+        let bootstrap =
+            LinuxHelperBootstrap::new(&config_path)?.with_delegated_cgroup_root(&root_path)?;
+        let identities = {
+            let parent = bootstrap.parent_descriptors(None, None)?;
+            let mut identities = Vec::new();
+            for (file, fd) in [
+                (&parent.config, parent.config_fd),
+                (&parent.root, parent.root_fd),
+                (&parent.ready, parent.ready_fd),
+            ] {
+                let metadata = file.metadata()?;
+                identities.push((fd, metadata.dev(), metadata.ino()));
+            }
+            identities
+        };
+        for (fd, device, inode) in identities {
+            // Parallel tests may immediately reuse a released descriptor number.
+            // Only retaining the original unique resource indicates a leaked handle.
+            match fs::metadata(format!("/proc/self/fd/{fd}")) {
+                Ok(replacement) => assert_ne!(
+                    (replacement.dev(), replacement.ino()),
+                    (device, inode),
+                    "original bootstrap resource remains open at descriptor {fd}"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_helper_ready_ack_keeps_parent_descriptor_alive()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ready = File::from(memfd_create("ascension-ready-test", MemfdFlags::CLOEXEC)?);
+        let ready_fd = ready.as_raw_fd();
+        let mut parent = ParentBootstrap {
+            config: File::open("/dev/null")?,
+            config_fd: 0,
+            root: File::open("/dev/null")?,
+            root_fd: 1,
+            ready,
+            ready_fd,
+            worker_reader: None,
+            worker_reader_fd: None,
+            worker_writer: None,
+            gateway_health_reader: None,
+            gateway_health_reader_fd: None,
+            gateway_health_writer: None,
+        };
+        let mut delayed_helper = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
+                "delayed-helper",
+                &ready_fd.to_string(),
+            ])
+            .spawn()?;
+        let started = Instant::now();
+        parent.wait_for_ready("x", Duration::from_secs(1))?;
+        assert!(started.elapsed() >= Duration::from_millis(30));
+        assert!(delayed_helper.wait()?.success());
+        Ok(())
+    }
+
+    #[test]
+    fn readiness_ack_rejects_trailing_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ready = File::from(memfd_create("ascension-ready-extra", MemfdFlags::CLOEXEC)?);
+        ready.write_all(b"ASC-RDY1\x01\x00xextra")?;
+        let mut parent = ParentBootstrap {
+            config: File::open("/dev/null")?,
+            config_fd: 0,
+            root: File::open("/dev/null")?,
+            root_fd: 1,
+            ready_fd: ready.as_raw_fd(),
+            ready,
+            worker_reader: None,
+            worker_reader_fd: None,
+            worker_writer: None,
+            gateway_health_reader: None,
+            gateway_health_reader_fd: None,
+            gateway_health_writer: None,
+        };
+        assert!(matches!(
+            parent.wait_for_ready("x", Duration::from_millis(10)),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn descriptor_bound_exec_is_not_redirected_by_path_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let digest = hash_file(&path)?;
+        let (file, fd_path) = open_verified_executable(&path, &digest)?;
+
+        let moved = directory.path().join("approved-target.original");
+        fs::rename(&path, &moved)?;
+        fs::copy("/bin/false", &path)?;
+        let status = Command::new(&fd_path).status()?;
+
+        assert!(
+            status.success(),
+            "descriptor exec followed the replaced path"
+        );
+        drop(file);
+        Ok(())
+    }
+
+    #[test]
+    fn sealed_snapshot_is_not_changed_by_in_place_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let digest = hash_file(&path)?;
+        let (file, fd_path) = open_verified_executable(&path, &digest)?;
+
+        let replacement = fs::read("/bin/false")?;
+        fs::write(&path, replacement)?;
+        let status = Command::new(&fd_path).status()?;
+
+        assert!(
+            status.success(),
+            "sealed snapshot followed in-place mutation"
+        );
+        drop(file);
+        Ok(())
+    }
+
+    #[test]
+    fn special_file_is_rejected_before_reading() {
+        let result = open_verified_executable(Path::new("/dev/null"), &"0".repeat(64));
+        assert!(matches!(result, Err(AdapterError::Invalid(_))));
+    }
+
+    #[test]
+    fn descriptor_bound_exec_rejects_changed_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let path = directory.path().join("approved-target");
+        fs::copy("/bin/true", &path)?;
+        let result = open_verified_executable(&path, &"0".repeat(64));
+        assert!(matches!(result, Err(AdapterError::IdentityMismatch(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn release_barrier_precedes_durable_authorization() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let request = LinuxHelperRequest {
+            specification: specification(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let stopped = Arc::new(AtomicBool::new(false));
+        let nonce = request.specification.launch_nonce.clone();
+        // Models durable stop becoming visible before the parent's GO.
+        stopped.store(true, Ordering::Release);
+        let mut go = Vec::new();
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, &nonce).unwrap();
+        let mut cursor = Cursor::new(go);
+        let result = authorize_after_release(&request, &mut cursor, Instant::now(), |_| {
+            assert!(stopped.load(Ordering::Acquire));
+            Err(AdapterError::Unavailable(
+                "durable stop denies launch".to_owned(),
+            ))
+        });
+        assert!(
+            matches!(result, Err(AdapterError::Unavailable(message)) if message == "durable stop denies launch")
+        );
+    }
+
+    #[test]
+    fn wrong_release_nonce_never_queries_authority() {
+        let request = LinuxHelperRequest {
+            specification: specification(),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let mut go = Vec::new();
+        go.extend_from_slice(GO_MAGIC);
+        put_string_io(&mut go, "stale-nonce").unwrap();
+        let mut cursor = Cursor::new(go);
+        let mut queried = false;
+        let result = authorize_after_release(&request, &mut cursor, Instant::now(), |_| {
+            queried = true;
+            Err(AdapterError::Unavailable(
+                "must not reach authority".to_owned(),
+            ))
+        });
+        assert!(matches!(result, Err(AdapterError::IdentityMismatch(_))));
+        assert!(!queried);
+    }
+
+    #[test]
+    fn worker_bootstrap_launch_keeps_exact_frame_and_digest() {
+        let peer =
+            crate::worker_bootstrap::LinuxPeer::new(1, "1", "/bin/true", "a".repeat(64), 0, 0)
+                .expect("valid Linux peer");
+        let bootstrap = crate::worker_bootstrap::WorkerBootstrap::linux(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "harness",
+            peer,
+        )
+        .expect("valid worker bootstrap");
+        let launch = WorkerBootstrapLaunch::new(bootstrap).expect("encodable worker bootstrap");
+        assert_eq!(
+            launch.frame_sha256(),
+            crate::config::hex_digest(launch.frame())
+        );
+        assert_eq!(launch.bootstrap().component_id, "harness");
+    }
+
+    #[test]
+    fn worker_bootstrap_identity_mismatch_is_rejected_before_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let peer =
+            crate::worker_bootstrap::LinuxPeer::new(1, "1", "/bin/true", "a".repeat(64), 0, 0)?;
+        let frame = crate::worker_bootstrap::WorkerBootstrap::linux(
+            nonce,
+            Uuid::new_v4(),
+            "harness",
+            peer,
+        )?;
+        let worker = WorkerBootstrapLaunch::new(frame)?;
+        let launcher = TrustedLinuxLauncher::new("/bin/true")?;
+        let mut spec = specification();
+        spec.component = ComponentKind::Harness;
+        spec.instance_id = "harness".to_owned();
+        spec.launch_nonce = Uuid::new_v4().to_string();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+        spec.launch_nonce = nonce.to_string();
+        spec.instance_id = "different".to_owned();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::IdentityMismatch(_))
+        ));
+        spec.instance_id = "harness".to_owned();
+        assert!(matches!(
+            launcher.prepare_with_worker_bootstrap(&spec, Path::new("/unused"), &worker),
+            Err(AdapterError::Invalid(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn worker_pipe_is_nonblocking_cloexec_and_writes_exact_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (reader_fd, writer_fd) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader_fd);
+        let mut writer = File::from(writer_fd);
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&writer)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&writer)?.contains(OFlags::NONBLOCK));
+        let frame = b"ASC-WB01-worker-frame";
+        write_worker_frame(&mut writer, frame, Duration::from_secs(1))?;
+        drop(writer);
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received)?;
+        assert_eq!(received, frame);
+        Ok(())
+    }
+
+    #[test]
+    fn helper_request_write_is_bounded_when_child_does_not_read()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("sleep child did not expose stdin"))?;
+        set_nonblocking(&stdin, "test helper stdin")?;
+        let started = Instant::now();
+        let result = write_bounded(
+            &mut stdin,
+            &vec![0_u8; 4 * 1024 * 1024],
+            Duration::from_millis(30),
+            "test helper request",
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(matches!(result, Err(AdapterError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        Ok(())
+    }
+
+    #[test]
+    fn worker_pipe_rejects_regular_descriptors_and_bad_metadata() {
+        assert!(matches!(
+            validate_worker_pipe_handle(&File::open("/dev/null").expect("/dev/null")),
+            Err(AdapterError::Invalid(_))
+        ));
+        let boot_id = Uuid::new_v4().to_string();
+        assert!(validate_worker_boot_metadata(&boot_id, &"a".repeat(64)).is_ok());
+        assert!(validate_worker_boot_metadata(&boot_id.to_uppercase(), &"a".repeat(64)).is_err());
+        assert!(validate_worker_boot_metadata(&boot_id, &"A".repeat(64)).is_err());
+        assert!(
+            validate_worker_boot_metadata("12345678-1234-4234-7234-123456789abc", &"a".repeat(64))
+                .is_err()
+        );
+    }
+
+    fn gateway_specification(nonce: Uuid) -> LaunchSpec {
+        let mut specification = specification();
+        specification.component = ComponentKind::Gateway;
+        specification.launch_nonce = nonce.to_string();
+        specification
+    }
+
+    #[test]
+    fn gateway_health_pipe_is_nonblocking_cloexec_and_exact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let bootstrap = GatewayHealthBootstrap::new(nonce, [0x5a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let expected = bootstrap.encoded_frame();
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(rustix::io::fcntl_getfd(&writer)?.contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&reader)?.contains(OFlags::NONBLOCK));
+        assert!(fcntl_getfl(&writer)?.contains(OFlags::NONBLOCK));
+        write_gateway_health_frame(&mut writer, expected.as_ref(), Duration::from_secs(1))?;
+        drop(writer);
+        let request = LinuxHelperRequest {
+            specification: gateway_specification(nonce),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        let decoded = read_gateway_health_frame(&mut reader, &request, Duration::from_secs(1))?;
+        assert!(decoded == bootstrap);
+        assert_eq!(decoded.encoded_frame().as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_health_pipe_rejects_trailing_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = Uuid::new_v4();
+        let bootstrap = GatewayHealthBootstrap::new(nonce, [0x5a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let frame = bootstrap.encoded_frame();
+        writer.write_all(frame.as_ref())?;
+        writer.write_all(b"extra")?;
+        drop(writer);
+        let request = LinuxHelperRequest {
+            specification: gateway_specification(nonce),
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/ascension-test"),
+        };
+        assert!(matches!(
+            read_gateway_health_frame(&mut reader, &request, Duration::from_secs(1)),
+            Err(AdapterError::Invalid(message))
+                if message.contains("trailing bytes")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_health_frame_reaches_exclusive_target_stdin()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bootstrap = GatewayHealthBootstrap::new(Uuid::new_v4(), [0x2a_u8; 32])
+            .expect("valid Gateway health bootstrap");
+        let expected = bootstrap.encoded_frame();
+        let reader = gateway_health_stdin(&bootstrap)?;
+        assert!(rustix::io::fcntl_getfd(&reader)?.contains(rustix::io::FdFlags::CLOEXEC));
+        let output = Command::new("/bin/cat")
+            .stdin(Stdio::from(reader))
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn health_helper_argument_grammar_rejects_trailing_values() {
+        let result = parse_helper_bootstrap_arguments(
+            [
+                "watchdog".to_owned(),
+                HELPER_ARGUMENT.to_owned(),
+                PARENT_BOOTSTRAP_PID_ARGUMENT.to_owned(),
+                "1".to_owned(),
+                PROTECTED_CONFIG_ARGUMENT.to_owned(),
+                "3".to_owned(),
+                DELEGATED_CGROUP_ROOT_ARGUMENT.to_owned(),
+                "4".to_owned(),
+                "5".to_owned(),
+                GATEWAY_HEALTH_PIPE_ARGUMENT.to_owned(),
+                "6".to_owned(),
+                "unexpected".to_owned(),
+            ]
+            .into_iter(),
+        );
+        assert!(matches!(
+            result,
+            Err(AdapterError::Invalid(message))
+                if message == "Linux helper invocation has unexpected arguments"
+        ));
+    }
+
+    #[test]
+    fn pre_admission_control_failure_retains_child_for_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let marker = directory.path().join("stdin-closed");
+        let marker = marker.to_string_lossy().replace('\'', "'\\''");
+        let helper = directory.path().join("helper.sh");
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nexec 0<&-\nprintf ready > '{marker}'\nexec sleep 30\n"),
+        )?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+        // Snapshot the native interpreter, not a shebang script: the sealed
+        // executable descriptor deliberately closes at exec, so an interpreter
+        // cannot reopen a script through that descriptor afterward.
+        let mut launcher =
+            TrustedLinuxLauncher::new("/bin/sh")?.with_timeout(Duration::from_secs(1))?;
+        launcher.helper_argument = helper.to_string_lossy().into_owned();
+        let mut pending = launcher.prepare(&specification(), Path::new("/sys/fs/cgroup/test"))?;
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !directory.path().join("stdin-closed").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "helper did not close stdin in time"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(pending.child_mut().is_some());
+        let started = Instant::now();
+        let result = pending.release_gate();
+        assert!(matches!(result, Err(AdapterError::Io(_))));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(pending.child_mut().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn into_child_missing_handle_is_fallible_without_panicking() {
+        let mut pending = PendingLaunch {
+            child: None,
+            request_frame: None,
+            stdin: None,
+            parent_bootstrap: None,
+            worker_writer: None,
+            worker_launch: None,
+            gateway_health_writer: None,
+            gateway_health_frame: None,
+            launch_nonce: "nonce".to_owned(),
+            timeout: Duration::from_secs(1),
+            released: true,
+        };
+        assert!(matches!(
+            pending.take_child(),
+            Err(AdapterError::Unavailable(message))
+                if message == "Linux helper child handle was lost"
+        ));
+    }
+
+    #[test]
+    fn expired_worker_write_cannot_emit_even_immediately_available_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let mut reader = File::from(reader);
+        let mut writer = File::from(writer);
+        assert!(matches!(
+            write_worker_frame(&mut writer, b"frame", Duration::ZERO),
+            Err(AdapterError::Timeout(_))
+        ));
+        let mut byte = [0_u8; 1];
+        assert_eq!(
+            reader
+                .read(&mut byte)
+                .expect_err("no bytes admitted")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stalled_worker_reader_cannot_extend_write_deadline() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let _reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let mut saturated = false;
+        for _ in 0..1024 {
+            match writer.write(&[0_u8; 4096]) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    saturated = true;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        assert!(saturated, "test pipe must reach backpressure");
+        let start = Instant::now();
+        assert!(matches!(
+            write_worker_frame(&mut writer, b"frame", Duration::from_millis(20)),
+            Err(AdapterError::Timeout(_))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[test]
+    fn helper_reader_duplicate_is_anonymous_cloexec_and_independently_owned()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const ISOLATED: &str = "ASCENSION_TEST_ISOLATED_READER_OWNERSHIP";
+        if std::env::var_os(ISOLATED).is_none() {
+            // CLOEXEC closes descriptors at exec, not at fork. Other tests spawn
+            // processes concurrently, which can briefly retain this test's read
+            // end and invalidate an immediate EPIPE assertion. Run the ownership
+            // assertions in a process with no concurrent tests or child launches.
+            let mut child = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "platform::linux_launcher::tests::helper_reader_duplicate_is_anonymous_cloexec_and_independently_owned",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(ISOLATED, "1")
+                .spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    assert!(status.success(), "isolated ownership test failed: {status}");
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err("isolated ownership test exceeded deadline".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
+        let reader = File::from(reader);
+        let mut writer = File::from(writer);
+        let mut duplicate = open_parent_worker_descriptor(std::process::id(), reader.as_raw_fd())?;
+        assert!(rustix::io::fcntl_getfd(&duplicate)?.contains(rustix::io::FdFlags::CLOEXEC));
+        drop(reader);
+        write_worker_frame(&mut writer, b"frame", Duration::from_secs(1))?;
+        let mut bytes = [0_u8; 5];
+        duplicate.read_exact(&mut bytes)?;
+        assert_eq!(&bytes, b"frame");
+        drop(duplicate);
+        assert_eq!(
+            writer
+                .write(b"frame")
+                .expect_err("all readers closed")
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_bare_helper_invocation_requires_parent_bootstrap() {
+        let result = parse_helper_bootstrap_arguments(
+            ["watchdog".to_owned(), HELPER_ARGUMENT.to_owned()].into_iter(),
+        );
+        assert!(matches!(
+            result,
+            Err(AdapterError::Invalid(message))
+                if message == "Linux helper parent bootstrap process identifier is missing"
+        ));
+    }
+
+    #[test]
+    fn unprotected_helper_mode_still_requires_exact_parent_prefix() {
+        let result = parse_helper_bootstrap_arguments(
+            [
+                "watchdog".to_owned(),
+                HELPER_ARGUMENT.to_owned(),
+                PARENT_BOOTSTRAP_PID_ARGUMENT.to_owned(),
+                "1".to_owned(),
+            ]
+            .into_iter(),
+        );
+        assert!(matches!(result, Ok(None)));
+    }
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/ascension-watchdog-worker-handoff-v1/manifest.json",
+  "contract": "ascension-watchdog-worker-handoff-v1",
+  "version": 1,
+  "schema_file": "schema.json",
+  "schema_digest": "bb13d15f6c0e4b8d0f58f7391fe4ba319ebc57a0a09effc06d73ea718bbff4cf",
+  "digest_algorithm": "SHA-256",
+  "canonicalization": "WHJ-1: exact UTF-8 compact JSON bytes for the empty runtime_v3_episode parameter object",
+  "text_validation": {
+    "identity": "ASCII allowlist; 1..128 UTF-8 bytes (schema code-point and byte bounds are equivalent)",
+    "existing_id": "1..128 UTF-8 bytes; reject U+0000..U+001F and U+007F; Rust decoder is authoritative because schema maxLength counts code points",
+    "terminal_ref": "1..1024 UTF-8 bytes; reject U+0000..U+001F and U+007F; Rust decoder is authoritative because schema maxLength counts code points"
+  },
+  "numeric_lexical_validation": {
+    "encoding": "canonical unsigned decimal JSON integer token",
+    "rules": [
+      "no sign, fraction, exponent, or leading zero",
+      "wire value is at most 9007199254740991; field validators may impose tighter bounds",
+      "strict Rust decoding is normative because JSON Schema integer validation is structural and does not constrain token spelling"
+    ]
+  },
+  "limits": {
+    "max_frame_bytes": 65536,
+    "max_terminal_bytes": 16384,
+    "max_json_depth": 16,
+    "max_deadline_ms": 5000,
+    "max_wire_integer": 9007199254740991,
+    "max_identity_bytes": 128,
+    "max_reference_bytes": 1024
+  },
+  "operation": {
+    "name": "runtime_v3_episode",
+    "parameters": {},
+    "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "compatibility": {
+    "mixed_digest_policy": "reject",
+    "unknown_fields": "reject",
+    "implicit_downgrade": "reject"
+  },
+  "semantic_invariants": [
+    "worker_boot_id is absent only on probe requests and is a canonical UUIDv4 on every other frame",
+    "run_id, episode_id, trajectory_id, and handoff_id are pairwise distinct canonical UUIDv4 values",
+    "a terminal receipt must exactly match the enclosing frame tuple; JSON Schema cannot express this equality",
+    "identity and reference limits are UTF-8 byte limits; JSON Schema maxLength is only a code-point approximation",
+    "probe responses may report readiness but admitting must always be false"
+  ],
+  "publication": {
+    "owner": "architecture-contracts",
+    "consumer_owners": ["watchdog", "harness"],
+    "transport": "owner-local authenticated endpoint; protocol artifact only"
+  }
+}

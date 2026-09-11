@@ -1,0 +1,45 @@
+[Unit]
+Description=AI-Ascension restricted systemd launch broker
+After=systemd-udev-settle.service
+# Bound manager-owned recovery independently of deployment retry budgets.
+StartLimitIntervalSec=600s
+StartLimitBurst=5
+StartLimitAction=none
+
+[Service]
+Type=simple
+NotifyAccess=main
+# v254+ is required for positive descriptor-store inspection and preservation.
+FileDescriptorStoreMax=128
+FileDescriptorStorePreserve=yes
+User=root
+Group=root
+RuntimeDirectory=ascension-watchdog-broker
+RuntimeDirectoryMode=0750
+StateDirectory=ascension-watchdog-broker
+StateDirectoryMode=0750
+ExecStart=/opt/ascension-watchdog/current/linux-systemd-broker --socket /run/ascension-watchdog-broker/broker.sock --policy /etc/ascension-watchdog/broker-policy.json --ledger /var/lib/ascension-watchdog-broker/broker-ledger.jsonl
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/ascension-watchdog/broker-policy.json /opt/ascension-watchdog
+ReadWritePaths=/run/ascension-watchdog-broker /var/lib/ascension-watchdog-broker
+RestrictAddressFamilies=AF_UNIX
+# Cross-UID /proc executable verification requires ptrace read permission;
+# graceful signalling of the verified non-root leader requires CAP_KILL.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SYS_PTRACE
+AmbientCapabilities=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+TasksMax=64
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

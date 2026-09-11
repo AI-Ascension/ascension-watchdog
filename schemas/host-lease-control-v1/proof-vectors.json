@@ -1,0 +1,128 @@
+{
+  "profile": "host-lease-control-proof-v1",
+  "classification": "test-vectors-not-live-evidence",
+  "test_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "canonical_cases": [
+    {
+      "name": "utf8-member-order",
+      "input": {
+        "𐀀": "astral",
+        "": "bmp",
+        "é": "accent",
+        "a": "ascii"
+      },
+      "canonical_utf8_base64": "eyJhIjoiYXNjaWkiLCLDqSI6ImFjY2VudCIsIu6AgCI6ImJtcCIsIvCQgIAiOiJhc3RyYWwifQ==",
+      "canonical_sha256": "c500848acbab6e3689388507e3e65a0a8ec9e5a4cde9a19f7f519fb28b886f34"
+    },
+    {
+      "name": "string-escaping",
+      "input": {
+        "text": "\"\\/\b\t\n\f\r\u0000\u001f  é😀"
+      },
+      "canonical_utf8_base64": "eyJ0ZXh0IjoiXCJcXC9cYlx0XG5cZlxyXHUwMDAwXHUwMDFm4oCo4oCpw6nwn5iAIn0=",
+      "canonical_sha256": "4f7ec9288bac6ea6d857b9c756eff25d43e32ce613c9621fdb012743469f26c9"
+    },
+    {
+      "name": "nested-integers",
+      "input": {
+        "z": [
+          null,
+          true,
+          false,
+          0,
+          9007199254740991
+        ],
+        "a": {
+          "b": 2,
+          "a": 1
+        }
+      },
+      "canonical_utf8_base64": "eyJhIjp7ImEiOjEsImIiOjJ9LCJ6IjpbbnVsbCx0cnVlLGZhbHNlLDAsOTAwNzE5OTI1NDc0MDk5MV19",
+      "canonical_sha256": "ac3566bc1f548657d74dd6dc233f0e323c260fb153a2a6b4a044a7c344a4f967"
+    }
+  ],
+  "frame_proof_cases": [
+    {
+      "fixture": "fixtures/valid/lease-install-duplicate-response.json",
+      "fixture_sha256": "85b0531629ddb6557a9d77ff92ecd276b9aaa0dd9ac62af89f763258f924968f",
+      "domain": "host-lease-control/v1/lease-install-ack",
+      "canonical_sha256": "058c590fd777b938077331128fe5b55b067618bdbda29a638ebf7dfd78f19ad8",
+      "signed_message_sha256": "ef20833221b43aeef24f85ba1396021e28c3919afa4f99e473e9037511c05d1a",
+      "proof": "72b431d3b3d479a59ae3e0af900dee9ca27772c486e3fdbdad9305e83cc0b1f9"
+    },
+    {
+      "fixture": "fixtures/valid/lease-install-request.json",
+      "fixture_sha256": "6841a38946e5464590ecbe51e7c4379c4960ac62bc75de1384bace382db1cf23",
+      "domain": "host-lease-control/v1/lease-install-request",
+      "canonical_sha256": "fbadfd24eeed8896a495a04f8a42ea97dc90a64a72ec49ae4490fe231e1ee1ab",
+      "signed_message_sha256": "b0efcefb1adbc14af68ba4b59b8d48fcb2d7677d1f7d84318d67e42382982c1f",
+      "proof": "900361e1e92e9c9f23adc321d65b6a7bc13a6726e8a26f2a75572c9bdf57b235"
+    },
+    {
+      "fixture": "fixtures/valid/lease-install-response.json",
+      "fixture_sha256": "581c69bbdd5aa9ac81022f7a5d1e76af75ca3f7ae6042fb0383e9a92c8282c8e",
+      "domain": "host-lease-control/v1/lease-install-ack",
+      "canonical_sha256": "2a108e083daae3b87bd43b092a3297bfc8e3a0e94c2a9ecf1e0182ec504c8421",
+      "signed_message_sha256": "80893c2d14f656866a6c4b3df3a92154fc99eaef8caa58eebb10f6f7b2ba8390",
+      "proof": "dd00b823c8b031e46cacae6b5a5d1cef7d1c2a0884754a901068ab40472c11e3"
+    },
+    {
+      "fixture": "fixtures/valid/lease-renew-duplicate-response.json",
+      "fixture_sha256": "2f1df8a3df283abda8588ad7df5ad217bfc982a7e767e9e26486b606e2d1b073",
+      "domain": "host-lease-control/v1/lease-renew-ack",
+      "canonical_sha256": "ae080c3c574d82dc7b2e28fb75f2348c55a43a83c3c5650009795c949f05672e",
+      "signed_message_sha256": "b79af88188213e077d5e4d4e264b72d7689de190c3edb905c9a32982d78b7f70",
+      "proof": "8a1bd71358695a6da4073be2306d95f4e6705c6fff9329c557a6b44d0feecab9"
+    },
+    {
+      "fixture": "fixtures/valid/lease-renew-request.json",
+      "fixture_sha256": "25f5cdf63f0b3f3881567aa4f900005613a212fac1c0bc3659e3fdf445501623",
+      "domain": "host-lease-control/v1/lease-renew-request",
+      "canonical_sha256": "2fd36c85fd97d5ab2fafb2236f4bcdd487893cd31d875a532fd668142f558274",
+      "signed_message_sha256": "a8c4195e2874a48d819c32f50332b4c94b750b77a04a1db54b42715928719446",
+      "proof": "c1a62fdd1097ec4f59cbc2cc593224db7629c7c9ba812e3683d141b2a9fff84f"
+    },
+    {
+      "fixture": "fixtures/valid/lease-renew-response.json",
+      "fixture_sha256": "010f02c0e4f4a2c9c936c99faaf3e01bdffce153d72c23a228fe8f34f26c510e",
+      "domain": "host-lease-control/v1/lease-renew-ack",
+      "canonical_sha256": "c1b5e0f9f7a195566f9ad2dd817f58e54e37bb954356694787343a8aea4ac728",
+      "signed_message_sha256": "3807306dbd7da49a0ce965e3e31eeacc8592420281c4f15a7e299b5c6353766e",
+      "proof": "664882457b2fd982a959133afc872bc2f21e5b53156c3ea6bb286206fe9250c6"
+    },
+    {
+      "fixture": "fixtures/valid/lease-revoke-duplicate-response.json",
+      "fixture_sha256": "23d42ec3dcc79d2bb131deb8303cee964c2dfd269e4aca11c0ba02ade0d3886b",
+      "domain": "host-lease-control/v1/lease-revoke-ack",
+      "canonical_sha256": "e2b647aadbb7c7f76ffa3aa2de43bff5dc98fdc910cf22cb1efe615a67ed577b",
+      "signed_message_sha256": "5a87d7dbe9dd92644156d92cb8241dfeebab5bb066d08f5a4c552a9a633347bc",
+      "proof": "a549b47888bcd2c15771ce836cdb2275b19762adbdf35678cab81b3347ea8b25"
+    },
+    {
+      "fixture": "fixtures/valid/lease-revoke-request.json",
+      "fixture_sha256": "4e2c7f4ba7c3c6399d8816a49540eb9082f950be298831d1848efe8d0f8c773a",
+      "domain": "host-lease-control/v1/lease-revoke-request",
+      "canonical_sha256": "f93f7cdbcb9458ba237eb80f9221a97db3e57ec94623b26e28e51c4dfb952135",
+      "signed_message_sha256": "4a54fdb18b24f67cf2552d72dd3ea8f6f45a13640461fedaf402b0aca9ff9674",
+      "proof": "c3a23a29478cfe50e02e229039942bd5e5c57c49acc4af99a0d215cf71a42e3b"
+    },
+    {
+      "fixture": "fixtures/valid/lease-revoke-response.json",
+      "fixture_sha256": "8ad61f51ca464a8a067aaece9b59f09d356fb71ed57cfc782f25fad2c43a69bc",
+      "domain": "host-lease-control/v1/lease-revoke-ack",
+      "canonical_sha256": "95b4cfee9256e7e3eef328b86da59ff2976345ace7a625b2b68e96d5189dc7ad",
+      "signed_message_sha256": "a8a9e836fc99113c6e8bce85519e886714c063a2e65bbae2f79f364dba49ac07",
+      "proof": "9aafa2b34daa58a6686cf76efff3269365df7f293d848db6f99949fbbc27af3e"
+    }
+  ],
+  "reject_raw_json": [
+    "{\"x\":1,\"x\":2}",
+    "{\"x\":1.5}",
+    "{\"x\":9007199254740992}",
+    "{\"x\":\"\\ud800\"}",
+    "{\"x\":\"\\udc00\"}",
+    "{\"x\":1e0}",
+    "{\"x\":-0}",
+    "{\"x\":-1}"
+  ]
+}

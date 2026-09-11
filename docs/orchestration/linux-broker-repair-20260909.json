@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "classification": "partial local implementation",
+  "source_base": "2c066cb216db5107cdd9e8bb3d5902af5d73a806",
+  "source_state": "local branch checkpoint, not integrated with health consumer",
+  "source_sha256": {
+    "Cargo.toml": "4e62aef6465d2734e6cd0f2e2cd004bb78d2bb1b1fe04ddc589f08d4842b4c85",
+    "Cargo.lock": "7ea80a95b227af3f24ec38687cd674bff8b1b31b185bf54574a9b2e7f5dbf440",
+    "crates/watchdog/Cargo.toml": "0c0aab442218c8fff76e4bdbb9accc2c98438e854b8bd359ca4efe31391b2b94",
+    "crates/platform-linux-descriptors/Cargo.toml": "fc5d964f6c77ecab32f6a3b8a3052ce455f33e5433bd94aa47147c2c439345bb",
+    "crates/platform-linux-descriptors/src/lib.rs": "87da769db2f5afaf7781930ac3b699a7690787cfad6cf802292c559010314594",
+    "crates/watchdog/src/platform/linux_broker.rs": "4f91ed0b0a0bd79129ed7cafd36489a6c9a44e6dd5c22bb85e3a3f83bf005a62",
+    "crates/watchdog/src/platform/linux_broker/ledger.rs": "607fdec28e5c3674918033877be66aeccb324eeeeb4cb29faef5a77056f804ef",
+    "crates/watchdog/src/platform/linux_broker/native.rs": "187f7598872ed6672560e2f03c8b3d6a5b9aaeb0d26ca9c694ad9ffb0bdd2876",
+    "crates/watchdog/src/platform/linux_broker/native_cgroup.rs": "1a9d40ca20fddc347e00e9cd2367ad1d4062ba8c813a879bfc76efcb5b541c12",
+    "crates/watchdog/src/platform/linux_broker/tests.rs": "30d2a87d4f4b8c1a6fef116cf9364e97b902e8e0cb8d412d9035f116dc67af17",
+    "crates/watchdog/src/platform/linux_broker/retirement_tests.rs": "3da1c4a983b4b4782263eb9264bb93b4132b4d5cd9e03d6199bcb0ff3b8ead76",
+    "crates/watchdog/src/platform/linux_broker/native_identity_tests.rs": "07b9ef9f789e2e2e133fb7d4920b4cc177c94050bbc21bb60d40e6671332df54",
+    "crates/watchdog/src/platform/linux_broker/orphan_cleanup_tests.rs": "35ce7368f16259a27f2c1d8f1c1d1f2ffd05c0c657fec2b94fa3361a281a4662",
+    "crates/watchdog/src/platform/linux_broker/descriptor_store.rs": "17dfa95d622cfc46b19f44f6397d05773f1d12143cbbe4d68c1f812baeac4d39",
+    "crates/watchdog/src/platform/linux_broker/descriptor_store_tests.rs": "414bef1d3af813f671f51b4b93e63c0d3003657187fc2b4119a525076b96c538",
+    "crates/watchdog/src/platform/linux_broker/descriptor_store_snapshot.rs": "9cfce8adc37526b1684e002e68239104710c55161d46b4ac84b9497f0374d86e",
+    "crates/watchdog/src/platform/linux_broker/native_descriptor_store.rs": "07dcdcb02227c66cf4489df42bb335053bb9a84a7fada75c3f46b4d52834560d",
+    "crates/watchdog/src/platform/linux_broker/native_activation.rs": "85965517ced5d92dab0464ff3236b4f43b296c12cbc9f71c010a6c83a1febba9",
+    "deploy/linux/ascension-watchdog-broker.service": "6fa21d6c58926e78582a8783f3a7b18e7f8bb2881d4a0c08376d57c1c2d27712",
+    "crates/watchdog/src/platform/linux_broker/failed_launch_cleanup_tests.rs": "0b05e284eb611a305001d3f7499092d2c1745c4a5765f7b399515451a98d4776"
+  },
+  "verification": {
+    "command": "CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 -p ascension-watchdog --lib platform::linux_broker",
+    "passed": 79,
+    "failed": 0,
+    "ignored": 1,
+    "test_seconds": 25.45,
+    "source_scope": "orphan cleanup and exact typed NoSuchUnit classification",
+    "descriptor_helper": {
+      "passed": 4,
+      "failed": 0,
+      "test_seconds": 0.03
+    },
+    "strict_clippy": "passed: broker lib/tests strict Clippy in 46.03 seconds on orphan cleanup; descriptor helper previously passed",
+    "full_workspace_tests": "passed on final orphan-cleanup source: cargo test --workspace --all-targets --all-features --locked --offline -j1; compilation 1m21s; gated native tests remain skipped",
+    "full_workspace_strict_clippy": "passed on final orphan-cleanup source in 30.38 seconds: cargo clippy --workspace --all-targets --all-features --locked --offline -j1 -- -D warnings",
+    "dependency_checks": "rerun after final orphan release build: advisories, bans, licenses and sources passed; existing allowed duplicate hashbrown and syn warnings; no external dependency version changes",
+    "descriptor_store_state_source_review": "bounded independent approval; state-level guarantee, not per-submission acknowledgement",
+    "descriptor_ffi_source_review": "approved under early single-threaded one-shot intake; caller ordering and partial-copy rollback independently reviewed",
+    "activation_and_cleanup_source_review": "approved: early intake source review; failed-launch descriptor leak repaired and independently closed with no remaining blocker in reviewed scope",
+    "broker_start_limit_source_review": "independent source-only approval: explicit five-start per 600s manager limit, no host action, correct unit section and non-durable accounting limitations",
+    "orphan_cleanup_source_review": "independent source review found no concrete safety blocker in held-original cleanup or typed unit-absence classification",
+    "local_linux_release_build": {
+      "command": "CARGO_INCREMENTAL=0 cargo build --workspace --release --locked --offline -j1",
+      "exit_code": 0,
+      "duration": "5m21s",
+      "classification": "local Linux build only; not an integrated companion release or deployment",
+      "artifact_sha256": {
+        "watchdog": "124cef939bd221f098f6e110656c8936844498ad7ae95ee02fed303a78c7d273",
+        "linux-systemd-broker": "6eb26cc48affe8db7711144d1752b1252046d4b4d370ad2659efc80314c5fd0e",
+        "fault-fixture-server": "d715edc76fb8fec0bbd5a13be0fb16e7995300d76e722517d9fc7989e4ca58b3",
+        "platform_synthetic": "5bb19a8a350c4750e631e7a8768a3923c3a2fea4b59ba70cea61fe0a2864751c"
+      }
+    },
+    "independent_focused_execution": {
+      "source_scope": "final orphan cleanup and typed absence, including native-backend malformed-population and already-empty regressions",
+      "command": "CARGO_INCREMENTAL=0 cargo test --locked --offline --all-features -j1 -p ascension-watchdog --lib platform::linux_broker",
+      "exit_code": 0,
+      "passed": 79,
+      "failed": 0,
+      "ignored": 1,
+      "test_seconds": 11.25,
+      "descriptor_helper_passed": 4,
+      "descriptor_helper_failed": 0,
+      "descriptor_helper_seconds": 0.02
+    },
+    "descriptor_helper_windows_cross_lint": "passed in 1.78 seconds: cargo clippy --locked --offline -j1 -p ascension-platform-linux-descriptors --all-targets --target x86_64-pc-windows-gnu -- -D warnings; not native execution"
+  },
+  "remaining": [
+    "Authorized native descendant-cleanup/restart validation for the implemented held-original orphan path",
+    "Verified retirement after original controls become unreadable and across kernel boot boundaries",
+    "Typed bootstrap and runtime process adapter integration into the health-consumer worktree",
+    "Integrated companion release set and authorized native-service/restart validation"
+  ],
+  "published_or_deployed": false,
+  "implementation_complete": false,
+  "historical_same_owner_verification": {
+    "command": "CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 -p ascension-watchdog --lib platform::linux_broker",
+    "passed": 49,
+    "failed": 0,
+    "ignored": 1,
+    "test_seconds": 9.66,
+    "strict_clippy": "passed: cargo clippy --locked --offline -j1 -p ascension-watchdog --lib --tests -- -D warnings",
+    "full_workspace_strict_clippy": "passed in 53.90 seconds: cargo clippy --workspace --all-targets --all-features --locked --offline -j1 -- -D warnings",
+    "dependency_checks": "advisories, bans, licenses and sources passed; existing allowed hashbrown and syn duplicate warnings remain",
+    "ledger_independent_source_review": "bounded approval of journal-size and immutable-binding repairs",
+    "held_containment_independent_source_review": "failed-start cleanup finding repaired and closed",
+    "retirement_independent_source_review": "pathname-reacquisition finding repaired and independently closed",
+    "boot_package_capacity_independent_source_review": "bounded approval, no blocker",
+    "independent_focused_execution": {
+      "command": "CARGO_INCREMENTAL=0 cargo test --locked --offline --all-features -j1 -p ascension-watchdog --lib platform::linux_broker",
+      "exit_code": 0,
+      "passed": 49,
+      "failed": 0,
+      "ignored": 1,
+      "test_seconds": 9.88
+    },
+    "full_workspace_tests": "passed: cargo test --workspace --all-targets --all-features --locked --offline -j1; explicitly gated native tests remain skipped"
+  },
+  "native_service_or_reboot_executed": false,
+  "repair_invariants": [
+    "Pending-to-StopPending failed-launch cleanup preserves exact receipt without acknowledging launch",
+    "Cleanup intent persistence failure prevents termination and descriptor removal",
+    "Local original containment may authorize cleanup but never substitutes for manager-store launch acknowledgement",
+    "Descriptor removal requires same-name original-object match or proven absence",
+    "Orphan cleanup requires current policy, original capability and durable stop intent; unavailable or malformed population evidence never grants cleanup",
+    "Generic inspection errors and replaced live identity cannot enter orphan cleanup"
+  ]
+}

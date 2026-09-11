@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ascension.invalid/schemas/ascension-watchdog-worker-handoff-v1.json",
+  "title": "Ascension watchdog worker handoff v1",
+  "oneOf": [
+    { "$ref": "#/$defs/probeRequest" },
+    { "$ref": "#/$defs/probeResponse" },
+    { "$ref": "#/$defs/dispatchRequest" },
+    { "$ref": "#/$defs/dispatchResponse" },
+    { "$ref": "#/$defs/lookupRequest" },
+    { "$ref": "#/$defs/lookupResponse" },
+    { "$ref": "#/$defs/acknowledgeRequest" },
+    { "$ref": "#/$defs/acknowledgeResponse" },
+    { "$ref": "#/$defs/controlRequest" },
+    { "$ref": "#/$defs/controlResponse" }
+  ],
+  "$defs": {
+    "uuid4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "identity": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "existingId": {
+      "$comment": "Rust is authoritative for the 128-byte UTF-8 bound; JSON Schema maxLength counts Unicode code points and is not byte-equivalent.",
+      "type": "string",
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "header": {
+      "type": "object",
+      "properties": {
+        "contract": { "const": "ascension-watchdog-worker-handoff-v1" },
+        "schema_digest": { "$ref": "#/$defs/digest" },
+        "direction": { "enum": ["request", "response"] },
+        "command": { "enum": ["probe", "dispatch", "lookup", "acknowledge", "set_control_mode"] },
+        "scope": { "enum": ["probe", "dispatch", "lookup", "acknowledge", "control"] },
+        "request_id": { "$ref": "#/$defs/uuid4" },
+        "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "watchdog_boot_id": { "$ref": "#/$defs/uuid4" },
+        "worker_boot_id": { "$ref": "#/$defs/uuid4" }
+      },
+      "required": ["contract", "schema_digest", "direction", "command", "scope", "request_id", "timeout_ms", "watchdog_boot_id"]
+    },
+    "tuple": {
+      "type": "object",
+      "properties": {
+        "handoff_id": { "$ref": "#/$defs/uuid4" },
+        "deployment_id": { "$ref": "#/$defs/identity" },
+        "job_id": { "$ref": "#/$defs/existingId" },
+        "attempt_id": { "$ref": "#/$defs/existingId" },
+        "attempt_number": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "worker_owner_id": { "$ref": "#/$defs/identity" },
+        "worker_profile_digest": { "$ref": "#/$defs/digest" },
+        "run_id": { "$ref": "#/$defs/uuid4" },
+        "episode_id": { "$ref": "#/$defs/uuid4" },
+        "trajectory_id": { "$ref": "#/$defs/uuid4" },
+        "payload_digest": { "const": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }
+      },
+      "required": ["handoff_id", "deployment_id", "job_id", "attempt_id", "attempt_number", "worker_owner_id", "worker_profile_digest", "run_id", "episode_id", "trajectory_id", "payload_digest"]
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "handoff_id": { "$ref": "#/$defs/uuid4" },
+        "deployment_id": { "$ref": "#/$defs/identity" },
+        "job_id": { "$ref": "#/$defs/existingId" },
+        "attempt_id": { "$ref": "#/$defs/existingId" },
+        "attempt_number": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "worker_owner_id": { "$ref": "#/$defs/identity" },
+        "worker_profile_digest": { "$ref": "#/$defs/digest" },
+        "run_id": { "$ref": "#/$defs/uuid4" },
+        "episode_id": { "$ref": "#/$defs/uuid4" },
+        "trajectory_id": { "$ref": "#/$defs/uuid4" },
+        "payload_digest": { "const": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" },
+        "status": { "enum": ["completed", "failed"] },
+        "checkpoint_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "terminal_ref": {
+          "$comment": "Rust is authoritative for the 1024-byte UTF-8 bound; JSON Schema maxLength counts Unicode code points and is not byte-equivalent.",
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "result_digest": { "$ref": "#/$defs/digest" }
+      },
+      "required": ["handoff_id", "deployment_id", "job_id", "attempt_id", "attempt_number", "worker_owner_id", "worker_profile_digest", "run_id", "episode_id", "trajectory_id", "payload_digest", "status", "checkpoint_sequence", "terminal_ref", "result_digest"],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    "controlScope": {
+      "type": "object",
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/identity" },
+        "worker_owner_id": { "$ref": "#/$defs/identity" },
+        "worker_profile_digest": { "$ref": "#/$defs/digest" },
+        "mode": { "enum": ["running", "paused", "draining", "stopped"] },
+        "mode_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "required": ["deployment_id", "worker_owner_id", "worker_profile_digest", "mode", "mode_sequence"]
+    },
+    "probeRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        {
+          "type": "object",
+          "properties": {
+            "direction": { "const": "request" },
+            "command": { "const": "probe" },
+            "scope": { "const": "probe" }
+          },
+          "required": ["direction", "command", "scope"]
+        }
+      ],
+      "not": { "required": ["worker_boot_id"] },
+      "unevaluatedProperties": false
+    },
+    "probeResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        {
+          "type": "object",
+          "properties": {
+            "direction": { "const": "response" },
+            "command": { "const": "probe" },
+            "scope": { "const": "probe" },
+            "deployment_id": { "$ref": "#/$defs/identity" },
+            "worker_owner_id": { "$ref": "#/$defs/identity" },
+            "worker_profile_digest": { "$ref": "#/$defs/digest" },
+            "release_digest": { "$ref": "#/$defs/digest" },
+            "config_digest": { "$ref": "#/$defs/digest" },
+            "ready": { "type": "boolean" },
+            "admitting": { "const": false },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
+          },
+            "required": ["direction", "command", "scope", "deployment_id", "worker_owner_id", "worker_profile_digest", "release_digest", "config_digest", "ready", "admitting", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "dispatchRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        {
+          "type": "object",
+          "properties": {
+            "direction": { "const": "request" },
+            "command": { "const": "dispatch" },
+            "scope": { "const": "dispatch" },
+            "mode_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+            "operation": { "const": "runtime_v3_episode" },
+            "parameters": { "const": {} },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
+          },
+            "required": ["direction", "command", "scope", "mode_sequence", "operation", "parameters", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "dispatchResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        {
+          "type": "object",
+          "properties": {
+            "direction": { "const": "response" },
+            "command": { "const": "dispatch" },
+            "scope": { "const": "dispatch" },
+            "status": { "enum": ["accepted", "already_completed", "terminal", "busy", "rejected"] },
+            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
+          },
+            "required": ["direction", "command", "scope", "status", "worker_boot_id"],
+          "oneOf": [
+            {
+              "properties": { "status": { "enum": ["already_completed", "terminal"] }, "terminal": { "$ref": "#/$defs/terminal" } },
+              "required": ["terminal"]
+            },
+            { "properties": { "status": { "enum": ["accepted", "busy", "rejected"] }, "terminal": { "type": "null" } } }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lookupRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        { "type": "object", "properties": { "direction": { "const": "request" }, "command": { "const": "lookup" }, "scope": { "const": "lookup" }, "worker_boot_id": { "$ref": "#/$defs/uuid4" } }, "required": ["direction", "command", "scope", "worker_boot_id"] }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lookupResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        {
+          "type": "object",
+          "properties": {
+            "direction": { "const": "response" },
+            "command": { "const": "lookup" },
+            "scope": { "const": "lookup" },
+            "status": { "enum": ["running", "terminal", "unknown", "rejected"] },
+            "terminal": { "anyOf": [{ "$ref": "#/$defs/terminal" }, { "type": "null" }] },
+            "worker_boot_id": { "$ref": "#/$defs/uuid4" }
+          },
+            "required": ["direction", "command", "scope", "status", "worker_boot_id"],
+          "oneOf": [
+            { "properties": { "status": { "const": "terminal" }, "terminal": { "$ref": "#/$defs/terminal" } }, "required": ["terminal"] },
+            { "properties": { "status": { "enum": ["running", "unknown", "rejected"] }, "terminal": { "type": "null" } } }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acknowledgeRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        {
+          "type": "object",
+          "properties": { "direction": { "const": "request" }, "command": { "const": "acknowledge" }, "scope": { "const": "acknowledge" }, "terminal_digest": { "$ref": "#/$defs/digest" }, "worker_boot_id": { "$ref": "#/$defs/uuid4" } },
+          "required": ["direction", "command", "scope", "terminal_digest", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acknowledgeResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/tuple" },
+        {
+          "type": "object",
+          "properties": { "direction": { "const": "response" }, "command": { "const": "acknowledge" }, "scope": { "const": "acknowledge" }, "status": { "enum": ["acknowledged", "already_acknowledged", "conflict", "rejected"] }, "worker_boot_id": { "$ref": "#/$defs/uuid4" } },
+          "required": ["direction", "command", "scope", "status", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "controlRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/controlScope" },
+        {
+          "type": "object",
+          "properties": { "direction": { "const": "request" }, "command": { "const": "set_control_mode" }, "scope": { "const": "control" }, "worker_boot_id": { "$ref": "#/$defs/uuid4" } },
+          "required": ["direction", "command", "scope", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "controlResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/header" },
+        { "$ref": "#/$defs/controlScope" },
+        {
+          "type": "object",
+          "properties": { "direction": { "const": "response" }, "command": { "const": "set_control_mode" }, "scope": { "const": "control" }, "status": { "enum": ["accepted", "rejected"] }, "worker_boot_id": { "$ref": "#/$defs/uuid4" } },
+          "required": ["direction", "command", "scope", "status", "worker_boot_id"]
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

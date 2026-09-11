@@ -1,0 +1,33 @@
+{
+  "contract": "watchdog-recovery-v1",
+  "schema_digest": "fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217",
+  "message_id": "55555555-5555-4555-8555-555555555555",
+  "correlation_id": "66666666-6666-4666-8666-666666666666",
+  "sent_at": "2026-09-06T22:30:00Z",
+  "actor": {
+    "principal_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "role": "gateway"
+  },
+  "auth": {
+    "principal_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "capability": "bootstrap",
+    "proof": "bootstrap-proof"
+  },
+  "kind": "bootstrap_request",
+  "payload": {
+    "deployment_id": "11111111-1111-4111-8111-111111111111",
+    "instance_id": "22222222-2222-4222-8222-222222222222",
+    "instance_incarnation": "33333333-3333-4333-8333-333333333333",
+    "release": {
+      "release_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "config_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "profile_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "runtime_v3_schema_digest": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "lease_policy": {
+      "ttl_seconds": 30,
+      "renewal_interval_seconds": 10
+    },
+    "unexpected": true
+  }
+}

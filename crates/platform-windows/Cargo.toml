@@ -1,0 +1,47 @@
+[package]
+name = "ascension-platform-windows"
+version = "0.1.0"
+description = "Isolated Windows service, session broker, IPC, and process containment boundary"
+publish = false
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+
+[features]
+# Test-only knob for the native worker-pipe saturation regression.  It is not
+# enabled by default and has no effect on ordinary production launches.
+native-worker-test-hooks = []
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+
+[[bin]]
+name = "platform_synthetic"
+path = "src/bin/platform_synthetic.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"

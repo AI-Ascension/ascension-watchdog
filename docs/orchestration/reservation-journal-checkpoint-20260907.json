@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "classification": "confirmed-local-snapshot-not-a-release",
+  "supersedes_checkpoint": "integration-wave-20260907.json",
+  "watchdog": {
+    "source_snapshot": "736e0ca65cba7140a232e3726a6c143df1acab52",
+    "reservation_reviewed_commit": "00eb2442bde20865f5fb4d53e9fecac04085f8c0",
+    "reservation_review": "W28 independent GO; complete dirty diff was committed before exact-head review",
+    "root_validation": "full workspace/all-target/all-feature tests and Clippy passed on candidate; five reservation/quarantine tests passed again after integration; two delegated-cgroup tests explicitly ignored",
+    "remaining": ["authenticated automatic worker handoff", "platform integration", "complete exact-release fault campaign"]
+  },
+  "companions": [
+    {
+      "repository": "sts2-game-mod",
+      "proof_candidate": "2873269e78eac83af58bf70e91f2cfb5dc06a1db",
+      "root_validation": "nine published proof vectors through actual managed decoder; managed gameplay and Workshop probes, Rust tests, Clippy, formatting and strict policy passed",
+      "authority_candidate": "d89d3e2a721910cf9793800c1056eee1d1df5763",
+      "journal_candidate": "8e47b79c04a06ecd4e3fa6a34d6a20ad5a9aba20",
+      "integration_status": "authority and journal candidates not integrated; independent reviews and corruption boundary repair active"
+    },
+    {
+      "repository": "sts2-gateway",
+      "local_integration": "8596f75dad621080f3662dcf8b0dfe3ffe475600",
+      "root_validation": "full workspace tests, strict Clippy, formatting and strict policy passed",
+      "remaining": "host-lease consumer corrections and exact cross-consumer integration"
+    },
+    {
+      "repository": "sts2-harness",
+      "local_integration": "6d59ab074c2cf16a79d4edad8095444ec5839d6f",
+      "remaining": "durable complete action identity, fresh-authority resume, worker admission/completion and reconstruction handoff"
+    }
+  ],
+  "agent_snapshot": {
+    "global_descendant_ceiling": 12,
+    "listed_descendant_handles": 11,
+    "running_at_observation": 7,
+    "extra_nested_reservations": 0,
+    "depth_verification": "unchanged from previous capability evidence; required three descendant levels not verified",
+    "tasks": [
+      {"agent": "admin_backup_finish", "task": "P28", "status": "running", "scope": "Linux broker ledger and executable integrity"},
+      {"agent": "fixture_final_review", "task": "W28", "status": "completed", "scope": "independent reservation review"},
+      {"agent": "fixture_review_resumed", "task": "G42", "status": "running", "scope": "journal TryOpen and TryInitialize error boundary"},
+      {"agent": "gateway_catalog_resumed", "task": "G40", "status": "running", "scope": "gateway host-lease consumer corrections"},
+      {"agent": "harness_recovery_audit", "task": "G43", "status": "running", "scope": "independent managed journal review"},
+      {"agent": "harness_resume_contract", "task": "H24", "status": "running", "scope": "harness durable action identity"},
+      {"agent": "intent_review_resumed", "task": "G36", "status": "completed", "scope": "managed authority projection"},
+      {"agent": "lease_contract_review", "task": "P30", "status": "completed", "scope": "portable Windows service command parser"},
+      {"agent": "managed_catalog_finish", "task": "P27", "status": "completed", "scope": "Windows release candidate verification"},
+      {"agent": "mod_native_finish", "task": "G41", "status": "running", "scope": "independent authority projection review"},
+      {"agent": "windows_cleanup_resumed", "task": "W27", "status": "running", "scope": "worker handoff schema and typed decoder"}
+    ]
+  },
+  "release_axes": {
+    "IMPLEMENTATION_COMPLETE": false,
+    "SYNTHETIC_INTEGRATION_VERIFIED": "partial component evidence only",
+    "WINDOWS_SERVICE_VERIFIED": false,
+    "LINUX_SERVICE_ADAPTER_VERIFIED": false,
+    "LIVE_HOST_RECOVERY_VERIFIED": false,
+    "COLD_BOOT_RECOVERY_VERIFIED": false,
+    "SOAK_VERIFIED": false,
+    "REMOTE_DELIVERY_STATUS": "not complete",
+    "services_installed_or_releases_activated_this_wave": false
+  }
+}
