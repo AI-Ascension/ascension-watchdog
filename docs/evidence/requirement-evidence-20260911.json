@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "audit_id": "V32-resume-wave-20260911",
-  "captured_at": "2026-09-11T10:41:43Z",
+  "audit_id": "V33-resume-wave-20260911",
+  "captured_at": "2026-09-11T11:21:29Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "source_set_record": "docs/evidence/current-source-set-20260911.md",
   "source_set_gate": {
     "admitted": false,
     "manifest_sha256": "0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d",
-    "reason": "consumer manifest and consumer-conformance bindings differ; gateway/MCP copies retain pending markers",
+    "reason": "current main consumer copies remain stale/pending; four PR-only artifact refreshes now stage one current-main contract set",
     "report": "/home/agent/wd-tmp-0911/source-set-report-1041.json"
   },
   "source_set": {
@@ -29,6 +29,22 @@
     "status": "open; local exact-head gates pass; hosted Rust-quality and policy checks pass",
     "scope": "missing durable-episode resume rejection and source-derived Windows named-pipe worker boundary"
   },
+  "consumer_artifact_refresh": {
+    "status": "open PR-only refreshes; local checksum and component gates pass; hosted policy and quality checks pass for all four",
+    "contract_sha256": {
+      "manifest": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
+      "schema": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
+      "conformance": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
+      "consumer_conformance": "c4350934fce24b11aa7f72ab8a99784c364323313d6390d59f33e8ab952e78a6"
+    },
+    "pull_requests": {
+      "sts2-protocol": {"number": 41, "commit": "57edfcb30028d910087121f46b9649564155e328"},
+      "sts2-gateway": {"number": 43, "commit": "72c79fd0bda286265201f25cf77f13f2a4fc6f14"},
+      "sts2-mcp-server": {"number": 44, "commit": "a0e24fcd8ba05fa45782755855aed7ef0a8def41"},
+      "sts2-harness": {"number": 85, "commit": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"}
+    },
+    "evidence": "docs/evidence/consumer-artifact-refresh-20260911.md"
+  },
   "organization_policy_inspection": {
     "repository": "AI-Ascension/.github",
     "commit": "9043802204128452c8bdef6b8b0b3d0c304cc96d",
@@ -45,7 +61,10 @@
     "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
     "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
     "harness_hosted_rust_quality": 34588219783,
-    "harness_hosted_policy": 34588219842
+    "harness_hosted_policy": 34588219842,
+    "consumer_refresh_local_package_gates": "pass; protocol, gateway, MCP, and harness locked all-target/all-feature serial package runs",
+    "consumer_refresh_hosted_quality": {"protocol": 34593088663, "gateway": 34593088287, "mcp": 34593088598, "harness": 34593088740},
+    "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688}
   },
   "evidence_axes": {
     "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
@@ -55,14 +74,14 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 open at f5b81f4; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; no activation"
+    "remote_delivery_status": "watchdog PR11 open at f5b81f4; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",
     "Docker/Podman and native Windows linker/runtime are unavailable here",
     "no authorized service/live-host/reboot/soak execution",
     "no unified current cross-consumer build/conformance target",
-    "consumer artifact bindings are not one identical current set"
+    "current main consumer artifact bindings are not one identical set; refresh PRs #41/#43/#44/#85 are open and excluded until post-merge regeneration"
   ],
   "fault_matrix": {
     "count": 24,
