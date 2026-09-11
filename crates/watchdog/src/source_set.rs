@@ -722,6 +722,9 @@ fn validate_checksums(
     artifact_root: &Path,
     repository_root: &Path,
 ) -> Result<BTreeSet<String>, String> {
+    let repository_root = repository_root
+        .canonicalize()
+        .map_err(|_| "repository root is unavailable".to_owned())?;
     let checksums = read_bounded(&artifact_root.join("SHA256SUMS"), MAX_CHECKSUMS_BYTES)?;
     let text = std::str::from_utf8(&checksums).map_err(|_| "SHA256SUMS is not UTF-8".to_owned())?;
     let mut seen = BTreeSet::new();
@@ -743,7 +746,7 @@ fn validate_checksums(
         let canonical = path
             .canonicalize()
             .map_err(|_| "SHA256SUMS names a missing file".to_owned())?;
-        if !regular_file(&path) || !canonical.starts_with(repository_root) {
+        if !regular_file(&path) || !canonical.starts_with(&repository_root) {
             return Err("SHA256SUMS names a path outside the repository".to_owned());
         }
         let actual = hash_file(&canonical)
