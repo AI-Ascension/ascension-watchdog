@@ -1,8 +1,10 @@
 # Current-main artifact refresh source-set admission — 2026-09-11
 
 Classification: `current-main source-set admitted; release not activated`.
-This is a read-only source-set and artifact verification result. It is not
-native service, live-host, reboot, activation, rollback, or soak evidence.
+This is a read-only source-set and artifact verification result with a separate
+native Linux process-boundary smoke recorded in
+[`real-harness-worker.md`](real-harness-worker.md). It is not installed native
+service, live-host, reboot, activation, rollback, or soak evidence.
 
 ## Manifest and merged delivery
 
@@ -38,5 +40,6 @@ The full machine-readable result is
 
 This closes current-main source-set admission for the refreshed artifacts, but
 does not activate a release. A unified cross-consumer build is not available
-in this workspace. Native Windows/Linux service execution, live-host recovery,
-cold boot, rollback, and soak evidence remain unverified.
+in this workspace. The current-main native Linux process-boundary smoke passed
+on the supplied Train host; native Windows/Linux service execution, live-host
+recovery, cold boot, rollback, and soak evidence remain unverified.

@@ -93,6 +93,7 @@
   "evidence_axes": {
     "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
     "synthetic_integration_verified": "partial",
+    "native_linux_process_boundary_verified": "pass; current-main watchdog and harness binaries crossed the real Linux process boundary on the supplied Train host; no installed service or live-host claim",
     "windows_service_verified": "unverified",
     "linux_service_adapter_verified": "partial",
     "live_host_recovery_verified": "unverified",
@@ -103,7 +104,7 @@
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",
     "Docker/Podman and native Windows linker/runtime are unavailable here",
-    "no authorized service/live-host/reboot/soak execution",
+    "no authorized installed-service/live-host/reboot/soak execution",
     "no unified current cross-consumer build/conformance target",
     "current-main source-set admission is complete, but native/live/reboot/rollback/soak evidence remains unverified"
   ],

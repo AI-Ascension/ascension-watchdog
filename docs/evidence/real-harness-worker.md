@@ -254,3 +254,46 @@ operation, reboot recovery, game execution, or provider settlement.
 The Linux cgroup boundary test requiring a separately provisioned protected
 bootstrap remains explicitly gated; a prior stale protected-bootstrap attempt
 failed before exercising the requested boundary and is not reported as a pass.
+
+## Current-main native process smoke on Train host, 2026-09-11
+
+The current-main source-set was exercised on
+`completetrain-B550-GAMING-X-V2` (`train.home.complete.tech`) with a fresh,
+owner-local staging directory. This is native Linux process-boundary evidence
+only. It did not install a persistent systemd service, launch a game or model
+provider, activate a release, reboot the host, or run a soak.
+
+The watchdog release image was rebuilt from worktree revision
+`eb2e34269d5c89ac9fcc89ae6ed548d8e74c110f`, whose product tree is the admitted
+watchdog source `28e20fa8cfb9a43635a5c167e03ade6219d87a5a`; its SHA-256 is
+`105ca9fba97ec8024689b31a017ba9edcd978a77f46c5e1a9eb323158744d204`. The
+separately built harness runtime came from current harness main merge
+`4584c4cbc2f6bcb900f99092cafa80d32ca0cce8` and has SHA-256
+`b711754f2e31b83762a1fbdfffe09fa9a6e16fec5309ace2c3af27a926ac766f`. The
+fresh test executable SHA-256 is
+`1be81b0f454484992cc2d97cfdd6280299ec48125da0f0a6c3d141b78ab197b9`.
+
+The host reported Linux `7.0.0-31-generic` x86_64, systemd `255.4-1ubuntu8.17`,
+and cgroup v2. The user systemd manager was active; its overall state was
+`degraded` because of unrelated pre-existing units. The bounded exact command
+was:
+
+```text
+ASCENSION_WATCHDOG_REAL_HARNESS_SMOKE=1 \
+ASCENSION_WATCHDOG_EXECUTABLE="$RUN_DIR/watchdog" \
+STS2_HARNESS_RUNTIME_BINARY="$RUN_DIR/sts2-harness-runtime" \
+STS2_HARNESS_RUNTIME_SHA256=b711754f2e31b83762a1fbdfffe09fa9a6e16fec5309ace2c3af27a926ac766f \
+"$RUN_DIR/real_harness_worker-a25fdaeb03090c59" --ignored --exact \
+real_watchdog_native_launch_reaches_built_harness_worker --nocapture
+```
+
+Result: **1 passed, 0 failed, 0 ignored**, with the test body completing in
+**8.61 seconds**. The run crossed the real watchdog process manager, Linux
+bootstrap, authenticated worker control, one durable dispatch admission,
+durable stop intent, and descendant cleanup. The test's owner-local fixture
+directory was absent after successful cleanup; read-only postchecks found no
+matching watchdog/harness process and no matching user unit. The three staged
+images remained mode `0500` for provenance inspection. The gateway and MCP
+inputs were still the documented HTTP-503 and `/usr/bin/true` downstream fault
+fixtures, so this pass does not promote native service, live-host recovery,
+cold-boot, activation/rollback, or soak evidence.
