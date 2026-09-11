@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "audit_id": "V33-resume-wave-20260911",
-  "captured_at": "2026-09-11T11:21:29Z",
+  "audit_id": "V34-resume-wave-20260911",
+  "captured_at": "2026-09-11T11:47:10Z",
   "classification": "partial; release and runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "source_set_record": "docs/evidence/current-source-set-20260911.md",
@@ -10,6 +10,24 @@
     "manifest_sha256": "0902e33c084b97efc5ee0afd4af120c4b61fe527bbbc5bf13a580d2a8ccbae0d",
     "reason": "current main consumer copies remain stale/pending; four PR-only artifact refreshes now stage one current-main contract set",
     "report": "/home/agent/wd-tmp-0911/source-set-report-1041.json"
+  },
+  "refresh_candidate": {
+    "manifest": "workspace-manifest.coop-refresh.candidate.json",
+    "manifest_sha256": "bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
+    "admitted": true,
+    "classification": "unactivated candidate with open artifact-refresh PR heads",
+    "repository_count": 8,
+    "artifact_count": 4,
+    "issues": [],
+    "contract_files_identical": true,
+    "checksum_entries": {
+      "sts2-protocol": 34,
+      "sts2-gateway": 25,
+      "sts2-mcp-server": 25,
+      "sts2-harness": 25
+    },
+    "source_revision_checks": "pass; source commits are ancestral, source trees match, and artifact-refresh diffs remain inside declared artifact directories",
+    "evidence": "docs/evidence/coop-refresh-source-set-20260911.md"
   },
   "source_set": {
     "ascension-watchdog": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
@@ -54,9 +72,9 @@
     "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
   },
   "checks": {
-    "watchdog_exact_head_hosted_validation": 34589427447,
-    "watchdog_exact_head_hosted_standards": 34589427371,
-    "watchdog_current_head_local_workspace": "pass; f5b81f4 full serial locked workspace all-target/all-feature run exited 0",
+    "watchdog_exact_head_hosted_validation": 34593968856,
+    "watchdog_exact_head_hosted_standards": 34593968844,
+    "watchdog_current_head_local_workspace": "pass; 08e46a8 documentation and source-set verifier changes compile; prior f5b81f4 full serial locked workspace all-target/all-feature run exited 0",
     "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6",
     "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
     "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
@@ -64,7 +82,9 @@
     "harness_hosted_policy": 34588219842,
     "consumer_refresh_local_package_gates": "pass; protocol, gateway, MCP, and harness locked all-target/all-feature serial package runs",
     "consumer_refresh_hosted_quality": {"protocol": 34593088663, "gateway": 34593088287, "mcp": 34593088598, "harness": 34593088740},
-    "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688}
+    "consumer_refresh_hosted_policy": {"protocol": 34593088687, "gateway": 34593088090, "mcp": 34593088569, "harness": 34593088688},
+    "source_set_revision_tree_regressions": "pass; 6 focused source-set unit tests",
+    "refresh_candidate_source_set_gate": "pass; exit 0/admitted=true with manifest bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5"
   },
   "evidence_axes": {
     "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
@@ -74,14 +94,14 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 open at f5b81f4; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
+    "remote_delivery_status": "watchdog PR11 open at 08e46a8; exact-head Ubuntu, Windows, dependency, and standards lanes green; gateway PR42 merged; harness PR84 open at 40a4128 with local/hosted gates green; coop-native-v1 refresh PRs protocol #41, gateway #43, MCP #44, harness #85 open with hosted gates green; no activation"
   },
   "blockers": [
     "nested depth-2/depth-3 delegation surface is unavailable",
     "Docker/Podman and native Windows linker/runtime are unavailable here",
     "no authorized service/live-host/reboot/soak execution",
     "no unified current cross-consumer build/conformance target",
-    "current main consumer artifact bindings are not one identical set; refresh PRs #41/#43/#44/#85 are open and excluded until post-merge regeneration"
+    "current-main consumer artifact copies remain pre-refresh; the separate refresh candidate is admitted only as an unmerged PR-head delivery set and still needs post-merge regeneration"
   ],
   "fault_matrix": {
     "count": 24,

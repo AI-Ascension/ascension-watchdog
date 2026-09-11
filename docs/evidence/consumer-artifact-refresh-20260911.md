@@ -97,3 +97,19 @@ All required hosted checks subsequently completed successfully:
 The PRs remain open and unmerged. These green checks validate the individual
 repository refresh branches; they do not change the root candidate's
 `admitted=false` result or establish a unified build or live native session.
+
+## Exact refresh candidate — 2026-09-11 11:42 UTC
+
+The source-set verifier now accepts the refresh branches as an exact
+unactivated candidate through
+workspace-manifest.coop-refresh.candidate.json. The checked-out delivery
+revision remains authoritative, while source_revision/source_tree records the
+underlying source bytes used by consumer conformance. The verifier requires
+the source commit to be ancestral, the source tree to match, and all
+intervening changes to remain within the declared artifact directory.
+
+The eight-worktree gate exited 0 with admitted=true, no issues, four identical
+contract files, and complete checksum inventories. The full result is
+recorded in docs/evidence/coop-refresh-source-set-20260911.md. This does not
+promote the PR heads to merged main or change the separate native, live,
+activation, reboot, and soak evidence boundaries.

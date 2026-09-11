@@ -426,3 +426,18 @@ candidate source set. The root source-set result remains `admitted=false` and
 must be rerun against post-merge revisions. Native service/live-host,
 Windows SCM, cold-boot, unified release build, nested depth-2/3 delegation,
 and soak evidence remain open.
+
+## Resume-wave update — 2026-09-11 11:42 UTC
+
+The exact refresh candidate now passes the source-set gate. The verifier
+supports source_revision/source_tree pins for artifact-only delivery commits,
+requiring ancestry, exact source-tree identity, and artifact-directory-only
+differences. The candidate manifest and result are recorded in
+workspace-manifest.coop-refresh.candidate.json and
+docs/evidence/coop-refresh-source-set-20260911.md.
+
+This closes the previously missing serialized consumer-binding check for the
+four staged refresh branches only. It does not close source-set admission for
+current main, because the refresh PRs remain open, and it does not close the
+unified build, native service, live-host, cold-boot, activation, nested
+delegation, or soak requirements.

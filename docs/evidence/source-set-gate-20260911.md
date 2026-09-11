@@ -69,3 +69,26 @@ admission result remains `admitted=false`. After review and merge, the source
 manifest and consumer record must be regenerated against the resulting main
 heads and this read-only gate must be rerun. No release or live-host claim is
 made here.
+
+## Refresh candidate gate — 2026-09-11 11:42 UTC
+
+The verifier now supports an explicit source_revision/source_tree pair for an
+artifact-only delivery commit. It still checks the delivery HEAD, clean status,
+remote, and branch identity; additionally it requires the source commit to be
+present and ancestral, the source tree to match exactly, and every intervening
+file change to remain inside the declared artifact directory.
+
+Running the gate against
+workspace-manifest.coop-refresh.candidate.json and the eight exact worktrees
+returned exit 0 with admitted=true, manifest SHA-256
+bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5. All eight
+repositories passed, all four artifacts passed their checksum inventories,
+the four contract files were identical, and all three consumer bindings
+resolved to pass in every copy. Unit coverage includes accepted artifact-only
+delivery and rejection of a source change outside the artifact directory.
+
+This is an unactivated candidate assembled from open PR heads. The existing
+current-main candidate remains separately recorded as admitted=false until
+those PRs are merged and the final post-merge manifest and artifact records
+are regenerated. Native service, live-host, cold-boot, unified-build,
+activation, and soak claims remain unverified.

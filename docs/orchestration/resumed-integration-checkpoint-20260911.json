@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T11:17:06Z",
-  "status": "resume-wave-source-and-component-gates-complete; consumer artifact refresh PRs open; release admission blocked",
-  "phase": "exact-source-set-and-consumer-refresh-prs-recorded",
+  "captured_at": "2026-09-11T11:47:10Z",
+  "status": "resume-wave-exact-refresh-candidate-gate-passed; consumer artifact refresh PRs open; release admission blocked",
+  "phase": "exact-source-set-candidate-with-artifact-delivery-revisions-validated",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
     "commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-    "current_pr_head": "f5b81f42dbb525fa3fdbb32a29c202822e01aaa7",
+    "current_pr_head": "08e46a8648259e8c9223e9c6d2ff67a97af65be2",
     "pull_request": 11
   },
   "source_set": {
@@ -33,6 +33,8 @@
     "extended harness PR #84 to 40a4128 with the Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass",
     "corrected Linux systemd notification sequencing so the first completed loop sends READY only and later progress sends WATCHDOG only when configured; current-head focused tests, service-loop integration, full serial workspace, and hosted PR lanes pass",
     "refreshed all four coop-native-v1 artifact copies to one current-main serialized consumer record; protocol PR #41, gateway PR #43, MCP PR #44, and harness PR #85 are open with local checksum/component gates recorded"
+    ,"added explicit source_revision/source_tree handling for artifact-only delivery commits; ancestry, exact source-tree, and artifact-path-only checks are covered by source-set regressions"
+    ,"validated the exact eight-worktree coop-native refresh candidate with the new source-set gate; admission passed for the unmerged candidate and remains separate from release activation"
   ],
   "pending_follow_ups": [
     {
@@ -52,7 +54,7 @@
         "sts2-mcp-server": "a0e24fcd8ba05fa45782755855aed7ef0a8def41",
         "sts2-harness": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"
       },
-      "status": "open PR-only metadata refresh; protocol/gateway/MCP hosted policy and quality checks pass; harness policy passes and quality was pending at capture; excluded from exact source set until reviewed and merged",
+      "status": "open PR-only metadata refresh; all protocol/gateway/MCP/harness hosted policy and quality checks pass; excluded from current-main source set, while the explicit refresh candidate validates the unmerged delivery heads",
       "scope": "align manifest, consumer-conformance, README metadata, and SHA256SUMS to producer d23ca83 and current main consumer revisions; live native settlement remains unverified"
     }
   ],
@@ -65,11 +67,11 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally at current PR head f5b81f4; focused systemd tests, full serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34589427447; standards run 34589427371); selected source-set implementation pin remains 538346e",
+    "watchdog": "pass locally at current PR head 08e46a8; source-set revision/tree regressions and exact refresh-candidate gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34593968856; standards run 34593968844); selected source-set implementation pin remains 538346e",
     "companion_component_gates": "pass in isolated worktrees; refreshed protocol, gateway, MCP, and harness package gates also pass",
     "gateway_follow_up_pr42": "merged at f4d1409; 9575b8b branch local gates pass and hosted Rust quality/repository-policy checks pass",
     "harness_follow_up_pr84": "40a4128 local format/policy/Linux-Clippy/Windows-target-Clippy-check/focused/full-serial gates pass; hosted Rust-quality 34588219783 and policy 34588219842 pass; PR remains open and excluded from exact source set",
-    "consumer_artifact_refresh": "four focused PRs open: protocol #41 at 57edfcb, gateway #43 at 72c79fd, MCP #44 at a0e24fc, harness #85 at 48afc35; all four checksum inventories and local package gates pass; current main candidate remains unadmitted until post-merge regeneration",
+    "consumer_artifact_refresh": "four focused PRs open: protocol #41 at 57edfcb, gateway #43 at 72c79fd, MCP #44 at a0e24fc, harness #85 at 48afc35; all four checksum inventories, local package gates, hosted checks, and the explicit eight-worktree refresh candidate gate pass; current-main post-merge regeneration remains required",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",
@@ -83,13 +85,14 @@
     "no Docker or Podman executable",
     "no explicitly authorized native Windows/Linux service or game host",
     "no unified cross-repository consumer build/conformance target",
-    "current coop-native-v1 consumer-conformance bytes are not one identical current set",
+    "current-main coop-native-v1 copies remain pre-refresh; the separate refresh candidate is admitted only as an unmerged PR-head delivery set",
     "observability PR #21 was superseded by merged PR #20; portability PR #22 is merged",
     "native Windows linker/runtime and service execution are unavailable in this environment"
   ],
   "evidence": {
     "source_set": "docs/evidence/current-source-set-20260911.md",
     "consumer_artifact_refresh": "docs/evidence/consumer-artifact-refresh-20260911.md",
+    "coop_refresh_source_set": "docs/evidence/coop-refresh-source-set-20260911.md",
     "release_set": "docs/evidence/release-set-verification-20260911.json",
     "organization_policy": "docs/evidence/organization-policy-inspection-20260911.md",
     "historical_records_preserved": true

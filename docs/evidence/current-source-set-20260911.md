@@ -200,3 +200,24 @@ remain unchanged: the exact main worktrees still contain the pre-refresh
 copies and admission remains closed. A post-merge refresh must account for
 the merge revisions themselves, rerun the source-set verifier, and preserve
 the separate native service/live-host/reboot/soak classifications.
+
+## Delivery update — 2026-09-11 11:42 UTC
+
+The source-set verifier now distinguishes an exact artifact delivery revision
+from the source revision/tree represented by its consumer-conformance record.
+This is constrained to an ancestral source commit, an exact source tree, and
+file changes inside the declared artifact directory.
+
+The new
+workspace-manifest.coop-refresh.candidate.json pins the four open artifact
+refresh PR heads and their underlying current-main source revisions. The
+eight-worktree gate passed with admitted=true, no issues, four identical
+contract files, and complete checksum inventories (34 protocol rows and 25
+rows in each consumer copy). This candidate is unactivated and does not make
+the open PRs equivalent to merged main.
+
+The original current-main manifest remains the authoritative main candidate
+and remains admitted=false until the refresh PRs are merged and the final
+post-merge manifest and consumer records are regenerated. Native service,
+live-host, cold-boot, unified-build, activation, and soak evidence remain
+separate and unverified.

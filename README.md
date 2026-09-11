@@ -39,9 +39,12 @@ tampering or malformed input; inspection alone grants no launch authority.
 checks a candidate source manifest against explicitly supplied clean Git
 worktrees. It verifies full commit pins, GitHub remotes, the four
 `coop-native-v1` contract artifact locations, their `SHA256SUMS` entries, and
-current consumer-conformance bindings. A failed admission prints the complete
-JSON report to stdout and exits nonzero; the command never fetches, builds,
-installs, activates, or runs a companion.
+current consumer-conformance bindings. For an artifact-only delivery commit,
+the manifest can also pin its underlying source_revision and source_tree; the
+verifier requires ancestry and rejects changes outside that repository's
+declared artifact directory. A failed admission prints the complete JSON
+report to stdout and exits nonzero; the command never fetches, builds, installs,
+activates, or runs a companion.
 The recorded resume-wave result is in
 [`docs/evidence/source-set-gate-20260911.md`](docs/evidence/source-set-gate-20260911.md).
 
@@ -82,3 +85,9 @@ in [`workspace-manifest.candidate.json`](workspace-manifest.candidate.json),
 with the dated current record in
 [`docs/evidence/current-source-set-20260911.md`](docs/evidence/current-source-set-20260911.md).
 The candidate manifest must not be treated as an installed release.
+
+The open artifact-refresh branches have a separate exact candidate manifest,
+[workspace-manifest.coop-refresh.candidate.json](workspace-manifest.coop-refresh.candidate.json).
+Its source-set verifier distinguishes each artifact delivery commit from the
+underlying source revision and tree, requiring ancestry and artifact-path-only
+differences. It remains unmerged and unactivated.

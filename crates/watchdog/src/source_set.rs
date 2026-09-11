@@ -3,8 +3,12 @@
 //! This is deliberately a gate, not a release publisher. It checks the
 //! immutable inputs that can be inspected from a collection of already
 //! fetched worktrees: full commit pins, clean working trees, repository
-//! remotes, checksum manifests, and the serialized consumer contract. It
-//! does not fetch, build, install, activate, or run any companion service.
+//! remotes, checksum manifests, and the serialized consumer contract. An
+//! artifact-only delivery revision may additionally identify the exact source
+//! revision/tree that consumer records bind to; the verifier requires that
+//! source to be an ancestor and rejects any diff outside the declared artifact
+//! directory. It does not fetch, build, install, activate, or run any
+//! companion service.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,6 +65,10 @@ struct RepositoryPin {
     #[serde(rename = "ref")]
     reference: String,
     remote: String,
+    #[serde(default)]
+    source_revision: Option<String>,
+    #[serde(default)]
+    source_tree: Option<String>,
     #[serde(flatten)]
     _additional: BTreeMap<String, Value>,
 }
@@ -84,6 +92,10 @@ pub struct SourceSetReport {
 pub struct RepositoryReport {
     pub expected_revision: String,
     pub actual_revision: Option<String>,
+    pub expected_source_revision: Option<String>,
+    pub expected_source_tree: Option<String>,
+    pub source_revision_match: bool,
+    pub source_tree_match: bool,
     pub expected_ref: String,
     pub observed_ref: Option<String>,
     pub expected_remote: String,
@@ -124,6 +136,10 @@ pub struct ContractComparisonReport {
 /// preserve the report and use its admitted field as the gate; an absent
 /// repository, dirty worktree, stale consumer binding, missing artifact, or
 /// checksum failure never becomes a warning-only result.
+///
+/// The revision field always identifies the exact checked-out worktree. When a
+/// metadata-only delivery commit is used, source_revision and source_tree
+/// identify the source bytes represented by consumer-conformance records.
 pub fn verify_document(
     manifest_path: &Path,
     repository_paths: &BTreeMap<String, PathBuf>,
@@ -157,7 +173,11 @@ pub fn verify_document(
             issues.push(format!("repository path missing for {name}"));
             continue;
         };
-        let (report, canonical) = inspect_repository(pin, path);
+        let artifact_relative_path = DEFAULT_ARTIFACTS
+            .iter()
+            .find(|(repository, _)| *repository == name)
+            .map(|(_, relative_path)| *relative_path);
+        let (report, canonical) = inspect_repository(pin, path, artifact_relative_path);
         if let Some(canonical) = canonical {
             canonical_repositories.insert(name.clone(), canonical);
         }
@@ -267,6 +287,25 @@ fn validate_manifest(manifest: &SourceSetManifest) -> Result<(), String> {
                 "source repository {name} does not use a full commit pin"
             ));
         }
+        if let Some(source_revision) = &pin.source_revision {
+            if !valid_revision(source_revision) {
+                return Err(format!(
+                    "source repository {name} has an invalid source revision pin"
+                ));
+            }
+        }
+        if let Some(source_tree) = &pin.source_tree {
+            if !valid_revision(source_tree) {
+                return Err(format!(
+                    "source repository {name} has an invalid source tree pin"
+                ));
+            }
+        }
+        if pin.source_revision.is_some() != pin.source_tree.is_some() {
+            return Err(format!(
+                "source repository {name} must pin source_revision and source_tree together"
+            ));
+        }
         if pin.reference.trim().is_empty() {
             return Err(format!("source repository {name} has an empty ref"));
         }
@@ -279,10 +318,18 @@ fn validate_manifest(manifest: &SourceSetManifest) -> Result<(), String> {
     Ok(())
 }
 
-fn inspect_repository(pin: &RepositoryPin, path: &Path) -> (RepositoryReport, Option<PathBuf>) {
+fn inspect_repository(
+    pin: &RepositoryPin,
+    path: &Path,
+    artifact_relative_path: Option<&str>,
+) -> (RepositoryReport, Option<PathBuf>) {
     let mut report = RepositoryReport {
         expected_revision: pin.revision.clone(),
         actual_revision: None,
+        expected_source_revision: pin.source_revision.clone(),
+        expected_source_tree: pin.source_tree.clone(),
+        source_revision_match: pin.source_revision.is_none(),
+        source_tree_match: pin.source_tree.is_none(),
         expected_ref: pin.reference.clone(),
         observed_ref: None,
         expected_remote: pin.remote.clone(),
@@ -341,6 +388,76 @@ fn inspect_repository(pin: &RepositoryPin, path: &Path) -> (RepositoryReport, Op
         Err(issue) => report.issues.push(issue),
     }
 
+    if let (Some(source_revision), Some(source_tree)) =
+        (pin.source_revision.as_deref(), pin.source_tree.as_deref())
+    {
+        let source_object = format!("{source_revision}^{{commit}}");
+        if git(&canonical, &["cat-file", "-e", &source_object]).is_err() {
+            report
+                .issues
+                .push("source revision is not present in the worktree object database".to_owned());
+        } else if git(
+            &canonical,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                source_revision,
+                &pin.revision,
+            ],
+        )
+        .is_err()
+        {
+            report
+                .issues
+                .push("source revision is not an ancestor of the artifact revision".to_owned());
+        } else {
+            report.source_revision_match = true;
+            let source_tree_object = format!("{source_revision}^{{tree}}");
+            match git(&canonical, &["rev-parse", &source_tree_object]) {
+                Ok(actual_tree) if actual_tree.trim() == source_tree => {
+                    report.source_tree_match = true;
+                }
+                Ok(_) => report
+                    .issues
+                    .push("source tree differs from the pinned source revision".to_owned()),
+                Err(issue) => report.issues.push(issue),
+            }
+
+            match artifact_relative_path {
+                Some(artifact_relative_path) => {
+                    match git(
+                        &canonical,
+                        &["diff", "--name-only", source_revision, &pin.revision],
+                    ) {
+                        Ok(changed_files) => {
+                            let artifact_prefix = format!("{artifact_relative_path}/");
+                            let unexpected = changed_files
+                                .lines()
+                                .map(str::trim)
+                                .filter(|file| {
+                                    !file.is_empty()
+                                        && *file != artifact_relative_path
+                                        && !file.starts_with(&artifact_prefix)
+                                })
+                                .collect::<Vec<_>>();
+                            if !unexpected.is_empty() {
+                                report.issues.push(format!(
+                                    "source-to-artifact revision diff escapes the declared artifact path: {}",
+                                    unexpected.join(", ")
+                                ));
+                            }
+                        }
+                        Err(issue) => report.issues.push(issue),
+                    }
+                }
+                None => report.issues.push(
+                    "source revision pin requires a repository with a declared artifact path"
+                        .to_owned(),
+                ),
+            }
+        }
+    }
+
     match git(
         &canonical,
         &[
@@ -390,8 +507,12 @@ fn inspect_repository(pin: &RepositoryPin, path: &Path) -> (RepositoryReport, Op
         Err(issue) => report.issues.push(issue),
     }
 
-    report.passed =
-        report.issues.is_empty() && report.clean && report.revision_match && report.remote_match;
+    report.passed = report.issues.is_empty()
+        && report.clean
+        && report.revision_match
+        && report.remote_match
+        && report.source_revision_match
+        && report.source_tree_match;
     (report, Some(canonical))
 }
 
@@ -399,6 +520,10 @@ fn missing_repository_report(pin: &RepositoryPin) -> RepositoryReport {
     RepositoryReport {
         expected_revision: pin.revision.clone(),
         actual_revision: None,
+        expected_source_revision: pin.source_revision.clone(),
+        expected_source_tree: pin.source_tree.clone(),
+        source_revision_match: false,
+        source_tree_match: false,
         expected_ref: pin.reference.clone(),
         observed_ref: None,
         expected_remote: pin.remote.clone(),
@@ -634,10 +759,23 @@ fn inspect_consumer_conformance(
             ));
             continue;
         };
-        if commit != pin.revision {
+        let expected_revision = pin.source_revision.as_deref().unwrap_or(&pin.revision);
+        let binding_label = if pin.source_revision.is_some() {
+            "source revision"
+        } else {
+            "manifest revision"
+        };
+        if commit != expected_revision {
             issues.push(format!(
-                "consumer {repository} is not bound to the manifest revision"
+                "consumer {repository} is not bound to the {binding_label}"
             ));
+        }
+        if let Some(expected_tree) = pin.source_tree.as_deref() {
+            if consumer.get("tree").and_then(Value::as_str) != Some(expected_tree) {
+                issues.push(format!(
+                    "consumer {repository} is not bound to the pinned source tree"
+                ));
+            }
         }
         if consumer.get("result").and_then(Value::as_str) != Some("pass") {
             issues.push(format!("consumer {repository} does not report pass"));
@@ -936,6 +1074,8 @@ mod tests {
                         revision: "a".repeat(40),
                         reference: "main".to_owned(),
                         remote: format!("AI-Ascension/{name}"),
+                        source_revision: None,
+                        source_tree: None,
                         _additional: BTreeMap::new(),
                     },
                 )
@@ -1002,11 +1142,124 @@ mod tests {
             revision,
             reference: "master".to_owned(),
             remote: "AI-Ascension/fixture".to_owned(),
+            source_revision: None,
+            source_tree: None,
             _additional: BTreeMap::new(),
         };
-        let (report, root) = inspect_repository(&pin, temporary.path());
+        let (report, root) = inspect_repository(&pin, temporary.path(), None);
         assert!(report.passed, "{report:?}");
         assert_eq!(root, Some(temporary.path().canonicalize().expect("root")));
+    }
+
+    #[test]
+    fn artifact_refresh_revision_must_be_ancestor_and_artifact_only() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        run_git(temporary.path(), &["init", "--quiet"]);
+        run_git(temporary.path(), &["config", "user.name", "fixture"]);
+        run_git(
+            temporary.path(),
+            &["config", "user.email", "fixture@example.invalid"],
+        );
+        run_git(
+            temporary.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/AI-Ascension/fixture.git",
+            ],
+        );
+        fs::write(temporary.path().join("source"), b"source").expect("source");
+        run_git(temporary.path(), &["add", "source"]);
+        run_git(temporary.path(), &["commit", "--quiet", "-m", "source"]);
+        let source_revision = git(temporary.path(), &["rev-parse", "HEAD"])
+            .expect("source revision")
+            .trim()
+            .to_owned();
+        let source_tree = git(temporary.path(), &["rev-parse", "HEAD^{tree}"])
+            .expect("source tree")
+            .trim()
+            .to_owned();
+
+        let artifact = temporary.path().join("artifact");
+        fs::create_dir_all(&artifact).expect("artifact");
+        fs::write(artifact.join("metadata"), b"metadata").expect("metadata");
+        run_git(temporary.path(), &["add", "artifact/metadata"]);
+        run_git(
+            temporary.path(),
+            &["commit", "--quiet", "-m", "artifact refresh"],
+        );
+        let artifact_revision = git(temporary.path(), &["rev-parse", "HEAD"])
+            .expect("artifact revision")
+            .trim()
+            .to_owned();
+        run_git(temporary.path(), &["branch", "--move", "artifact-refresh"]);
+
+        let mut pin = RepositoryPin {
+            revision: artifact_revision.clone(),
+            reference: "artifact-refresh".to_owned(),
+            remote: "AI-Ascension/fixture".to_owned(),
+            source_revision: Some(source_revision.clone()),
+            source_tree: Some(source_tree),
+            _additional: BTreeMap::new(),
+        };
+        let (report, _) = inspect_repository(&pin, temporary.path(), Some("artifact"));
+        assert!(report.passed, "{report:?}");
+
+        fs::write(temporary.path().join("unexpected"), b"unexpected").expect("unexpected");
+        run_git(temporary.path(), &["add", "unexpected"]);
+        run_git(
+            temporary.path(),
+            &["commit", "--quiet", "-m", "unexpected source change"],
+        );
+        pin.revision = git(temporary.path(), &["rev-parse", "HEAD"])
+            .expect("unexpected revision")
+            .trim()
+            .to_owned();
+        let (report, _) = inspect_repository(&pin, temporary.path(), Some("artifact"));
+        assert!(!report.passed);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| { issue.contains("source-to-artifact revision diff escapes") })
+        );
+    }
+
+    #[test]
+    fn consumer_conformance_can_bind_to_source_revision_and_tree() {
+        let source_revision = "a".repeat(40);
+        let source_tree = "b".repeat(40);
+        let repositories = EXPECTED_CONSUMERS
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    RepositoryPin {
+                        revision: format!("artifact-{name}"),
+                        reference: "artifact-refresh".to_owned(),
+                        remote: format!("AI-Ascension/{name}"),
+                        source_revision: Some(source_revision.clone()),
+                        source_tree: Some(source_tree.clone()),
+                        _additional: BTreeMap::new(),
+                    },
+                )
+            })
+            .collect();
+        let value = serde_json::json!({
+            "status": "component_serialized_conformance",
+            "consumers": EXPECTED_CONSUMERS.into_iter().map(|name| serde_json::json!({
+                "repository": name,
+                "commit": source_revision,
+                "tree": source_tree,
+                "result": "pass"
+            })).collect::<Vec<_>>(),
+            "cross_boundary": {"source_to_consumer": "pass"}
+        });
+        let summary =
+            inspect_consumer_conformance(&serde_json::to_vec(&value).expect("JSON"), &repositories)
+                .expect("conformance parses");
+        assert!(summary.issues.is_empty(), "{:?}", summary.issues);
     }
 
     fn run_git(path: &Path, arguments: &[&str]) {
