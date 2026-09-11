@@ -26,7 +26,7 @@
       "id": "root-full-workspace",
       "command": "cargo +1.97.1 test --locked --offline --workspace --all-targets",
       "exit": 0,
-      "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; explicit native worker smoke separately passed 1/1 in 25.33s; latest hosted runs 34543471080 and 34543471462 passed; two Linux cgroup tests remain ignored",
+      "result": "watchdog library: 206 passed, 4 ignored out of 210; all workspace integration suites passed; explicit native worker smoke separately passed 1/1 in 25.33s; latest hosted runs 34544119259 and 34544120308 passed; two Linux cgroup tests remain ignored",
       "classification": "confirmed-linux-synthetic-source-at-root-tested-commit"
     },
     {
@@ -63,7 +63,7 @@
     "effect": "promotes the hardened Linux worker process-boundary evidence while source/component checks remain distinct from cross-repository proof"
   },
   "latest_source_set": {
-    "captured_at": "2026-09-10T23:48:00Z",
+    "captured_at": "2026-09-10T23:55:00Z",
     "watchdog": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_pr_head": "e4728391cf66c3a3730c78439238598bb6e76769",
     "gateway": "c8be3a72ba9e304392575a1b2bdbc262e392be21",

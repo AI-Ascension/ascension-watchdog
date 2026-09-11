@@ -43,9 +43,9 @@ components with pinned locked dependencies:
   explicitly ignored, with all workspace integration suites passing. The
   five selector tests, restore CLI (2 tests), and namespace-isolated Linux
   installer test also passed.
-* Watchdog PR #9 latest hosted validation runs `34543471080` and
-  `34543471462` passed on both Ubuntu and Windows; standards runs
-  `34543471085` and `34543471421` passed. Native service-session remains
+* Watchdog PR #9 latest hosted validation runs `34544119259` and
+  `34544120308` passed on both Ubuntu and Windows; standards runs
+  `34544119194` and `34544120329` passed. Native service-session remains
   separately `UNVERIFIED`.
 * Gateway current `main` `c8be3a7`, MCP current `main` `037d10d`, game-mod
   current `main` `888b067`, protocol current `main` `f22dd72`, and observability

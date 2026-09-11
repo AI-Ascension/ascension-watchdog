@@ -76,13 +76,13 @@
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10T23:48Z",
+    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-10T23:55Z",
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34543471080, 34543471462],
-    "hosted_watchdog_standards_runs": [34543471085, 34543471421],
-    "hosted_watchdog_status_at_capture": "passed-at-e472839 on Ubuntu and Windows; standards runs 34543471085 and 34543471421 passed; native service-session remains separately unverified",
+    "hosted_watchdog_runs": [34544119259, 34544120308],
+    "hosted_watchdog_standards_runs": [34544119194, 34544120329],
+    "hosted_watchdog_status_at_capture": "passed-at-c1d2269 on Ubuntu and Windows; standards runs 34544119194 and 34544120329 passed; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,
       "harness_pr": 66,

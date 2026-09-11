@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-10T23:48:00Z",
+  "captured_at": "2026-09-10T23:55:00Z",
   "classification": "component-build-and-artifact-audit-not-release-admission",
   "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
   "source_set": {
@@ -66,7 +66,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34543471080 and 34543471462 passed on Ubuntu and Windows; standards runs 34543471085 and 34543471421 passed; native service-session remains unverified"
+      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34544119259 and 34544120308 passed on Ubuntu and Windows; standards runs 34544119194 and 34544120329 passed; native service-session remains unverified"
     },
     "sts2-gateway": {
       "commands": [
