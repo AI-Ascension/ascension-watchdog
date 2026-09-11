@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T00:10:00Z",
+  "captured_at": "2026-09-11T00:24:00Z",
   "classification": "component-build-and-artifact-audit-not-release-admission",
   "purpose": "Record exact source revisions, isolated component gates, and immutable artifact-byte comparisons before any cross-repository runtime claim.",
   "source_set": {
@@ -8,22 +8,23 @@
       "tested_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "implementation_source": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
       "remote_pr": 9,
-      "remote_pr_head_at_capture": "415907330e0e0ee5a6c13e0056713f730104c930",
+      "remote_pr_head_at_capture": "62bf0fc49d7656e1207dc592a34a4fcd76994ee4",
       "ref": "codex/watchdog-integrated-20260910"
     },
     "sts2-gateway": {
       "tested_source": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
-      "selected_remote_revision": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+      "selected_remote_revision": "8ba5521c2ec8f158d437a7104567592703e53259",
       "remote_pr": 39,
       "ref": "main"
     },
     "sts2-harness": {
       "tested_source": "58dede2eb661133d8910a1f785e8a90346efe8dd",
-      "selected_remote_revision": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "selected_remote_revision": "ce86ced41d8b9e93d19f2c440f28b3223397f3ca",
       "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
+      "recovery_base_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "remote_pr": 66,
       "ref": "main",
-      "state": "merged; feature head 58dede2; merge commit a0ace671"
+      "state": "merged; current main ce86ced includes recovery/catalog PR #54; endpoint feature head 58dede2 merged as a0ace671"
     },
     "sts2-mcp-server": {
       "selected_remote_revision": "037d10def1cbcb1c807e136d31b294355a92c010",
@@ -66,7 +67,7 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test cli_restore -- --nocapture",
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture"
       ],
-      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34544722084 and 34544723335 passed on Ubuntu and Windows; standards runs 34544722080 and 34544723227 passed; native service-session remains unverified"
+      "result": "pass-local-at-f5eaf5e-serial; watchdog library 206 passed with 4 ignored; full workspace all-target/all-feature suites passed; activation selector tests and admin integration passed; collision-safe Windows native fixture tests included; latest hosted validation runs 34545569428 and 34545569573 passed on Ubuntu and Windows; standards runs 34545569465 and 34545569607 passed; native service-session remains unverified"
     },
     "sts2-gateway": {
       "commands": [
@@ -74,7 +75,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "current remote main c8be3a7; prior serial runtime/workspace gates and hosted checks passed; latest recovery echo-response fix is source-reviewed but no new full gate is claimed here"
+      "result": "current remote main 8ba5521; PR #34 head 87792cf passed hosted quality/policy and local 270-test validation before merge; no unified cross-repository gate is claimed here"
     },
     "sts2-harness": {
       "commands": [
@@ -82,7 +83,7 @@
         "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
         "cargo test --workspace --all-targets --all-features --locked"
       ],
-      "result": "PR #66 hardening feature head: locked fmt/check/Clippy/policy/all-target/all-feature gates pass; hosted runs 34542578041 and 34542578085 pass; endpoint auto-merged to main a0ace671; native worker smoke rerun separately"
+      "result": "PR #54 recovery/catalog feature head 4a0c7be passed hosted quality/policy runs 34545367683 and 34545367662 and merged to current main ce86ced; PR #66 endpoint hardening hosted runs 34542578041 and 34542578085 pass and merged as a0ace671; native worker smoke rerun separately"
     },
     "sts2-game-mod": {
       "commands": [
@@ -141,7 +142,7 @@
         "consumer_conformance_sha256": "ca8a60ba24c7cf6664eab71b0f2cb6992125fec45349154df6222c0bccfc3cd9"
       }
     },
-    "result": "byte-identical frozen artifacts across the inspected component copies; current protocol main refresh binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 component heads; merged worker endpoint PR #66 is a separate native process-boundary contract; no live host conformance"
+    "result": "byte-identical frozen artifacts across the inspected component copies; the serialized protocol snapshot binds earlier gateway c8be3a7, MCP 037d10d, and harness 63dc563 component heads, while current gateway/harness mains are 8ba5521/ce86ced; merged worker endpoint PR #66 remains a separate native process-boundary contract; no live host conformance"
   },
   "native_worker_smoke": {
     "watchdog_revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",

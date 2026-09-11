@@ -9,9 +9,9 @@
     "watchdog_source_tested_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_implementation_commit": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
     "watchdog_pr": 9,
-    "watchdog_last_observed_pr_head": "415907330e0e0ee5a6c13e0056713f730104c930",
-    "hosted_runs": [34544722084, 34544723335, 34544722080, 34544723227],
-    "hosted_run_status_at_capture": "latest PR #9 Rust/synthetic runs 34544722084 and 34544723335 passed on Ubuntu and Windows; standards runs 34544722080 and 34544723227 passed; native Windows service-session remains UNVERIFIED on runner session 2",
+    "watchdog_last_observed_pr_head": "62bf0fc49d7656e1207dc592a34a4fcd76994ee4",
+    "hosted_runs": [34545569428, 34545569573, 34545569465, 34545569607],
+    "hosted_run_status_at_capture": "latest PR #9 Rust/synthetic runs 34545569428 and 34545569573 passed on Ubuntu and Windows; standards runs 34545569465 and 34545569607 passed; native Windows service-session remains UNVERIFIED on runner session 2",
     "native_worker_smoke": "harness PR66 hardening 58dede2 (merged main a0ace671) image 5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f; 1 passed in 25.33s; Linux process-boundary only"
   },
   "delegation": {
@@ -45,28 +45,28 @@
         "cargo +1.97.1 test --locked --offline -p ascension-watchdog --test linux_install -- --nocapture: pass (namespace-isolated idempotence test)",
         "Prior Windows hosted runs 34505738431/34505740647 exposed four restore publication Access denied failures; 3addf31, 2c7d4c8, 5f6978f, and 8f23468 extend the bounded publication handoff and classify transient sharing errors; 5b235f9 removes the non-atomic copy fallback and adds a fail-closed collision regression. Source commits 053d32c and 0542ab8 add release activation/rollback and strict selector/receipt binding; current head f5eaf5e adds collision-safe fixture allocation and records the native worker smoke. Hosted validation runs 34525217061 and 34525218190 passed on Ubuntu and Windows, with service-session remaining UNVERIFIED"
       ],
-      "remote": "pushed to codex/watchdog-integrated-20260910; source commit f5eaf5e with current docs/evidence PR head 4159073; latest hosted validation runs 34544722084 and 34544723335 plus standards runs 34544722080 and 34544723227 passed"
+      "remote": "pushed to codex/watchdog-integrated-20260910; source commit f5eaf5e with current docs/evidence PR head 62bf0fc; latest hosted validation runs 34545569428 and 34545569573 plus standards runs 34545569465 and 34545569607 passed"
     },
     "gateway": {
-      "commit": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+      "commit": "8ba5521c2ec8f158d437a7104567592703e53259",
       "follow_up_pr": 34,
       "follow_up_commit": "87792cf3f6e2c3b6627d3a34bf380bb337c01373",
       "branch": "main",
       "pr": 39,
-      "remote_head": "c8be3a72ba9e304392575a1b2bdbc262e392be21",
+      "remote_head": "8ba5521c2ec8f158d437a7104567592703e53259",
       "change": "merged co-op host-lease consumer on top of durable Runtime-v3 UNKNOWN handling and exact replay",
       "verification": "current-main locked format, Clippy, workspace tests, and serial runtime suite passed in an isolated checkout; hosted Rust-quality and repository-policy checks passed (34510597219, 34510597283); a broader parallel attempt exposed timing-sensitive fixture failures and was not used as a gate",
-      "delivery": "PR #39 merged (PRs #37 and #38 included); current main is c8be3a72; restart guard PR #34 open draft at 87792cf with hosted gates pass"
+      "delivery": "PR #39 and restart guard PR #34 merged (PR #34 head 87792cf, merge 8ba5521); current main is 8ba5521"
     },
     "harness": {
       "commit": "58dede2eb661133d8910a1f785e8a90346efe8dd",
-      "main_commit": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "main_commit": "ce86ced41d8b9e93d19f2c440f28b3223397f3ca",
       "branch": "codex/harness-worker-endpoint-20260910",
       "pr": 66,
-      "remote_head": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
+      "remote_head": "ce86ced41d8b9e93d19f2c440f28b3223397f3ca",
       "change": "authenticated native Linux worker endpoint, peer/image proof, durable admission and unknown/quarantine handling, true EOF, bounded authentication, and sealed executable snapshots",
-      "verification": "PR #66 hardening locked policy/format/check/Clippy/all-target/all-feature gates and integrated watchdog native worker smoke passed; hosted runs 34542578041 and 34542578085 passed",
-      "delivery": "PR #66 auto-merged after green checks; current main a0ace671"
+      "verification": "PR #54 recovery/catalog locked component gates passed with hosted runs 34545367683 and 34545367662; PR #66 hardening locked policy/format/check/Clippy/all-target/all-feature gates and integrated watchdog native worker smoke passed; hosted runs 34542578041 and 34542578085 passed",
+      "delivery": "PR #66 merged as a0ace671 and PR #54 subsequently merged after green checks; current main ce86ced"
     },
     "protocol": {
       "commit": "f22dd7216f65de91a0ffa27f50bc2036be6c8b24",
@@ -106,8 +106,8 @@
     }
   },
   "next_actions": [
-    "Keep candidate manifest source-pinned to watchdog f5eaf5e, merged harness endpoint PR66 feature head 58dede2/main a0ace671, and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
-    "The current protocol artifact binds gateway c8be3a7, MCP 037d10d, and harness main 63dc563 as serialized component consumers; the merged worker endpoint is a separate Linux process-boundary contract. Treat artifact-byte equality, component adapters, and the native worker smoke as bounded evidence only.",
+    "Keep candidate manifest source-pinned to watchdog f5eaf5e, current gateway main 8ba5521, current harness main ce86ced (endpoint feature 58dede2), and current-main companion revisions recorded in docs/evidence/release-set-verification-20260910.json.",
+    "The current protocol artifact binds earlier gateway c8be3a7, MCP 037d10d, and harness 63dc563 as serialized component consumers; current gateway/harness mains are 8ba5521/ce86ced and the merged worker endpoint is a separate Linux process-boundary contract. Treat artifact-byte equality, component adapters, and the native worker smoke as bounded evidence only.",
     "Do not claim cross-repository runtime integration until the candidate binaries and contract artifacts build together from a clean target and the exact operation/receipt regressions run across consumers.",
     "Keep native service, live host, cold boot, activation/rollback, and soak axes explicitly unverified until executed in approved environments."
   ]

@@ -6,25 +6,27 @@ the JSON manifest records each exact revision, ref, PR, and current state in
 `workspace-manifest.candidate.json`.
 
 The pins were refreshed from authoritative remote PR and branch metadata on
-2026-09-11T00:10Z. The watchdog integration branch is draft PR #9 with source
+2026-09-11T00:24Z. The watchdog integration branch is draft PR #9 with source
 `f5eaf5e35be025015a28da931aa973a0ade8f0ef` and current docs/evidence head
-`415907330e0e0ee5a6c13e0056713f730104c930`; its durable exact-digest release
+`62bf0fc49d7656e1207dc592a34a4fcd76994ee4`; its durable exact-digest release
 selector, strict selector/receipt binding, request-collision rejection,
 authenticated activation/rollback boundary, and collision-safe Windows fixture
-allocation are source-tested. Latest hosted validation runs `34544722084` and
-`34544723335` passed on Ubuntu and Windows; standards runs `34544722080` and
-`34544723227` passed. Native service-session remains explicitly `UNVERIFIED`
+allocation are source-tested. Latest hosted validation runs `34545569428` and
+`34545569573` passed on Ubuntu and Windows; standards runs `34545569465` and
+`34545569607` passed. Native service-session remains explicitly `UNVERIFIED`
 and is not native service proof.
 
-The selected revisions are gateway `c8be3a72ba9e304392575a1b2bdbc262e392be21`,
+The selected revisions are gateway `8ba5521c2ec8f158d437a7104567592703e53259`,
 MCP `037d10def1cbcb1c807e136d31b294355a92c010`, game-mod
 `888b06702021cd2bbd22773b0267733766c3b04a`, protocol
 `f22dd7216f65de91a0ffa27f50bc2036be6c8b24`, game-core
 `f9db577530a4d159b066d3facbd780d61c044eb0`, and observability
 `89539a6e7754b389f8eac148ba8a49c3892cddd8`. The harness entry is merged PR
 #66: feature head `58dede2eb661133d8910a1f785e8a90346efe8dd`, now on main at
-`a0ace6712686cb30d6f0b556cb6814ad4c0721d1`; it is the exact hardening source
-used by the native worker smoke. Locked component gates and
+`ce86ced41d8b9e93d19f2c440f28b3223397f3ca`; PR #66's merged endpoint source
+`a0ace6712686cb30d6f0b556cb6814ad4c0721d1` is the exact hardening source
+used by the native worker smoke, while PR #54's recovery/catalog repairs are
+now on current harness main. Locked component gates and
 runtime-v2/v3/v4/seeded-run artifact bytes are recorded in
 [`release-set-verification-20260910.json`](release-set-verification-20260910.json).
 The current protocol artifact records serialized component conformance for the
