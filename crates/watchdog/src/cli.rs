@@ -26,6 +26,10 @@ where
         }
         Ok(None) => 0,
         Err(error) => {
+            if let WatchdogError::VerificationFailed(report) = error {
+                println!("{report}");
+                return 1;
+            }
             eprintln!("watchdog: {error}");
             1
         }
@@ -370,8 +374,14 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
 
 fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
     let subcommand = args.first().map(String::as_str).ok_or_else(|| {
-        WatchdogError::InvalidInput("release requires inspect, activate, or rollback".to_owned())
+        WatchdogError::InvalidInput(
+            "release requires inspect, source-set, activate, or rollback".to_owned(),
+        )
     })?;
+    if subcommand == "source-set" {
+        args.remove(0);
+        return source_set_command(args);
+    }
     if matches!(subcommand, "activate" | "rollback") {
         let rollback = subcommand == "rollback";
         args.remove(0);
@@ -427,7 +437,7 @@ fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<
     }
     if subcommand != "inspect" {
         return Err(WatchdogError::InvalidInput(
-            "release requires inspect, activate, or rollback".to_owned(),
+            "release requires inspect, source-set, activate, or rollback".to_owned(),
         ));
     }
     args.remove(0);
@@ -467,6 +477,66 @@ fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<
     )
     .map_err(WatchdogError::InvalidInput)?;
     Ok(Some(serde_json::to_string(&inspection)?))
+}
+
+fn source_set_command(args: &mut Vec<String>) -> Result<Option<String>> {
+    let operation = args.first().map(String::as_str).ok_or_else(|| {
+        WatchdogError::InvalidInput("release source-set requires verify".to_owned())
+    })?;
+    if operation != "verify" {
+        return Err(WatchdogError::InvalidInput(
+            "release source-set requires verify".to_owned(),
+        ));
+    }
+    args.remove(0);
+    let manifest = take_option(args, "--manifest").ok_or_else(|| {
+        WatchdogError::InvalidInput("release source-set verify requires --manifest".to_owned())
+    })?;
+    let repository_paths = keyed_paths(args, "--repo")?;
+    let artifact_paths = keyed_paths(args, "--artifact")?;
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected release source-set argument".to_owned(),
+        ));
+    }
+    let report = crate::source_set::verify_document(
+        Path::new(&manifest),
+        &repository_paths,
+        &artifact_paths,
+    )
+    .map_err(WatchdogError::InvalidInput)?;
+    let output = serde_json::to_string(&report)?;
+    if report.admitted {
+        Ok(Some(output))
+    } else {
+        Err(WatchdogError::VerificationFailed(output))
+    }
+}
+
+fn keyed_paths(
+    args: &mut Vec<String>,
+    option: &str,
+) -> Result<std::collections::BTreeMap<String, PathBuf>> {
+    let mut values = std::collections::BTreeMap::new();
+    while let Some(value) = take_option(args, option) {
+        let (name, path) = value
+            .split_once('=')
+            .ok_or_else(|| WatchdogError::InvalidInput(format!("{option} requires NAME=PATH")))?;
+        if name.is_empty() || path.is_empty() {
+            return Err(WatchdogError::InvalidInput(format!(
+                "{option} requires non-empty NAME=PATH"
+            )));
+        }
+        if values
+            .insert(name.to_owned(), PathBuf::from(path))
+            .is_some()
+        {
+            return Err(WatchdogError::InvalidInput(format!(
+                "{option} contains a duplicate name"
+            )));
+        }
+    }
+    Ok(values)
 }
 
 /// Restore a verified owner-local snapshot into a new, explicitly rekeyed
@@ -1030,6 +1100,7 @@ fn usage() -> &'static str {
         "  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n",
         "  watchdog release inspect --config PATH --release-id ID\n",
         "  watchdog release inspect --manifest PATH --root PATH\n",
+        "  watchdog release source-set verify --manifest PATH --repo NAME=PATH [...] [--artifact NAME=PATH [...]]\n",
         "  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n",

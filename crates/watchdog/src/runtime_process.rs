@@ -1700,6 +1700,7 @@ fn watchdog_to_adapter_error(error: WatchdogError) -> AdapterError {
         WatchdogError::Sqlite(error) => AdapterError::Io(error.to_string()),
         WatchdogError::Io(error) => AdapterError::Io(error.to_string()),
         WatchdogError::Json(error) => AdapterError::Invalid(error.to_string()),
+        WatchdogError::VerificationFailed(report) => AdapterError::Invalid(report),
     }
 }
 

@@ -35,6 +35,14 @@ and exact artifact bytes without activating them. Its reported manifest digest
 covers the original input bytes, including whitespace. It returns nonzero on
 tampering or malformed input; inspection alone grants no launch authority.
 
+`watchdog release source-set verify --manifest PATH --repo NAME=PATH [...]`
+checks a candidate source manifest against explicitly supplied clean Git
+worktrees. It verifies full commit pins, GitHub remotes, the four
+`coop-native-v1` contract artifact locations, their `SHA256SUMS` entries, and
+current consumer-conformance bindings. A failed admission prints the complete
+JSON report to stdout and exits nonzero; the command never fetches, builds,
+installs, activates, or runs a companion.
+
 Offline backup rekey is explicit and stopped by construction:
 `watchdog restore --config PATH --backup PATH [--database PATH] --rekey` verifies
 the owner-local snapshot, requires a fresh deployment identity, increments the
