@@ -119,7 +119,7 @@ fn actual_daemon_notifies_only_after_reconciliation_and_marks_stop()
     let length = receiver.recv(&mut bytes)?;
     let message = std::str::from_utf8(&bytes[..length])?;
     assert!(message.contains("READY=1\n"));
-    assert!(message.contains("WATCHDOG=1\n"));
+    assert!(!message.contains("WATCHDOG=1\n"));
     assert!(message.contains("watchdog_loop=Stopped;progress_sequence=1"));
     let length = receiver.recv(&mut bytes)?;
     assert_eq!(&bytes[..length], b"STOPPING=1\n");

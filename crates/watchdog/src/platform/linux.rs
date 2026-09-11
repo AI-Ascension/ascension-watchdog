@@ -99,8 +99,7 @@ impl SystemdNotifier {
         let mut fields = Vec::new();
         if !self.ready_sent {
             fields.push("READY=1");
-        }
-        if self.watchdog_interval.is_some() {
+        } else if self.watchdog_interval.is_some() {
             fields.push("WATCHDOG=1");
         }
         fields.push("STATUS=");
@@ -204,8 +203,17 @@ mod tests {
         let count = receiver.recv(&mut bytes)?;
         let message = std::str::from_utf8(&bytes[..count])?;
         assert!(message.contains("READY=1\n"));
-        assert!(message.contains("WATCHDOG=1\n"));
+        assert!(!message.contains("WATCHDOG=1\n"));
         assert!(message.contains("progress_sequence=1"));
+        assert_eq!(
+            notifier.progress(2, "reconcile=completed")?,
+            NotificationResult::Sent
+        );
+        let count = receiver.recv(&mut bytes)?;
+        let message = std::str::from_utf8(&bytes[..count])?;
+        assert!(!message.contains("READY=1\n"));
+        assert!(message.contains("WATCHDOG=1\n"));
+        assert!(message.contains("progress_sequence=2"));
         Ok(())
     }
 
