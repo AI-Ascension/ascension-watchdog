@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T06:53:43Z",
+  "captured_at": "2026-09-11T08:53:40Z",
   "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
   "phase": "exact-source-set-and-boundary-recorded",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
-    "commit": "b4cda14ea578e9ad33f8142698d494aeb9f3a61f",
+    "commit": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
     "pull_request": 11
   },
   "source_set": {
@@ -26,16 +26,25 @@
     "validated all available component source gates",
     "recorded exact current source and artifact digests",
     "pushed watchdog PR #11; closed superseded observability PR #21; observability PRs #20 and #22 are merged",
-    "enforced affected-row checks for paired durable watchdog job transitions and passed six suppression regressions plus the serial workspace gate"
+    "enforced affected-row checks for paired durable watchdog job transitions and passed six suppression regressions plus the serial workspace gate",
+    "refreshed the exact source-set verifier and root hosted lanes at 538346e; source-set admission remains closed on consumer-binding drift"
   ],
   "pending_follow_ups": [
     {
       "repository": "AI-Ascension/sts2-gateway",
       "pull_request": 42,
-      "commit": "83539a9dd669eb4c8da69033c06d45f114300c45",
+      "commit": "9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f",
       "based_on": "5f531f602298de674bd31ed3f28a88359b02ca9d",
-      "status": "open; local component gates and hosted Rust quality/repository-policy checks pass; excluded from exact source set until reviewed and merged",
-      "scope": "require exactly one durable SQLite row change before exposing host lease install or renewal effect"
+      "status": "open; local component gates, hosted Rust quality, and repository-policy checks pass; excluded from exact source set until reviewed and merged",
+      "scope": "require exactly one durable SQLite row change before exposing host lease install or renewal effect; invalidate restored host bindings during rekey before a fresh fence"
+    },
+    {
+      "repository": "AI-Ascension/sts2-harness",
+      "pull_request": 84,
+      "commit": "a1027614ba8f459a05cdf798ac8e3122a1917065",
+      "based_on": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
+      "status": "open; local format, strict Clippy, and serial locked workspace gates pass; hosted policy passes and Rust CI is pending; excluded from exact source set until reviewed and merged",
+      "scope": "reject explicit Runtime-v3 resume when the durable episode is missing instead of creating a new episode"
     }
   ],
   "delegation": {
@@ -47,9 +56,10 @@
     "nested_status": "unmet: this environment exposes no collaboration spawn surface; no depth-2 or depth-3 child was created and no depth-4 bypass was attempted"
   },
   "verification": {
-    "watchdog": "pass locally at b4cda14; serial workspace gate, strict local lint, and source-set CLI gate pass; hosted rerun pending",
+    "watchdog": "pass locally at 538346e; serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass",
     "companion_component_gates": "pass in isolated worktrees",
-    "gateway_follow_up_pr42": "local gates pass; hosted Rust quality/repository-policy checks pass",
+    "gateway_follow_up_pr42": "9575b8b local gates pass; hosted Rust quality/repository-policy checks pass",
+    "harness_follow_up_pr84": "a102761 local gates pass; hosted policy passes and Rust quality gate is pending",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",

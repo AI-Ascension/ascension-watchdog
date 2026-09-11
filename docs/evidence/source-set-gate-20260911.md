@@ -19,20 +19,15 @@ wire/golden bytes. Failed admission prints the complete JSON report to stdout
 and exits 1. It never fetches, builds, installs, activates, or runs a
 companion.
 
-The first gate run was against the candidate manifest and the eight current
-local source worktrees after commit `b4cda14ea578e9ad33f8142698d494aeb9f3a61f`.
-The watchdog binary built successfully and the verifier returned exit 1 with
-`admitted=false`. Seven companion source reports were clean and exactly
-pinned; the candidate's watchdog pin still described the earlier source
-revision at capture time, so that mismatch was retained as a failure.
-
-After the source metadata was reconciled to `b4cda14`, a second read-only run
-at docs head `42306d1` used manifest digest
-`08d56472fafb8f7a45f8339ef1ebbe97a70887b6b163b341c2c728456c14c078` and
-again returned exit 1. The root worktree was clean but its current docs head
-was intentionally different from the pinned implementation commit; the gate
-reported that exact drift rather than silently accepting a mixed checkout.
-The companion and contract findings were unchanged.
+The first two gate runs are preserved in the source history. The current
+read-only run uses watchdog commit `538346e8909a2f4fc23e5b3ea9ec2960b8b34530`
+and manifest digest
+`825ecd8352cacc6fdbb753e8a62a9d1f8607b7ffe7471237499b8949272a3c4a`; it
+returned exit 1 with `admitted=false`. All eight supplied source worktrees
+were clean and exactly pinned for this run. The remaining failures are the
+consumer artifact boundary: gateway/MCP copies retain pending conformance,
+consumer bindings are not the selected current revisions, and the contract
+manifests/consumer-conformance files are not byte-identical across copies.
 
 All four inspected `coop-native-v1` artifacts passed their checksum-file
 integrity checks: 34 entries for the protocol copy and 25 entries for each
@@ -43,6 +38,7 @@ or non-current consumer bindings. No artifact bytes were normalized to make
 the gate pass.
 
 The verifier's own unit and CLI regressions pass, as does the full serial
-workspace gate. A future release candidate must regenerate the source
+workspace gate (210 watchdog library tests passed, with four expected ignored
+tests). A future release candidate must regenerate the source
 manifest, produce one current consumer-conformance set, and rerun this gate
 before any release or host claim is considered.

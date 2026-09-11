@@ -1,7 +1,7 @@
 # Current source set and verification boundary — 2026-09-11
 
-Captured at `2026-09-11T06:53:43Z`; root verification refreshed at
-`2026-09-11T07:37:30Z`. This is a resumable integration record, not an
+Captured at `2026-09-11T08:53:40Z`; root verification was refreshed at the
+same source-set wave. This is a resumable integration record, not an
 activated release. Every revision below is an exact local source revision; a
 component passing its own gates does not establish cross-consumer, service,
 live-host, reboot, or soak evidence.
@@ -10,7 +10,7 @@ live-host, reboot, or soak evidence.
 
 | Repository | Ref / delivery | Revision | State |
 | --- | --- | --- | --- |
-| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `b4cda14ea578e9ad33f8142698d494aeb9f3a61f` | open; atomic durable job-state transitions and exact source-set admission gate; local gates pass; hosted rerun pending |
+| `ascension-watchdog` | `codex/watchdog-resume-20260911` / PR [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11) | `538346e8909a2f4fc23e5b3ea9ec2960b8b34530` | open; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass |
 | `sts2-gateway` | `main` | `5f531f602298de674bd31ed3f28a88359b02ca9d` | current remote main; component gates pass |
 | `sts2-harness` | `main` | `00bd9e123a86fca39bbffb65b370aac7ed2c8218` | current remote main; component gates pass |
 | `sts2-mcp-server` | `main` | `98ab84b3fad371b45b141e6d81dd9124769a4c59` | current remote main; component gates pass |
@@ -20,14 +20,23 @@ live-host, reboot, or soak evidence.
 | `ai-agent-observability` | `main` / merged PR [#20](https://github.com/AI-Ascension/ai-agent-observability/pull/20), [#22](https://github.com/AI-Ascension/ai-agent-observability/pull/22) | `630431716ebfbf86280f9fd56f19d6016ad7aeb2` | current remote main; persistent Collector queue/WAL, materialization repairs, and static-probe portability merged |
 
 A gateway safety follow-up was opened after this source-set capture: PR
-[#42](https://github.com/AI-Ascension/sts2-gateway/pull/42), commit
-`83539a9dd669eb4c8da69033c06d45f114300c45`, is based on gateway main
-`5f531f602298de674bd31ed3f28a88359b02ca9d`. It checks that the durable host
-install and renewal transitions changed exactly one row before exposing a
-host-effect candidate. Its local component gates and hosted Rust quality and
-repository-policy checks pass (workflow run `34573234477` and
-`34573234541`). This pending branch is not part of the exact source set or
+[#42](https://github.com/AI-Ascension/sts2-gateway/pull/42), current commit
+`9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f`, is based on gateway main
+`5f531f602298de674bd31ed3f28a88359b02ca9d`. It checks that durable host
+install and renewal transitions change exactly one row before exposing a
+host-effect candidate, and invalidates restored host bindings during rekey
+before a fresh fence. Its local component gates and exact-head hosted Rust
+quality and repository-policy checks pass (workflow runs `34580441918` and
+`34580442118`). This pending branch is not part of the exact source set or
 release admission until the owning repository reviews and merges it.
+
+A harness safety follow-up is also open: PR
+[#84](https://github.com/AI-Ascension/sts2-harness/pull/84), current commit
+`a1027614ba8f459a05cdf798ac8e3122a1917065`, rejects `--resume` when the
+durable episode is missing instead of creating a fresh episode. Its local
+format, strict Clippy, and serial locked workspace gates pass; the hosted
+policy run `34581376023` passes and the hosted Rust run is pending at this
+capture. This branch is likewise excluded from the exact source set.
 
 The source set was fetched into isolated worktrees. No changes were made to
 the companion `main` worktrees. The earlier observability review branch PR #21
@@ -39,7 +48,8 @@ release artifact.
 ## Gates executed
 
 The watchdog passed pinned-toolchain format, standards validation, workspace
-check, strict Clippy, and the full serial all-target/all-feature test command:
+check, strict Clippy, and the full serial all-target/all-feature test command
+at `538346e`:
 
 ```text
 cargo +1.97.1 fmt --all -- --check
@@ -49,7 +59,7 @@ cargo +1.97.1 clippy --workspace --all-targets --all-features --locked -- -D war
 TMPDIR=/home/agent/wd-tmp-0911 cargo +1.97.1 test --locked --workspace --all-targets --all-features --no-fail-fast -- --test-threads=1
 ```
 
-The final test command exited zero; it included 206 watchdog library tests,
+The final test command exited zero; it included 210 watchdog library tests,
 all watchdog integration suites, fault-fixture suites, and the platform
 packages, with only the repository's four expected ignored watchdog tests and
 the separately labeled platform-boundary ignores. The new executable CLI
@@ -106,7 +116,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open with local gates green for b4cda14 and hosted rerun pending; gateway PR #42 open with local and hosted gates green; observability PRs #20 and #22 merged; no activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open at 538346e with local and exact-head hosted gates green; gateway PR #42 open at 9575b8b with local and hosted gates green; harness PR #84 open at a102761 with local gates and hosted policy green while Rust CI is pending; observability PRs #20 and #22 merged; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the
