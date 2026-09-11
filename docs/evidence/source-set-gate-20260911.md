@@ -23,9 +23,9 @@ The first two gate runs are preserved in the source history. The current
 read-only run uses watchdog commit `538346e8909a2f4fc23e5b3ea9ec2960b8b34530`,
 merged gateway main commit `f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b`, and
 manifest digest
-`596e4c5bb55d8bd3692a03cdded918ea1ebd07b7642d16f8d981aea021d7feaa`; it
+`1da21db7f58da78d8bd6f0a57dc3ded68d95b111310bc055e4527c311e5711e4`; it
 returned exit 1 with `admitted=false` (report
-`/home/agent/wd-tmp-0911/source-set-report-final.json`). All eight supplied
+`/home/agent/wd-tmp-0911/source-set-report-1015.json`). All eight supplied
 source worktrees were clean and exactly pinned for this run. The remaining failures are the
 consumer artifact boundary: gateway/MCP copies retain pending conformance,
 consumer bindings are not the selected current revisions, and the contract

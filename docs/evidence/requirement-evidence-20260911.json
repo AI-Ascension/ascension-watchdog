@@ -7,7 +7,7 @@
   "source_set_record": "docs/evidence/current-source-set-20260911.md",
   "source_set_gate": {
     "admitted": false,
-    "manifest_sha256": "596e4c5bb55d8bd3692a03cdded918ea1ebd07b7642d16f8d981aea021d7feaa",
+    "manifest_sha256": "1da21db7f58da78d8bd6f0a57dc3ded68d95b111310bc055e4527c311e5711e4",
     "reason": "consumer manifest and consumer-conformance bindings differ; gateway/MCP copies retain pending markers",
     "report": "/home/agent/wd-tmp-0911/source-set-report-final.json"
   },

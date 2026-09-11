@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "classification": "candidate-source-set-not-activated",
-  "generated_at": "2026-09-11T09:07:47Z",
+  "generated_at": "2026-09-11T10:15:56Z",
   "purpose": "Exact source pins refreshed during the cross-machine resume wave; this is not an installed or activated release.",
   "activation": {
     "activated": false,
@@ -12,33 +12,33 @@
   "repositories": {
     "ascension-watchdog": {
       "revision": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
-      "last_observed_pr_head": "03fa0e2f69cc62c44eb4bc6914673a9e6199c1e1",
+      "last_observed_pr_head": "d28ef31c48b75c77eb1faa58a6f6c77a95e2cc57",
       "ref": "codex/watchdog-resume-20260911",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 11,
-      "state": "open at 03fa0e2; selected implementation pin 538346e; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass; not-merged"
+      "state": "open at d28ef31; selected implementation pin 538346e; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass; not-merged"
     },
     "sts2-gateway": {
       "revision": "f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b",
       "follow_up_revision": "87792cf3f6e2c3b6627d3a34bf380bb337c01373",
-      "open_follow_up_revision": "9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f",
+      "merged_follow_up_revision": "9575b8b7eed684df00135ec0f2f02c9fc8ab6a3f",
       "ref": "main",
       "remote": "AI-Ascension/sts2-gateway",
       "pull_request": 40,
       "feature_pull_requests": [34, 37, 38, 39],
-      "state": "merged; current main f4d1409 after PR #42; host-lease persistence and restore invalidation included"
+      "state": "merged; current main f4d1409 after PR #42; host-lease persistence and restore invalidation included; branch tip 9575b8b is retained as delivery evidence"
     },
     "sts2-harness": {
       "revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
       "feature_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
-      "open_follow_up_revision": "a1027614ba8f459a05cdf798ac8e3122a1917065",
+      "open_follow_up_revision": "40a41285ac44964c712eabfde37e3527ce6a1939",
       "base_main": "63dc563690c93c575e75228f54672c1689d8a879",
       "recovery_base_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "ref": "main",
       "remote": "AI-Ascension/sts2-harness",
       "pull_request": 78,
       "recovery_pull_request": 54,
-      "state": "merged; current main 00bd9e1; component gates pass in isolated worktree; no deployment or live launch"
+      "state": "merged; current main 00bd9e1; PR #84 open at 40a4128 adds missing-episode resume rejection and a source-derived Windows worker endpoint; component/local and hosted gates pass; no deployment or live launch"
     },
     "sts2-mcp-server": {
       "revision": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
@@ -82,12 +82,12 @@
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-current-local-worktrees-and-remote-main-or-review-heads-2026-09-11T08:53:40Z",
+    "source_pins": "confirmed-from-current-local-worktrees-and-remote-main-or-review-heads-2026-09-11T10:15:56Z",
     "component_locked_builds": "verified-in-isolated-source-worktrees; observability main also validated by pinned Collector binary",
     "artifact_bytes_cross_component": "schema/conformance equal for inspected coop-native-v1 copies; consumer bindings differ",
     "cross_consumer_build": "not-run; no unified consumer workspace/build exists",
-    "hosted_watchdog_runs": "confirmed-for-current-538346e; exact-head Ubuntu, Windows, and dependency lanes passed in workflow 34579605033",
-    "hosted_watchdog_standards_runs": "confirmed-for-current-538346e; exact-head standards lane passed in workflow 34579605102",
+    "hosted_watchdog_runs": "confirmed-for-current-538346e; exact-head Ubuntu, Windows, and dependency lanes passed in workflow 34582695999",
+    "hosted_watchdog_standards_runs": "confirmed-for-current-538346e; exact-head standards lane passed in workflow 34582696030",
     "hosted_watchdog_status_at_capture": "current local and hosted gates pass; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T09:07:47Z",
+  "captured_at": "2026-09-11T10:15:56Z",
   "classification": "candidate-source-set-component-gates-not-release-admission",
   "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
   "source_set": {
@@ -8,7 +8,7 @@
       "revision": "538346e8909a2f4fc23e5b3ea9ec2960b8b34530",
       "ref": "codex/watchdog-resume-20260911",
       "remote_pr": 11,
-      "state": "open at 03fa0e2; selected implementation pin 538346e; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass"
+      "state": "open at d28ef31; selected implementation pin 538346e; atomic durable job-state transitions and exact source-set admission gate; local and exact-head hosted gates pass"
     },
     "sts2-gateway": {
       "revision": "f4d14091ce1f3b5327925a7a536e2c7bf7b0c56b",
@@ -18,9 +18,9 @@
     },
     "sts2-harness": {
       "revision": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
-      "open_follow_up_revision": "a1027614ba8f459a05cdf798ac8e3122a1917065",
+      "open_follow_up_revision": "40a41285ac44964c712eabfde37e3527ce6a1939",
       "ref": "main",
-      "state": "current remote main"
+      "state": "current remote main; PR #84 open at 40a4128 with local/hosted gates green"
     },
     "sts2-mcp-server": {
       "revision": "98ab84b3fad371b45b141e6d81dd9124769a4c59",
