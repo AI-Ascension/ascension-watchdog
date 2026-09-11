@@ -19,12 +19,20 @@ wire/golden bytes. Failed admission prints the complete JSON report to stdout
 and exits 1. It never fetches, builds, installs, activates, or runs a
 companion.
 
-The gate was run against the candidate manifest and the eight current local
-source worktrees after commit `b4cda14ea578e9ad33f8142698d494aeb9f3a61f`.
+The first gate run was against the candidate manifest and the eight current
+local source worktrees after commit `b4cda14ea578e9ad33f8142698d494aeb9f3a61f`.
 The watchdog binary built successfully and the verifier returned exit 1 with
 `admitted=false`. Seven companion source reports were clean and exactly
 pinned; the candidate's watchdog pin still described the earlier source
 revision at capture time, so that mismatch was retained as a failure.
+
+After the source metadata was reconciled to `b4cda14`, a second read-only run
+at docs head `42306d1` used manifest digest
+`08d56472fafb8f7a45f8339ef1ebbe97a70887b6b163b341c2c728456c14c078` and
+again returned exit 1. The root worktree was clean but its current docs head
+was intentionally different from the pinned implementation commit; the gate
+reported that exact drift rather than silently accepting a mixed checkout.
+The companion and contract findings were unchanged.
 
 All four inspected `coop-native-v1` artifacts passed their checksum-file
 integrity checks: 34 entries for the protocol copy and 25 entries for each
