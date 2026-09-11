@@ -118,6 +118,22 @@ imply approval for another; the reboot item is separate.
 - Acceptance: elapsed wall-clock duration is at least 24 hours; no duplicate
   effects; bounded memory/queue growth; unresolved operations retained.
 
+## Candidate native Windows target (discovered read-only)
+
+A read-only inspection of the same host found two running libvirt/QEMU guests:
+
+- `sts.home.complete.tech-windows` (backing image
+  `/srv/virtual-machines/sts2-windows-20260905/`), and
+- `sts.home.complete.tech-slay-the-spire` (backing image
+  `/srv/virtual-machines/slay-the-spire-2-minimum.qcow2`).
+
+The `completetrain` user cannot enumerate them with `virsh list --all` and has no
+console/credential access. This is a discovery only: it is **not** authorization
+to boot, mutate, log into, install on, snapshot, or reboot either guest. If the
+Windows guest is the intended native SCM/Job Object/named-pipe target, that work
+needs explicit authorization plus a non-chat access path (console or approved
+credential injection) before it can proceed. No credential was requested here.
+
 ## Lower-impact partial option — executed 2026-09-11
 
 A systemd **user-scope transient unit** (`systemd-run --user`) was executed on
