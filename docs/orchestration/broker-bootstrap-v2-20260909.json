@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "base_commit": "local-integration-pending",
-  "source_state": "local integration branch; validation pending",
+  "base_commit": "34cc53d61dbcfde3c8bd16f55a60b26b22d58e80",
+  "source_state": "validated local integration branch; hosted delivery pending",
   "classification": "broker-side implementation, explicit opt-in runtime selection, exact queued-job binding/cancellation seams, durable pending cancellation intent, and synthetic transport/descriptor validation; native service validation and JobRemoved replay remain incomplete",
   "tasks": [
     {
@@ -38,25 +38,25 @@
     "model_effort": "existing requested Luna/max agents reused; this wave does not establish fresh observed runtime model metadata"
   },
   "source_sha256": {
-    "crates/watchdog/src/platform/linux_broker.rs": "pending",
+    "crates/watchdog/src/platform/linux_broker.rs": "64c669bc0bac4ef5ca1a05f431065fb6c1399a369641de4949d73f1ec1646199",
     "crates/watchdog/src/platform/linux_broker/bootstrap.rs": "d3510080e8eb7b041f904f4e2eaa4287e5e856909da7a367f915510f00ac8a3c",
     "crates/watchdog/src/platform/linux_broker/bootstrap_tests.rs": "f80a8e275f645920938cd9be1f5a77a605af1b8fb7a2c5403506e0ea976d57eb",
     "crates/watchdog/src/platform/linux_broker/bootstrap_transport.rs": "874ff4269174c21475eb9967125a0204c264783dd168ad6b7fe9c3b6578a5ac4",
     "crates/watchdog/src/platform/linux_broker/bootstrap_transport_tests.rs": "73e37adf7fc8bab2741220ebdc26cc034cc229815eb7a9c59e5fced1de403d69",
     "crates/watchdog/src/platform/linux_broker/native_bootstrap.rs": "9f0385f120cd4c339fee3ca1f869eb173933ba4c8afb6bdd99ef2af6ab3dba1f",
-    "crates/watchdog/src/platform/linux_broker/ledger.rs": "pending",
-    "crates/watchdog/src/platform/linux_broker/native.rs": "pending",
-    "crates/watchdog/src/platform/linux_broker/tests.rs": "pending",
+    "crates/watchdog/src/platform/linux_broker/ledger.rs": "092f4cc658c2f969bf213e109f40042f75c7f3a28c66357a9cca15d74a645ee8",
+    "crates/watchdog/src/platform/linux_broker/native.rs": "b9b21112ec2239d92e66a3e6f332322302c6f254b56c2442b238430d4516c899",
+    "crates/watchdog/src/platform/linux_broker/tests.rs": "264fe0e4738abe51e6dc39a31c6092c8c5c8a06e6ac75a4540a982c1c0fc7269",
     "crates/watchdog/src/platform/linux_broker/failed_launch_cleanup_tests.rs": "3b38ead12c7ecc4a26162217879360742ee3939d846d03996b21679d0f6a89c4"
   },
   "verification": {
     "root_focused_command": "CARGO_INCREMENTAL=0 cargo test --locked --offline -j1 -p ascension-watchdog --lib platform::linux_broker",
-    "root_focused": "pending",
-    "independent_focused": "pending",
-    "strict_clippy": "pending",
-    "format_and_diff": "pending",
-    "full_workspace_tests_and_windows_cross_clippy": "pending",
-    "release_build_from_v2_source": "pending"
+    "root_focused": {"passed": 116, "failed": 0, "ignored_native": 1, "filtered": 142, "exit_code": 0, "test_seconds": 97.76},
+    "independent_focused": "not run on a separate worktree",
+    "strict_clippy": "CARGO_INCREMENTAL=0 cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings; exit 0; 18.74 seconds; production lint with unwrap/expect/panic/todo/unimplemented denied also exit 0",
+    "format_and_diff": "cargo fmt --all -- --check and git diff --check; exit 0",
+    "full_workspace_tests_and_windows_cross_clippy": "CARGO_INCREMENTAL=0 TMPDIR=<task-local-disk-dir> cargo test --locked --offline --workspace --all-targets --all-features -- --test-threads=1; exit 0; 255 library tests passed, 4 ignored, all workspace integration/example/schema/fault tests passed; Windows-target cross-Clippy unavailable locally because x86_64-w64-mingw32-gcc is not installed",
+    "release_build_from_v2_source": "CARGO_INCREMENTAL=0 cargo build --locked --offline --workspace --release; exit 0; watchdog sha256 105ca9fba97ec8024689b31a017ba9edcd978a77f46c5e1a9eb323158744d204; linux-systemd-broker sha256 210813ab0b83397bb5a509bce5c354abdc3a32d414616fde7adfc21568ea249c; fault-fixture-server sha256 44ecb96b888f863a4856bd355633ebd38c1fb8aaea0041ce3c9136a65e146dd7"
   },
   "corrected_intermediate_failures": [
     "Strict Clippy rejected one err().expect() test expression; changed to expect_err without allowances",
@@ -71,7 +71,6 @@
   "remaining": [
     "Asynchronous JobRemoved subscription/replay across broker death",
     "Final watchdog Stop/exec admission barrier without releasing authority while PID 1 launch can still occur",
-    "Receipt-backed runtime ownership and explicit backend selection preserving typed bootstrap",
     "Authorized native systemd stdin, process/cgroup cleanup, service restart and reboot validation",
     "Clean integrated companion release set, remote delivery and remaining full-objective gates"
   ]

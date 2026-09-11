@@ -66,12 +66,19 @@ cargo test --locked --offline -p ascension-watchdog --lib runtime_process::tests
 cargo clippy --locked --offline -p ascension-watchdog --lib --all-targets -- -D warnings
 ```
 
-The focused broker and workspace gates must be rerun for the current integrated
-source before this record is used as completion evidence. They cover selector
-bounds, direct-backend defaulting, request round-tripping, receipt correlation,
-exact job identity, and pending cancellation uncertainty. They do not prove a
-root-owned socket, systemd/D-Bus effects, cross-UID execution, reboot recovery,
-or live service behavior.
+The final local focused gate passed 116 tests with one explicitly gated native
+systemd test ignored. The final locked all-target/all-feature workspace gate
+passed 255 library tests with four explicit ignores and all workspace
+integration/example tests. Strict workspace Clippy, production lint, formatting,
+standards validation, and schema/conformance fixtures also passed. The
+Windows-target cross-Clippy lane was not runnable on this Linux host because
+`x86_64-w64-mingw32-gcc` is unavailable; hosted Windows validation remains the
+authoritative native lane.
+
+These checks prove selector bounds, direct-backend defaulting, request
+round-tripping, receipt correlation, exact job identity, and pending
+cancellation uncertainty. They do not prove a root-owned socket, systemd/D-Bus
+effects, cross-UID execution, reboot recovery, or live service behavior.
 
 The broker API remains synchronous at the wire boundary. A pending Stop now
 persists a one-way cancellation intent before touching the manager job, and
