@@ -531,3 +531,93 @@ on the supplied Train host and is recorded in
 [`real-harness-worker.md`](real-harness-worker.md); native Windows/Linux service
 execution, live-host recovery, cold boot, rollback, and soak evidence remain
 unverified.
+
+## Delivery reconciliation — 2026-09-11 (post PR #13)
+
+This addendum reconciles the historical matrix above against the current
+implementation and companion heads. It supersedes stale rows that described
+open PRs, stale consumer artifacts, or a missing unified build. The historical
+matrix is retained for traceability; where it conflicts with this addendum,
+this addendum is authoritative for the current state. It is not an activated
+release and does not promote any native/live/reboot/soak axis.
+
+### Verified current state
+
+- Watchdog `bootstrap` is `1925f2852acf5e727a795971546390edf6c8d2b0`
+  (PR [#13](https://github.com/AI-Ascension/ascension-watchdog/pull/13) merged:
+  `docs: record current-main native process smoke`).
+- The four current-main artifact refreshes are merged: `sts2-protocol` PR #42
+  (`219510c4`), `sts2-gateway` PR #44 (`8940fba8`), `sts2-mcp-server` PR #45
+  (`f3b6eaa8`), `sts2-harness` PR #86 (`4584c4cb`). Harness PR #84
+  (`4e738133`) is also merged.
+- The admitted current-main manifest
+  `workspace-manifest.current-main-refresh-20260911.json`
+  (SHA-256 `1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18`)
+  was re-verified read-only in this wave: `admitted=true`, 8 repositories, 4
+  artifacts, no issues. Every companion `main` head still equals the manifest
+  pin (`sts2-protocol` `219510c4`, `sts2-gateway` `8940fba8`, `sts2-mcp-server`
+  `f3b6eaa8`, `sts2-harness` `4584c4cb`, `sts2-game-mod` `afa44d6f`,
+  `sts2-game-core` `f5daf69f`, `ai-agent-observability` `6fad79d0`). Only one
+  unrelated companion PR is open (`sts2-harness` #87, a persistent
+  provider-session broker); it is not part of the admitted set.
+
+### Unified build/conformance workflow — implemented
+
+The previously missing unified target is now implemented as Rust orchestration:
+`watchdog release build-set` verifies the admitted source set and then runs each
+repository's declared, bounded, locked build in that repository's own worktree,
+with build output directed outside the worktree. See
+[`build-set-workflow.md`](build-set-workflow.md).
+
+The committed current-main plan
+`workspace-build-plan.current-main-refresh-20260911.json`
+(SHA-256 `332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc`)
+ran successfully: `admitted=true`, `built=true`, 7 repositories, 0 issues. All
+eight companion worktrees and the pinned watchdog worktree were clean after the
+run. The machine-readable result is
+[`current-main-refresh-build-set-20260911.json`](current-main-refresh-build-set-20260911.json);
+the transcription is recorded in
+[`current-main-refresh-build-set-20260911.md`](current-main-refresh-build-set-20260911.md).
+This moves the "no unified cross-consumer build" blocker and the S15/S16-G
+build portions from open to compile-verified for the exact pinned inputs.
+
+### Rows explicitly reconciled by this wave
+
+- **S04/S16-G**: the admitted manifest is now build-verified, but it is still
+  not an activated release set; `activation.activated` remains false.
+- **S15/FAULT-21**: source-set admission and locked release builds pass for the
+  exact current-main set; the full 24-scenario native/live matrix is unchanged.
+- **INV-12/S13**: source-tested release selector/rollback unchanged; sealed
+  cross-repository handoff and native activation remain open.
+- **Historical blockers removed**: "current-main consumer artifact copies remain
+  pre-refresh", "no unified current cross-consumer build/conformance target",
+  "gateway PR #42 / harness PR #84 open", and "watchdog PR #11 / PR #13 open".
+
+### Rows that remain open (unchanged)
+
+Native Windows/Linux service execution, WSL termination, live-host recovery,
+cold-boot recovery, activation/rollback on a host, the 24-hour soak, companion
+provider/episode recovery integration, and Docker/Podman remain unverified. The
+native Linux process-boundary smoke remains process-boundary evidence only.
+
+### Nested-agent capability failure (recorded)
+
+This session's spawn surface exposes only `deepseek-v4.1-flash`; requesting the
+mandated `gpt-5.6-luna` with reasoning effort `max` returns
+`Unknown model 'gpt-5.6-luna' for spawn_agent`. Genuine depth-1→2→3 Luna-Max
+descendant execution (S03/S16, FAULT-01) therefore remains unobserved, and the
+requested orchestration must not be labeled verified. Independent authorized
+work continues.
+
+### Delivery decision (updated axes)
+
+`IMPLEMENTATION_COMPLETE = assignment incomplete`,
+`SYNTHETIC_INTEGRATION_VERIFIED = partial`,
+`UNIFIED_BUILD_VERIFIED = pass for the admitted current-main set (compile only)`,
+`WINDOWS_SERVICE_VERIFIED = unverified`,
+`LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
+`LIVE_HOST_RECOVERY_VERIFIED = unverified`,
+`COLD_BOOT_RECOVERY_VERIFIED = unverified`,
+`ROLLBACK_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
+`REMOTE_DELIVERY_STATUS = watchdog PR #13 merged at 1925f28; companion mains
+admitted and build-verified; release not activated`.

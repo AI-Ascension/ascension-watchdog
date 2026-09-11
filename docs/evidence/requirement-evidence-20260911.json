@@ -1,36 +1,35 @@
 {
   "schema_version": 1,
-  "audit_id": "V36-current-main-artifact-refresh-20260911",
-  "captured_at": "2026-09-11T20:39:16Z",
-  "classification": "partial; release and runtime axes unverified",
+  "audit_id": "V35-delivery-reconciliation-20260911",
+  "captured_at": "2026-09-11T21:53:26Z",
+  "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
-  "source_set_record": "docs/evidence/current-main-refresh-source-set-20260911.md",
+  "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
   "source_set_gate": {
-    "admitted": true,
-    "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
-    "reason": "current-main exact post-merge artifact refresh admits all eight clean worktrees after protocol, gateway, MCP, and harness refresh PRs merged; the candidate remains unactivated",
-    "report": "docs/evidence/current-main-refresh-source-set-20260911.json"
-  },
-  "refresh_candidate": {
     "manifest": "workspace-manifest.current-main-refresh-20260911.json",
     "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
     "admitted": true,
-    "classification": "current-main post-merge refresh candidate; delivery merged and unactivated",
     "repository_count": 8,
     "artifact_count": 4,
     "issues": [],
-    "contract_files_identical": true,
-    "checksum_entries": {
-      "sts2-protocol": 34,
-      "sts2-gateway": 25,
-      "sts2-mcp-server": 25,
-      "sts2-harness": 25
-    },
-    "source_revision_checks": "pass; source commits are ancestral, source trees match, and artifact-refresh diffs remain inside declared artifact directories",
-    "evidence": "docs/evidence/current-main-refresh-source-set-20260911.md"
+    "method": "watchdog release source-set verify (read-only) in this wave"
+  },
+  "unified_build_set": {
+    "workflow": "docs/evidence/build-set-workflow.md",
+    "plan": "workspace-build-plan.current-main-refresh-20260911.json",
+    "plan_sha256": "332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc",
+    "report": "docs/evidence/current-main-refresh-build-set-20260911.json",
+    "report_sha256": "335e0c9b82144defb8359f2dcf61b0d7797c5147ab84ace56b8cfd2c2a5d0809",
+    "toolchain": "1.97.1",
+    "admitted": true,
+    "built": true,
+    "repositories": 7,
+    "issues": [],
+    "classification": "compile evidence only",
+    "postconditions": "all companion worktrees and the pinned watchdog worktree clean; scratch target removed"
   },
   "source_set": {
-    "ascension-watchdog": "28e20fa8cfb9a43635a5c167e03ade6219d87a5a",
+    "ascension-watchdog": "1925f2852acf5e727a795971546390edf6c8d2b0",
     "sts2-gateway": "8940fba823a0893b31d1a96301831c182d37ed32",
     "sts2-harness": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8",
     "sts2-mcp-server": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031",
@@ -39,78 +38,77 @@
     "sts2-game-core": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
     "ai-agent-observability": "6fad79d00ef4fa84097cb00e8342521f85f6e48e"
   },
-  "pending_delivery": {
-    "repository": "AI-Ascension companion artifact refreshes",
-    "pull_request": null,
-    "commit": null,
-    "base": "main",
-    "status": "resolved; refresh PRs #42/#44/#45/#86 merged into current main and current-main source-set admission passes",
-    "scope": "synchronized coop-native-v1 consumer bindings, provenance metadata, and checksum inventories"
-  },
-  "consumer_artifact_refresh": {
-    "status": "synchronized current-main refresh merged and admitted; release remains unactivated",
-    "contract_sha256": {
-      "manifest": "ae6b0df82965acaf8bc1c033e9201f8d2570a2def2c29a69c2ed1990573a52bc",
-      "schema": "2f3bc99e53080fa11b39592b64fb0ab964a16f568719a2622d0b2caf766ab629",
-      "conformance": "8da68488ca75de12a73521eee30d3464d8c8c9f3a623a6233f2cf97fb68f43b3",
-      "consumer_conformance": "b9563c67bb0d571ade708529489fb3fe8233a9363aa73fb277474b5aef62c8d6"
+  "merged_delivery": {
+    "ascension-watchdog": {
+      "pull_request": 13,
+      "merge_commit": "1925f2852acf5e727a795971546390edf6c8d2b0"
     },
-    "pull_requests": {
-      "sts2-protocol": {"number": 42, "commit": "219510c4d4f9c96a54f510cca085a48a92bfe490"},
-      "sts2-gateway": {"number": 44, "commit": "8940fba823a0893b31d1a96301831c182d37ed32"},
-      "sts2-mcp-server": {"number": 45, "commit": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031"},
-      "sts2-harness": {"number": 86, "commit": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8"}
+    "sts2-protocol": {
+      "pull_request": 42,
+      "merge_commit": "219510c4d4f9c96a54f510cca085a48a92bfe490"
     },
-    "evidence": "docs/evidence/current-main-refresh-source-set-20260911.md"
+    "sts2-gateway": {
+      "pull_request": 44,
+      "merge_commit": "8940fba823a0893b31d1a96301831c182d37ed32"
+    },
+    "sts2-mcp-server": {
+      "pull_request": 45,
+      "merge_commit": "f3b6eaa8bcf2241b8d6c47587c958388a8fe1031"
+    },
+    "sts2-harness": {
+      "pull_request": 86,
+      "merge_commit": "4584c4cbc2f6bcb900f99092cafa80d32ca0cce8"
+    },
+    "sts2-harness_84": {
+      "pull_request": 84,
+      "merge_commit": "4e738133822a48b99bea9a710aa49cf635e7cd2d"
+    }
   },
-  "organization_policy_inspection": {
-    "repository": "AI-Ascension/.github",
-    "commit": "9043802204128452c8bdef6b8b0b3d0c304cc96d",
-    "site_repository": "AI-Ascension/AI-Ascension.github.io",
-    "site_commit": "87e3c849ff97af4d5b53bbcdb913b1049bed6062",
-    "record": "docs/evidence/organization-policy-inspection-20260911.md",
-    "result": "public shared evidence labels, PR-only delivery, policy-as-code boundary, and static-site proof limits inspected read-only"
+  "open_unrelated_prs": {
+    "sts2-harness": [
+      {
+        "number": 87,
+        "title": "Phase 4: bounded persistent provider-session broker"
+      }
+    ]
   },
   "checks": {
-    "watchdog_exact_head_hosted_validation": 34632728468,
-    "watchdog_exact_head_hosted_standards": 34632728442,
-    "watchdog_current_head_local_workspace": "pass; merged bootstrap source was clean; pinned serial workspace all-target/all-feature tests passed (255 watchdog library tests passed, 4 ignored, all active workspace integration suites passed), with strict workspace Clippy and fmt passing; rerun used task-local TMPDIR after the shared tmpfs filled",
-    "watchdog_current_head_systemd_notifier": "pass; Linux notifier unit 5/5 and service-loop integration 6/6 on the implementation base; source-set verifier regressions pass; no native systemd install claimed",
-    "watchdog_packaging_preflight": "pass; validated product head 902c879 hosted validation run 34625070885 passed Ubuntu and Windows dependency, format, lint, full workspace test, and locked release-build lanes; Windows executed the native packaged-config ACL reader and non-mutating PowerShell packaging preflight",
-    "harness_local_policy": "879 sized files, 0 warning(s), 0 error(s)",
-    "harness_local_serial_workspace": "pass; one earlier transient phase3_cli BrokenPipe was followed by a focused pass and clean serial pass",
-    "harness_hosted_rust_quality": 34588219783,
-    "harness_hosted_policy": 34588219842,
-    "consumer_refresh_local_package_gates": "pass; protocol, gateway, MCP, and harness locked all-target/all-feature serial package runs",
-    "consumer_refresh_hosted_quality": {"protocol": 34644936010, "gateway": 34644943114, "mcp": 34644936785, "harness": 34644935521},
-    "consumer_refresh_hosted_policy": {"protocol": 34644935963, "gateway": 34644943293, "mcp": 34644936715, "harness": 34644935513},
-    "source_set_revision_tree_regressions": "pass; 6 focused source-set unit tests",
-    "refresh_candidate_source_set_gate": "historical pass; exit 0/admitted=true with manifest bc1683c17c7ee819121362e51901118581391bae2e44932efb737e344652c4f5",
-    "postmerge_source_set_gate": "historical fail-closed result; exit 1/admitted=false with manifest 4e2acc7216bdda3a892cd9c5d4d88e5ab870181edfb36b3d3f256f7c64a53c00",
-    "postmerge_refresh_source_set_gate": "historical local pass; exit 0/admitted=true with manifest 35b7c06d5d34f1c24f75c5253b23a2b7446d18a9a89a4b61de9260883a687d33",
-    "current_main_refresh_source_set_gate": "pass; exit 0/admitted=true with manifest 1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18"
+    "watchdog_pinned_fmt_clippy": "pass at bootstrap 1925f28 and at this delivery head",
+    "watchdog_baseline_workspace_tests": "pass at bootstrap 1925f28; 68 test-result-ok suites, 0 failed (serial all-target/all-feature)",
+    "build_set_unit_and_cli_tests": "pass; build_set unit tests plus CLI refusal integration test",
+    "source_set_verify_reproduced": "pass; admitted=true with manifest_sha256 1e4d7bc...",
+    "unified_build_set_run": "pass; admitted=true/built=true, 7 repositories, 0 issues"
+  },
+  "native_process_smoke": {
+    "status": "pass (unchanged from PR #13)",
+    "detail": "native Linux watchdog-to-harness process boundary on the supplied Train host; not installed service, live-host, reboot, activation, or soak"
+  },
+  "nested_delegation": {
+    "status": "capability unavailable",
+    "detail": "spawn surface exposes only deepseek-v4.1-flash; gpt-5.6-luna with reasoning effort max returns Unknown model 'gpt-5.6-luna'",
+    "result": "depth-1->2->3 Luna-Max ancestry unobserved; orchestration requirement unmet"
   },
   "evidence_axes": {
-    "implementation_complete": "unverified: watchdog patch is tested but the full assignment is not complete",
+    "implementation_complete": "unverified: assignment incomplete",
     "synthetic_integration_verified": "partial",
-    "native_linux_process_boundary_verified": "pass; current-main watchdog and harness binaries crossed the real Linux process boundary on the supplied Train host; no installed service or live-host claim",
+    "unified_build_verified": "pass for the admitted current-main set; compile evidence only",
     "windows_service_verified": "unverified",
     "linux_service_adapter_verified": "partial",
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
+    "rollback_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR11 and PR6 merged into bootstrap; companion refresh PRs #42/#44/#45/#86 merged into main; current-main source-set admitted; no activation"
+    "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated"
   },
   "blockers": [
-    "nested depth-2/depth-3 delegation surface is unavailable",
-    "Docker/Podman and native Windows linker/runtime are unavailable here",
-    "no authorized installed-service/live-host/reboot/soak execution",
-    "no unified current cross-consumer build/conformance target",
-    "current-main source-set admission is complete, but native/live/reboot/rollback/soak evidence remains unverified"
+    "nested depth-2/depth-3 Luna-Max delegation surface is unavailable in this session",
+    "no authorized native service installation, live-host recovery, cold-boot reboot, activation/rollback, or soak execution",
+    "native Windows service/Job Object/pipe execution and WSL termination not exercised",
+    "companion provider/episode recovery is not integrated in the watchdog release boundary"
   ],
   "fault_matrix": {
     "count": 24,
     "detail": "requirements.md (FAULT-01..FAULT-24)",
-    "status": "historical evidence rows preserved; required native/live/reboot/soak follow-ups remain open"
+    "status": "native/live/reboot/soak follow-ups remain open; unified build portion now verified"
   }
 }

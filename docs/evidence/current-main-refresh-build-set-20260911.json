@@ -1,0 +1,133 @@
+{
+  "orchestrator_version": 1,
+  "plan_sha256": "332507b47b91c3a3dbbb349c150649aecd7cd5892d1bbbec5137b59713a05dfc",
+  "manifest_sha256": "1e4d7bc10a6bb4c319c026417d87e5599cd3b150b9cc05d1a5f1fb11f6cc4d18",
+  "classification": "current-main-refresh-build-set-not-activated",
+  "admitted": true,
+  "built": true,
+  "toolchain": "1.97.1",
+  "repository_count": 7,
+  "repositories": {
+    "ascension-watchdog": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 333973,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling serde_core v1.0.229\n   Compiling serde v1.0.229\n   Compiling pin-project-lite v0.2.17\n   Compiling parking v2.2.1\n   Compiling winnow v1.0.4\n   Compiling libc v0.2.189\n   Compiling hashbrown v0.17.1\n   Compiling crossbeam-utils v0.8.23\n   Compiling equivalent v1.0.2\n   Compiling futures-core v0.3.34\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling fastrand v2.5.0\n   Compiling futures-io v0.3.34\n   Compiling event-listener v5.4.2\n   Compiling rustix v1.1.4\n   Compiling bitflags v2.13.1\n   Compiling futures-lite v2.6.1\n   Compiling indexmap v2.14.1\n   Compiling concurrent-queue v2.5.0\n   Compiling event-listener-strategy v0.5.4\n   Compiling typenum v1.20.1\n   Compiling autocfg v1.5.1\n   Compiling linux-raw-sys v0.12.1\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling slab v0.4.12\n   Compiling find-msvc-tools v0.1.12\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling async-io v2.6.0\n   Compiling shlex v2.0.1\n   Compiling errno v0.3.14\n   Compiling toml_edit v0.25.13+spec-1.1.0\n   Compiling hybrid-array v0.4.15\n   Compiling cc v1.4.5\n   Compiling cmov v0.5.4\n   Compiling endi v1.1.1\n   Compiling proc-macro-crate v3.5.0\n   Compiling getrandom v0.4.3\n   Compiling pkg-config v0.3.34\n   Compiling async-task v4.7.1\n   Compiling vcpkg v0.2.15\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling ctutils v0.4.2\n   Compiling signal-hook-registry v1.4.8\n   Compiling async-channel v2.5.0\n   Compiling zmij v1.0.23\n   Compiling once_cell v1.21.4\n   Compiling foldhash v0.2.0\n   Compiling const-oid v0.10.2\n   Compiling atomic-waker v1.1.2\n   Compiling piper v0.2.5\n   Compiling libsqlite3-sys v0.38.2\n   Compiling tracing-core v0.1.36\n   Compiling async-lock v3.4.2\n   Compiling serde_json v1.0.151\n   Compiling blocking v1.7.0\n   Compiling uuid v1.26.0\n   Compiling digest v0.11.3\n   Compiling async-executor v1.14.0\n   Compiling async-broadcast v0.7.2\n   Compiling hashlink v0.12.1\n   Compiling ordered-stream v0.2.0\n   Compiling cpufeatures v0.3.1\n   Compiling itoa v1.0.18\n   Compiling smallvec v1.16.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling hex v0.4.3\n   Compiling memchr v2.8.3\n   Compiling fallible-iterator v0.3.0\n   Compiling sha2 v0.11.0\n   Compiling hmac v0.13.0\n   Compiling fs2 v0.4.3\n   Compiling ascension-platform-linux-descriptors v0.1.0 (<host-path>\n   Compiling base64 v0.22.1\n   Compiling zeroize v1.9.0\n   Compiling enumflags2_derive v0.7.12\n   Compiling tracing-attributes v0.1.31\n   Compiling async-recursion v1.1.1\n   Compiling polling v3.11.0\n   Compiling serde_derive v1.0.229\n   Compiling serde_repr v0.1.21\n   Compiling async-trait v0.1.92\n   Compiling async-signal v0.2.14\n   Compiling tracing v0.1.44\n   Compiling async-process v2.5.0\n   Compiling zvariant_utils v4.2.0\n   Compiling enumflags2 v0.7.12\n   Compiling zcheapstr v1.1.0\n   Compiling zvariant_derive v5.15.0\n   Compiling zvariant v5.15.0\n   Compiling zbus_names v4.3.4\n   Compiling zbus_macros v5.19.0\n   Compiling zbus v5.16.0\n   Compiling rusqlite v0.40.2\n   Compiling ascension-watchdog v0.1.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 5m 33s\n",
+      "issues": []
+    },
+    "sts2-game-core": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 21359,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling winnow v1.0.4\n   Compiling zmij v1.0.23\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling const-oid v0.10.2\n   Compiling serde_json v1.0.151\n   Compiling itoa v1.0.18\n   Compiling cpufeatures v0.3.0\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.12\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-game-core v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 21.06s\n",
+      "issues": []
+    },
+    "sts2-game-mod": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 37594,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling serde_core v1.0.229\n   Compiling typenum v1.20.1\n   Compiling zmij v1.0.23\n   Compiling serde v1.0.229\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling itoa v1.0.18\n   Compiling memchr v2.8.3\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling sts2-game-mod-http-adapter v0.0.0 (<host-path>\n   Compiling sts2-game-mod-host v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling syn v3.0.3\n   Compiling hybrid-array v0.4.15\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling serde_derive v1.0.229\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling sts2-game-mod-loading v0.0.0 (<host-path>\n   Compiling sts2-game-mod v0.0.0 (<host-path>\n   Compiling sts2-release-tool v0.0.0 (<host-path>\n   Compiling sts2-game-mod-interop v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 37.16s\n",
+      "issues": []
+    },
+    "sts2-gateway": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 209769,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.24\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling libc v0.2.189\n   Compiling autocfg v1.5.1\n   Compiling cfg-if v1.0.4\n   Compiling serde v1.0.229\n   Compiling memchr v2.8.3\n   Compiling getrandom v0.3.4\n   Compiling zmij v1.0.23\n   Compiling zerocopy v0.8.56\n   Compiling parking_lot_core v0.9.12\n   Compiling shlex v2.0.1\n   Compiling generic-array v0.14.7\n   Compiling ahash v0.8.12\n   Compiling serde_json v1.0.151\n   Compiling smallvec v1.16.0\n   Compiling ref-cast v1.0.27\n   Compiling typenum v1.20.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling regex-syntax v0.8.11\n   Compiling aho-corasick v1.1.5\n   Compiling cc v1.4.5\n   Compiling num-traits v0.2.19\n   Compiling scopeguard v1.2.0\n   Compiling syn v3.0.3\n   Compiling pkg-config v0.3.34\n   Compiling once_cell v1.21.4\n   Compiling itoa v1.0.18\n   Compiling vcpkg v0.2.15\n   Compiling lock_api v0.4.14\n   Compiling syn v2.0.119\n   Compiling getrandom v0.4.3\n   Compiling allocator-api2 v0.2.21\n   Compiling equivalent v1.0.2\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling heck v0.5.0\n   Compiling num-bigint v0.4.8\n   Compiling num-iter v0.1.46\n   Compiling regex-automata v0.4.18\n   Compiling foldhash v0.2.0\n   Compiling libsqlite3-sys v0.38.2\n   Compiling borrow-or-share v0.2.4\n   Compiling bit-vec v0.8.0\n   Compiling unicode-general-category v1.1.0\n   Compiling hashbrown v0.17.1\n   Compiling bit-set v0.8.0\n   Compiling parking_lot v0.12.5\n   Compiling block-buffer v0.10.4\n   Compiling crypto-common v0.1.7\n   Compiling num-rational v0.4.2\n   Compiling num-cmp v0.1.0\n   Compiling outref v0.5.2\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling num v0.4.3\n   Compiling fraction v0.17.0\n   Compiling strum_macros v0.28.0\n   Compiling winnow v1.0.4\n   Compiling percent-encoding v2.3.2\n   Compiling micromap v0.3.0\n   Compiling bytecount v0.6.9\n   Compiling vsimd v0.8.0\n   Compiling regex v1.13.1\n   Compiling fancy-regex v0.19.0\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling uuid-simd v0.8.0\n   Compiling digest v0.10.7\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling strum v0.28.0\n   Compiling serde_spanned v1.1.1\n   Compiling jsonschema-regex v0.55.1\n   Compiling data-encoding v2.11.1\n   Compiling fallible-iterator v0.3.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling bitflags v2.13.1\n   Compiling cpufeatures v0.2.17\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling sha2 v0.10.9\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling uuid v1.23.5\n   Compiling fs2 v0.4.3\n   Compiling base64 v0.22.1\n   Compiling fluent-uri v0.4.1\n   Compiling jsonschema-value v0.55.1\n   Compiling email_address v0.2.9\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling referencing v0.55.1\n   Compiling jsonschema v0.55.0\n   Compiling rusqlite v0.40.2\n   Compiling sts2-gateway v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 3m 29s\n",
+      "issues": []
+    },
+    "sts2-harness": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 276568,
+      "stdout_tail": "",
+      "stderr_tail": "    Blocking waiting for file lock on package cache\n   Compiling cfg-if v1.0.4\n   Compiling libc v0.2.189\n   Compiling typenum v1.20.1\n   Compiling serde_core v1.0.229\n   Compiling version_check v0.9.5\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling zmij v1.0.23\n   Compiling shlex v2.0.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling simd-adler32 v0.3.10\n   Compiling serde_json v1.0.151\n   Compiling const-oid v0.10.2\n   Compiling cc v1.4.5\n   Compiling pkg-config v0.3.34\n   Compiling adler2 v2.0.1\n   Compiling vcpkg v0.2.15\n   Compiling itoa v1.0.18\n   Compiling serde v1.0.229\n   Compiling zeroize v1.9.0\n   Compiling crc32fast v1.5.1\n   Compiling hybrid-array v0.4.15\n   Compiling generic-array v0.14.7\n   Compiling memchr v2.8.3\n   Compiling cpufeatures v0.3.1\n   Compiling syn v3.0.5\n   Compiling getrandom v0.4.3\n   Compiling subtle v2.6.1\n   Compiling crypto-common v0.2.2\n   Compiling block-buffer v0.12.1\n   Compiling cpufeatures v0.2.17\n   Compiling bitflags v2.13.2\n   Compiling miniz_oxide v0.9.1\n   Compiling rustix v1.1.4\n   Compiling getrandom v0.3.4\n   Compiling getrandom v0.2.17\n   Compiling libsqlite3-sys v0.38.2\n   Compiling errno v0.3.14\n   Compiling opaque-debug v0.3.1\n   Compiling rand_core v0.6.4\n   Compiling signal-hook-registry v1.4.8\n   Compiling flate2 v1.1.10\n   Compiling inout v0.1.4\n   Compiling crypto-common v0.1.7\n   Compiling mio v1.2.3\n   Compiling digest v0.11.3\n   Compiling miniz_oxide v0.8.9\n   Compiling cipher v0.4.4\n   Compiling universal-hash v0.5.1\n   Compiling aead v0.5.2\n   Compiling poly1305 v0.8.0\n   Compiling fdeflate v0.3.7\n   Compiling sha2 v0.11.0\n   Compiling fallible-streaming-iterator v0.1.9\n   Compiling chacha20 v0.9.1\n   Compiling pin-project-lite v0.2.17\n   Compiling fallible-iterator v0.3.0\n   Compiling smallvec v1.16.0\n   Compiling bytes v1.12.1\n   Compiling linux-raw-sys v0.12.1\n   Compiling png v0.18.1\n   Compiling chacha20poly1305 v0.10.1\n   Compiling uuid v1.23.5\n   Compiling ryu-js v1.0.2\n   Compiling winnow v1.0.4\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling windows-link v0.2.1\n   Compiling windows-sys v0.61.2\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling serde_derive v1.0.229\n   Compiling tokio-macros v2.7.2\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling sts2-expert-state-package v0.0.0 (<host-path>\n   Compiling tokio v1.53.1\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-harness-windows-boundary v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (https://github.com/AI-Ascension/sts2-protocol.git?rev=0bc689eabc5542ede2b09b030d9ea32daa8a73e7#0bc689ea)\n   Compiling sts2-patch-diff v0.1.0 (<host-path>\n   Compiling rusqlite v0.40.2\n   Compiling sts2-harness v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 4m 35s\n",
+      "issues": []
+    },
+    "sts2-mcp-server": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 34705,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling sts2-mcp-server v0.0.0 (<host-path>\n   Compiling repo-policy v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 34.36s\n",
+      "issues": []
+    },
+    "sts2-protocol": {
+      "status": "pass",
+      "program": "cargo",
+      "args": [
+        "+1.97.1",
+        "build",
+        "--locked",
+        "--release"
+      ],
+      "working_directory": "<host-path>",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_millis": 29689,
+      "stdout_tail": "",
+      "stderr_tail": "   Compiling serde_core v1.0.229\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling typenum v1.20.1\n   Compiling zmij v1.0.23\n   Compiling winnow v1.0.4\n   Compiling serde v1.0.229\n   Compiling const-oid v0.10.2\n   Compiling serde_json v1.0.151\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling cfg-if v1.0.4\n   Compiling cpufeatures v0.3.1\n   Compiling itoa v1.0.18\n   Compiling memchr v2.8.3\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling hybrid-array v0.4.15\n   Compiling syn v3.0.3\n   Compiling block-buffer v0.12.1\n   Compiling crypto-common v0.2.2\n   Compiling digest v0.11.3\n   Compiling sha2 v0.11.0\n   Compiling serde_spanned v1.1.1\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling serde_derive v1.0.229\n   Compiling toml v1.1.5+spec-1.1.0\n   Compiling repo-policy v0.0.0 (<host-path>\n   Compiling sts2-protocol v0.0.0 (<host-path>\n    Finished `release` profile [optimized] target(s) in 29.59s\n",
+      "issues": []
+    }
+  },
+  "issues": [],
+  "evidence_note": "Absolute host worktree paths in the raw orchestrator report were redacted to <host-path> before commit. Counts, digests, exit codes, statuses, timeouts, and durations are unchanged."
+}

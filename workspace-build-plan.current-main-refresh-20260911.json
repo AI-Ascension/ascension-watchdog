@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "classification": "current-main-refresh-build-set-not-activated",
+  "purpose": "Declarative locked build commands for the admitted current-main source set. A passing build-set is compile evidence only: it is not an installed service, activation, live-host, reboot, rollback, or soak result.",
+  "toolchain": "1.97.1",
+  "default": {
+    "program": "cargo",
+    "args": ["+{toolchain}", "build", "--locked", "--release"],
+    "env": {
+      "CARGO_TARGET_DIR": "{scratch}/target"
+    },
+    "timeout_seconds": 3600
+  },
+  "repositories": {
+    "ascension-watchdog": null,
+    "sts2-gateway": null,
+    "sts2-harness": null,
+    "sts2-mcp-server": null,
+    "sts2-game-mod": null,
+    "sts2-protocol": null,
+    "sts2-game-core": null
+  }
+}

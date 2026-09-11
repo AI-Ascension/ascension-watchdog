@@ -375,12 +375,16 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
 fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
     let subcommand = args.first().map(String::as_str).ok_or_else(|| {
         WatchdogError::InvalidInput(
-            "release requires inspect, source-set, activate, or rollback".to_owned(),
+            "release requires inspect, source-set, build-set, activate, or rollback".to_owned(),
         )
     })?;
     if subcommand == "source-set" {
         args.remove(0);
         return source_set_command(args);
+    }
+    if subcommand == "build-set" {
+        args.remove(0);
+        return build_set_command(args);
     }
     if matches!(subcommand, "activate" | "rollback") {
         let rollback = subcommand == "rollback";
@@ -507,6 +511,39 @@ fn source_set_command(args: &mut Vec<String>) -> Result<Option<String>> {
     .map_err(WatchdogError::InvalidInput)?;
     let output = serde_json::to_string(&report)?;
     if report.admitted {
+        Ok(Some(output))
+    } else {
+        Err(WatchdogError::VerificationFailed(output))
+    }
+}
+
+fn build_set_command(args: &mut Vec<String>) -> Result<Option<String>> {
+    let manifest = take_option(args, "--manifest").ok_or_else(|| {
+        WatchdogError::InvalidInput("release build-set requires --manifest".to_owned())
+    })?;
+    let plan = take_option(args, "--plan").ok_or_else(|| {
+        WatchdogError::InvalidInput("release build-set requires --plan".to_owned())
+    })?;
+    let repository_paths = keyed_paths(args, "--repo")?;
+    let artifact_paths = keyed_paths(args, "--artifact")?;
+    let scratch = take_option(args, "--scratch")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected release build-set argument".to_owned(),
+        ));
+    }
+    let report = crate::build_set::run_build_set(
+        Path::new(&manifest),
+        Path::new(&plan),
+        &repository_paths,
+        &artifact_paths,
+        &scratch,
+    )
+    .map_err(WatchdogError::InvalidInput)?;
+    let output = serde_json::to_string(&report)?;
+    if report.admitted && report.built && report.issues.is_empty() {
         Ok(Some(output))
     } else {
         Err(WatchdogError::VerificationFailed(output))
@@ -1101,6 +1138,7 @@ fn usage() -> &'static str {
         "  watchdog release inspect --config PATH --release-id ID\n",
         "  watchdog release inspect --manifest PATH --root PATH\n",
         "  watchdog release source-set verify --manifest PATH --repo NAME=PATH [...] [--artifact NAME=PATH [...]]\n",
+        "  watchdog release build-set --manifest PATH --plan PATH --repo NAME=PATH [...] [--artifact NAME=PATH [...]] [--scratch PATH]\n",
         "  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n",
