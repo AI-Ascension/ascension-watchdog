@@ -70,16 +70,17 @@
       "state": "merged; current main f5daf69; component gates pass"
     },
     "ai-agent-observability": {
-      "revision": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca",
-      "ref": "codex/collector-persistent-queues-20260911",
+      "revision": "687ad82b7bd6a4e1eefeed08aad901af83e29067",
+      "ref": "main",
       "remote": "AI-Ascension/ai-agent-observability",
-      "pull_request": 21,
-      "state": "open; persistent bounded Collector queue/WAL patch; static and pinned-binary gates pass; not-merged"
+      "pull_request": 20,
+      "follow_up_pull_request": 22,
+      "state": "merged; current main includes persistent bounded Collector queue/WAL and materialization repairs; static-probe portability follow-up open"
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-current-local-worktrees-and-remote-main-or-review-heads-2026-09-11T06:24:22Z",
-    "component_locked_builds": "verified-in-isolated-source-worktrees; observability also validated by pinned Collector binary",
+    "source_pins": "confirmed-from-current-local-worktrees-and-remote-main-or-review-heads-2026-09-11T06:38:09Z",
+    "component_locked_builds": "verified-in-isolated-source-worktrees; observability main also validated by pinned Collector binary",
     "artifact_bytes_cross_component": "schema/conformance equal for inspected coop-native-v1 copies; consumer bindings differ",
     "cross_consumer_build": "not-run; no unified consumer workspace/build exists",
     "hosted_watchdog_runs": "not-run-for-current-9144289; prior hosted runs remain historical",

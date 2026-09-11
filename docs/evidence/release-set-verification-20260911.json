@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T06:24:22Z",
+  "captured_at": "2026-09-11T06:38:09Z",
   "classification": "candidate-source-set-component-gates-not-release-admission",
   "purpose": "Pin the source revisions and validation boundary produced by the cross-machine resume wave.",
   "source_set": {
@@ -41,10 +41,10 @@
       "state": "current remote main"
     },
     "ai-agent-observability": {
-      "revision": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca",
-      "ref": "codex/collector-persistent-queues-20260911",
-      "remote_pr": 21,
-      "state": "open; review branch, not merged"
+      "revision": "687ad82b7bd6a4e1eefeed08aad901af83e29067",
+      "ref": "main",
+      "remote_pr": 20,
+      "state": "merged; persistent Collector queue/WAL and materialization repairs on current main; PR #22 portability follow-up open"
     }
   },
   "component_gates": {
@@ -62,9 +62,10 @@
     "sts2-protocol": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
     "sts2-game-core": "format, strict-clippy, and locked all-target/all-feature tests pass in isolated worktree",
     "ai-agent-observability": {
-      "fixtures": "pass: validation-regressions, bootstrap, health-probe, installer-guards, materialize-guards, query-provision, shell syntax, diff check",
+      "fixtures": "pass: validation-regressions, bootstrap, collector-persistence, installer-guards, materialize-guards, query-provision, shell syntax, diff check; health-probe passes on follow-up PR #22",
       "collector_config": "pass with official otel/opentelemetry-collector-contrib 0.160.0 binary and health component-status feature gate",
-      "compose_and_image": "not-run: Docker and Podman unavailable"
+      "compose_and_image": "not-run: Docker and Podman unavailable",
+      "remote_delivery": "persistence feature merged in PR #20; static-probe portability follow-up PR #22 open"
     }
   },
   "artifacts": {
@@ -93,7 +94,8 @@
   },
   "remote_delivery": {
     "watchdog_pr": "https://github.com/AI-Ascension/ascension-watchdog/pull/11",
-    "observability_pr": "https://github.com/AI-Ascension/ai-agent-observability/pull/21",
+    "observability_pr": "https://github.com/AI-Ascension/ai-agent-observability/pull/20",
+    "observability_portability_pr": "https://github.com/AI-Ascension/ai-agent-observability/pull/22",
     "merged": false,
     "activated": false
   }

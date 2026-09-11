@@ -314,11 +314,12 @@ The exact companion source heads are gateway
 `0bc689eabc5542ede2b09b030d9ea32daa8a73e7`, and game-core
 `f5daf69f4f2c43fddbb04e7799d32503f7066110`; each passed isolated locked
 format, strict Clippy, and all-target/all-feature test gates. Observability
-PR #21 is `b4130de9d35816ebbc9f1d3728dcb4f0a42547ca`; its persistent bounded
-Collector queue/WAL changes passed the available fixture suites and pinned
-0.160.0 binary configuration validation. Docker/Podman, Compose rendering,
-image build, live queue recovery, and external service execution remain
-unavailable.
+main at `687ad82b7bd6a4e1eefeed08aad901af83e29067` contains the persistent
+bounded Collector queue/WAL and materialization repairs merged in PR #20. Its
+available persistence fixtures and pinned 0.160.0 binary configuration
+validation pass; the minimal static-probe fallback is under review in PR #22.
+Docker/Podman, Compose rendering, image build, live queue recovery, and
+external service execution remain unavailable.
 
 The current `coop-native-v1` schema and conformance bytes agree, but current
 consumer-conformance bindings differ between protocol, gateway/MCP, and
@@ -331,6 +332,6 @@ partial or unverified. The separate axes remain
 `LINUX_SERVICE_ADAPTER_VERIFIED = partial`,
 `LIVE_HOST_RECOVERY_VERIFIED = unverified`,
 `COLD_BOOT_RECOVERY_VERIFIED = unverified`, `SOAK_VERIFIED = unverified`, and
-`REMOTE_DELIVERY_STATUS = watchdog PR #11 and observability PR #21 open; not
-merged or activated`. Nested-agent depth 2/3 remains unobserved because no
+`REMOTE_DELIVERY_STATUS = watchdog PR #11 open; observability PR #20 merged
+and PR #22 open; not activated`. Nested-agent depth 2/3 remains unobserved because no
 spawn surface is exposed; no depth-4 bypass was attempted.

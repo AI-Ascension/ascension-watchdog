@@ -1,6 +1,6 @@
 # Current source set and verification boundary — 2026-09-11
 
-Captured at `2026-09-11T06:24:22Z`. This is a resumable integration record,
+Captured at `2026-09-11T06:38:09Z`. This is a resumable integration record,
 not an activated release. Every revision below is an exact local source
 revision; a component passing its own gates does not establish cross-consumer,
 service, live-host, reboot, or soak evidence.
@@ -16,11 +16,12 @@ service, live-host, reboot, or soak evidence.
 | `sts2-game-mod` | `main` | `bd8e90542dfc89366f820150c5c755e32716b1b0` | current remote main; component gates pass |
 | `sts2-protocol` | `main` | `0bc689eabc5542ede2b09b030d9ea32daa8a73e7` | current remote main; artifact/conformance tests pass |
 | `sts2-game-core` | `main` | `f5daf69f4f2c43fddbb04e7799d32503f7066110` | current remote main; component gates pass |
-| `ai-agent-observability` | `codex/collector-persistent-queues-20260911` / PR [#21](https://github.com/AI-Ascension/ai-agent-observability/pull/21) | `b4130de9d35816ebbc9f1d3728dcb4f0a42547ca` | open; persistent Collector queue/WAL patch; static and pinned-binary gates pass |
+| `ai-agent-observability` | `main` / merged PR [#20](https://github.com/AI-Ascension/ai-agent-observability/pull/20) | `687ad82b7bd6a4e1eefeed08aad901af83e29067` | current remote main; persistent Collector queue/WAL and materialization repairs merged; portability follow-up PR #22 open |
 
 The source set was fetched into isolated worktrees. No changes were made to
-the companion `main` worktrees. The observability revision is deliberately a
-review branch and is not silently treated as `main` or as a release artifact.
+the companion `main` worktrees. The earlier observability review branch PR #21
+was closed as superseded by merged PR #20; the separate static-probe fallback
+is PR #22 and is not silently treated as merged or as a release artifact.
 
 ## Gates executed
 
@@ -45,7 +46,9 @@ Gateway, harness, MCP, game-mod, protocol, and game-core each passed their
 locked workspace format, strict Clippy, and all-target/all-feature test gates
 in their isolated source worktrees. The observability branch passed its shell
 syntax, validation-regression, bootstrap, installer-guard, materialization-
-guard, query-provision, and health-probe fixture suites. The official
+guard, query-provision, and Collector persistence fixture suites on merged
+main. Its health-probe fixture passed on PR #22 after the portable `readelf`
+fallback was added. The official
 `otel/opentelemetry-collector-contrib:0.160.0` binary validated the updated
 Collector configuration with
 `--feature-gates=+extension.healthcheck.useComponentStatus`.
@@ -86,7 +89,7 @@ in the repository layout.
 | `LIVE_HOST_RECOVERY_VERIFIED` | unverified |
 | `COLD_BOOT_RECOVERY_VERIFIED` | unverified |
 | `SOAK_VERIFIED` | unverified |
-| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open; observability PR #21 open; no merge or activation |
+| `REMOTE_DELIVERY_STATUS` | watchdog PR #11 open; observability PR #20 merged and PR #22 open; no activation |
 | `BLOCKED_EXTERNAL` | yes: native authorized hosts, Docker/Podman, unified consumer build, and nested spawn surface are unavailable |
 
 The historical native Linux process-boundary smoke remains linked from the

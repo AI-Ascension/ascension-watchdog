@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T06:24:22Z",
+  "captured_at": "2026-09-11T06:38:09Z",
   "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
   "phase": "exact-source-set-and-boundary-recorded",
   "root": {
@@ -16,16 +16,16 @@
     "sts2-game-mod": "bd8e90542dfc89366f820150c5c755e32716b1b0",
     "sts2-protocol": "0bc689eabc5542ede2b09b030d9ea32daa8a73e7",
     "sts2-game-core": "f5daf69f4f2c43fddbb04e7799d32503f7066110",
-    "ai-agent-observability": "b4130de9d35816ebbc9f1d3728dcb4f0a42547ca"
+    "ai-agent-observability": "687ad82b7bd6a4e1eefeed08aad901af83e29067"
   },
   "completed_in_this_wave": [
     "exposed authenticated quarantine through the watchdog CLI",
     "added bounded read-only diagnostics and a no-payload/no-result integration test",
     "made Linux protected-tempdir fixtures work in minimal containers",
-    "implemented persistent bounded OpenTelemetry exporter queues on an isolated observability branch",
+    "validated persistent bounded OpenTelemetry exporter queues merged on observability main",
     "validated all available component source gates",
     "recorded exact current source and artifact digests",
-    "pushed watchdog PR #11 and observability PR #21"
+    "pushed watchdog PR #11; closed superseded observability PR #21 and opened portability follow-up PR #22"
   ],
   "delegation": {
     "requested_model": "gpt-5.6-luna",
@@ -38,7 +38,7 @@
   "verification": {
     "watchdog": "pass",
     "companion_component_gates": "pass in isolated worktrees",
-    "observability_collector_config": "pass with pinned 0.160.0 binary",
+    "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants pass; PR #22 makes the static-probe fixture portable",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",
     "native_service": "not-run",
@@ -51,7 +51,8 @@
     "no Docker or Podman executable",
     "no explicitly authorized native Windows/Linux service or game host",
     "no unified cross-repository consumer build/conformance target",
-    "current coop-native-v1 consumer-conformance bytes are not one identical current set"
+    "current coop-native-v1 consumer-conformance bytes are not one identical current set",
+    "observability PR #21 was superseded by merged PR #20; PR #22 remains open"
   ],
   "evidence": {
     "source_set": "docs/evidence/current-source-set-20260911.md",
