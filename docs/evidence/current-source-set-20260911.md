@@ -181,3 +181,22 @@ repositories remain clean and exactly pinned. Admission is still rejected only
 at the consumer boundary: gateway/MCP retain pending markers and the current
 consumer bindings are not one identical current set. No artifact bytes were
 edited to force admission.
+
+## Delivery update — 2026-09-11 11:17 UTC
+
+The consumer contract refresh is now delivered as four focused open PRs:
+protocol [#41](https://github.com/AI-Ascension/sts2-protocol/pull/41), gateway
+[#43](https://github.com/AI-Ascension/sts2-gateway/pull/43), MCP [#44](https://github.com/AI-Ascension/sts2-mcp-server/pull/44),
+and harness [#85](https://github.com/AI-Ascension/sts2-harness/pull/85). Their
+branches carry aligned `coop-native-v1` contract files and passing checksum
+inventories, with serialized consumer bindings for the current main source
+heads. The protocol, gateway, MCP, and harness locked package gates pass at
+those refreshed copies; hosted policy/quality checks are green except that
+harness quality was still running at capture. These branches are not part of
+the approved source set until reviewed and merged.
+
+The current source-set manifest and the read-only report above intentionally
+remain unchanged: the exact main worktrees still contain the pre-refresh
+copies and admission remains closed. A post-merge refresh must account for
+the merge revisions themselves, rerun the source-set verifier, and preserve
+the separate native service/live-host/reboot/soak classifications.

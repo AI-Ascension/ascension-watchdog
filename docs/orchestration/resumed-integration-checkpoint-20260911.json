@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-11T10:41:43Z",
-  "status": "resume-wave-source-and-component-gates-complete; release admission blocked",
-  "phase": "exact-source-set-and-boundary-recorded",
+  "captured_at": "2026-09-11T11:17:06Z",
+  "status": "resume-wave-source-and-component-gates-complete; consumer artifact refresh PRs open; release admission blocked",
+  "phase": "exact-source-set-and-consumer-refresh-prs-recorded",
   "root": {
     "repository": "AI-Ascension/ascension-watchdog",
     "branch": "codex/watchdog-resume-20260911",
@@ -31,7 +31,8 @@
     "refreshed the exact source-set verifier and root hosted lanes at 538346e; gateway PR #42 merged at f4d1409; source-set admission remains closed on consumer-binding drift",
     "inspected public AI-Ascension/.github and AI-Ascension.github.io policy/source trees; recorded their evidence and static-site boundaries",
     "extended harness PR #84 to 40a4128 with the Windows worker endpoint boundary; local exact-head and hosted Rust-quality/policy gates pass",
-    "corrected Linux systemd notification sequencing so the first completed loop sends READY only and later progress sends WATCHDOG only when configured; current-head focused tests, service-loop integration, full serial workspace, and hosted PR lanes pass"
+    "corrected Linux systemd notification sequencing so the first completed loop sends READY only and later progress sends WATCHDOG only when configured; current-head focused tests, service-loop integration, full serial workspace, and hosted PR lanes pass",
+    "refreshed all four coop-native-v1 artifact copies to one current-main serialized consumer record; protocol PR #41, gateway PR #43, MCP PR #44, and harness PR #85 are open with local checksum/component gates recorded"
   ],
   "pending_follow_ups": [
     {
@@ -41,6 +42,18 @@
       "based_on": "00bd9e123a86fca39bbffb65b370aac7ed2c8218",
       "status": "open; local format, strict policy, Linux/Windows-target Clippy and check, focused rerun, serial locked workspace, hosted Rust-quality run 34588219783, and hosted policy run 34588219842 pass; excluded from exact source set until reviewed and merged",
       "scope": "reject explicit Runtime-v3 resume when the durable episode is missing instead of creating a new episode; add source-derived Windows named-pipe, peer-identity, protected-credential, and retained-image boundary"
+    },
+    {
+      "workstream": "coop-native-v1 consumer artifact refresh",
+      "pull_requests": [41, 43, 44, 85],
+      "commits": {
+        "sts2-protocol": "57edfcb30028d910087121f46b9649564155e328",
+        "sts2-gateway": "72c79fd0bda286265201f25cf77f13f2a4fc6f14",
+        "sts2-mcp-server": "a0e24fcd8ba05fa45782755855aed7ef0a8def41",
+        "sts2-harness": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"
+      },
+      "status": "open PR-only metadata refresh; protocol/gateway/MCP hosted policy and quality checks pass; harness policy passes and quality was pending at capture; excluded from exact source set until reviewed and merged",
+      "scope": "align manifest, consumer-conformance, README metadata, and SHA256SUMS to producer d23ca83 and current main consumer revisions; live native settlement remains unverified"
     }
   ],
   "delegation": {
@@ -53,9 +66,10 @@
   },
   "verification": {
     "watchdog": "pass locally at current PR head f5b81f4; focused systemd tests, full serial workspace gate, strict local lint, and source-set CLI gate pass; exact-head hosted Ubuntu, Windows, dependency, and standards lanes pass (validation run 34589427447; standards run 34589427371); selected source-set implementation pin remains 538346e",
-    "companion_component_gates": "pass in isolated worktrees",
+    "companion_component_gates": "pass in isolated worktrees; refreshed protocol, gateway, MCP, and harness package gates also pass",
     "gateway_follow_up_pr42": "merged at f4d1409; 9575b8b branch local gates pass and hosted Rust quality/repository-policy checks pass",
     "harness_follow_up_pr84": "40a4128 local format/policy/Linux-Clippy/Windows-target-Clippy-check/focused/full-serial gates pass; hosted Rust-quality 34588219783 and policy 34588219842 pass; PR remains open and excluded from exact source set",
+    "consumer_artifact_refresh": "four focused PRs open: protocol #41 at 57edfcb, gateway #43 at 72c79fd, MCP #44 at a0e24fc, harness #85 at 48afc35; all four checksum inventories and local package gates pass; current main candidate remains unadmitted until post-merge regeneration",
     "observability_collector_config": "pass with pinned 0.160.0 binary; merged main persistence invariants and portable static-probe health fixture pass",
     "compose_image_live_volume": "not-run: Docker/Podman unavailable",
     "unified_cross_consumer_build": "not-run",
@@ -75,6 +89,7 @@
   ],
   "evidence": {
     "source_set": "docs/evidence/current-source-set-20260911.md",
+    "consumer_artifact_refresh": "docs/evidence/consumer-artifact-refresh-20260911.md",
     "release_set": "docs/evidence/release-set-verification-20260911.json",
     "organization_policy": "docs/evidence/organization-policy-inspection-20260911.md",
     "historical_records_preserved": true

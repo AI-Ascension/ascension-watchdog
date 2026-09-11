@@ -406,3 +406,23 @@ consumer-conformance bindings in the gateway/MCP/harness artifact copies. The
 consumer implementation is not available to repair from this root, so no
 artifact bytes were normalized. Native service/live-host, cold-boot, unified
 consumer build, nested depth-2/3 delegation, and soak evidence remain open.
+
+## Resume-wave refresh — 2026-09-11 11:17 UTC
+
+The consumer artifact boundary is now addressed through four focused
+PR-only refreshes: protocol [#41](https://github.com/AI-Ascension/sts2-protocol/pull/41),
+gateway [#43](https://github.com/AI-Ascension/sts2-gateway/pull/43), MCP
+[#44](https://github.com/AI-Ascension/sts2-mcp-server/pull/44), and harness
+[#85](https://github.com/AI-Ascension/sts2-harness/pull/85). Their copies of
+the `coop-native-v1` manifest, consumer-conformance record, README metadata,
+and checksums are aligned to producer `d23ca83` and the current main consumer
+revisions. Protocol, gateway, MCP, and harness locked package gates pass at
+the refreshed copies; hosted policy/quality checks pass except that harness
+quality was still running at capture. The detailed record is
+[`consumer-artifact-refresh-20260911.md`](consumer-artifact-refresh-20260911.md).
+
+These PR branches are not merged and therefore are not part of the current
+candidate source set. The root source-set result remains `admitted=false` and
+must be rerun against post-merge revisions. Native service/live-host,
+Windows SCM, cold-boot, unified release build, nested depth-2/3 delegation,
+and soak evidence remain open.

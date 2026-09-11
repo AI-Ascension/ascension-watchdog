@@ -51,3 +51,21 @@ exited zero, with focused systemd notifier 5/5 and service-loop 6/6 passing. A
 future release candidate must regenerate the source
 manifest, produce one current consumer-conformance set, and rerun this gate
 before any release or host claim is considered.
+
+## Delivery update — 2026-09-11 11:17 UTC
+
+The stale artifact boundary has been repaired on four PR-only branches. The
+refreshes align `manifest.json`, `consumer-conformance.json`, README metadata,
+and checksum rows, and bind the serialized record to the current main gateway
+`f4d1409`, MCP `98ab84b`, and harness `00bd9e1` revisions. Protocol PR #41,
+gateway PR #43, MCP PR #44, and harness PR #85 contain the exact changes; the
+full evidence is in
+[`consumer-artifact-refresh-20260911.md`](consumer-artifact-refresh-20260911.md).
+
+All four staged artifact inventories and the protocol/gateway/MCP/harness
+locked component gates pass locally. The current source-set candidate still
+uses the main worktrees, not these unmerged PR branches, so its recorded
+admission result remains `admitted=false`. After review and merge, the source
+manifest and consumer record must be regenerated against the resulting main
+heads and this read-only gate must be rerun. No release or live-host claim is
+made here.

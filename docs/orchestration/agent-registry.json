@@ -2,7 +2,7 @@
   "classification": "confirmed",
   "source": "native thread metadata and executed turn contexts, not agent self-description",
   "root_thread_id": "01a078a4-d17d-7101-afa1-9e68655beedd",
-  "last_reconciled": "2026-09-11T10:41:43Z",
+  "last_reconciled": "2026-09-11T11:17:06Z",
   "maximum_reserved_descendants": 12,
   "current_wave": "integration-wave-20260910.json",
   "current_wave_note": "The resumed_wave below is historical. Current reservations, results, and blockers are recorded in the referenced dated wave.",
@@ -38,9 +38,11 @@
     "observability_branch": "main",
     "observability_commit": "630431716ebfbf86280f9fd56f19d6016ad7aeb2",
     "observability_pull_request": 22,
-    "status": "watchdog selected pin 538346e is open in PR11 with current head f5b81f4 and exact-head hosted validation/standards green; current systemd notifier and full serial workspace tests pass; exact source-set verifier rejects stale consumer bindings and differing manifests; gateway PR42 is merged at f4d1409; harness main 00bd9e1 remains the source pin while PR84 is open at 40a4128 with local and hosted gates green; MCP 98ab84b, game-mod bd8e905, protocol 0bc689e, game-core f5daf69 and observability 6304317 remain current main pins; no unified consumer build, native service, live host, cold boot, activation, or soak",
+    "consumer_artifact_refresh_prs": {"protocol": {"pull_request": 41, "commit": "57edfcb30028d910087121f46b9649564155e328"}, "gateway": {"pull_request": 43, "commit": "72c79fd0bda286265201f25cf77f13f2a4fc6f14"}, "mcp": {"pull_request": 44, "commit": "a0e24fcd8ba05fa45782755855aed7ef0a8def41"}, "harness": {"pull_request": 85, "commit": "48afc354f9df2d5e93fc653e1bcd757dbb1127e8"}},
+    "status": "watchdog selected pin 538346e is open in PR11 with current head f5b81f4 and exact-head hosted validation/standards green; current systemd notifier and full serial workspace tests pass; exact source-set verifier rejects the pre-refresh main consumer copies; gateway PR42 is merged at f4d1409; harness main 00bd9e1 remains the source pin while PR84 is open at 40a4128 with local and hosted gates green; current-main coop-native-v1 artifact refreshes are open in protocol PR41, gateway PR43, MCP PR44, and harness PR85; no unified consumer build, native service, live host, cold boot, activation, or soak",
     "observed_depth": 1,
-    "current_wave": "docs/evidence/current-source-set-20260911.md"
+    "current_wave": "docs/evidence/current-source-set-20260911.md",
+    "artifact_refresh_evidence": "docs/evidence/consumer-artifact-refresh-20260911.md"
   },
   "resumed_wave": {
     "previous_handles": "all nine prior handles absent from native list_agents; preserved worktrees reconciled before four replacement assignments",
