@@ -1,5 +1,41 @@
 use ascension_watchdog::{Supervisor, WatchdogConfig, cli};
 use serde_json::Value;
+use std::path::Path;
+
+#[cfg(windows)]
+use std::process::Command;
+
+#[cfg(windows)]
+fn protect_config(path: &Path) {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r"
+$ErrorActionPreference = 'Stop'
+$securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $securityModule -Force -ErrorAction Stop
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:ASCENSION_TEST_CONFIG_PATH -AclObject $acl
+            ",
+        ])
+        .env("ASCENSION_TEST_CONFIG_PATH", path)
+        .status()
+        .expect("apply protected diagnostics config ACL");
+    assert!(
+        status.success(),
+        "PowerShell failed to apply protected diagnostics config ACL"
+    );
+}
+
+#[cfg(not(windows))]
+fn protect_config(_path: &Path) {}
 
 #[test]
 fn diagnostics_is_bounded_and_read_only() -> ascension_watchdog::Result<()> {
@@ -10,6 +46,7 @@ fn diagnostics_is_bounded_and_read_only() -> ascension_watchdog::Result<()> {
         ..WatchdogConfig::default()
     };
     config.to_file(&config_path)?;
+    protect_config(&config_path);
     let supervisor = Supervisor::initialize(config.clone())?;
     let before = supervisor.status()?;
     drop(supervisor);
