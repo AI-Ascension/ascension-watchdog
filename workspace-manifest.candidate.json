@@ -11,12 +11,12 @@
   },
   "repositories": {
     "ascension-watchdog": {
-      "revision": "f5eaf5e35be025015a28da931aa973a0ade8f0ef",
-      "last_observed_pr_head": "62bf0fc49d7656e1207dc592a34a4fcd76994ee4",
+      "revision": "cfd06860a77e8be11267eaeb668452ac810a8a22",
+      "last_observed_pr_head": "cfd06860a77e8be11267eaeb668452ac810a8a22",
       "ref": "codex/watchdog-integrated-20260910",
       "remote": "AI-Ascension/ascension-watchdog",
       "pull_request": 9,
-      "state": "open-draft; source commit f5eaf5e plus current docs/evidence head 62bf0fc; hosted Ubuntu/Windows validation and standards checks pass; clean; not-merged"
+      "state": "open-draft; integrated candidate cfd0686; hosted Ubuntu/Windows validation, standards, and dependency checks pass; clean; not-merged"
     },
     "sts2-gateway": {
       "revision": "8ba5521c2ec8f158d437a7104567592703e53259",
@@ -78,20 +78,23 @@
     }
   },
   "evidence_boundary": {
-    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-11T00:24Z",
+    "source_pins": "confirmed-from-remote-main-and-pr-heads-2026-09-11T03:34Z",
     "component_locked_builds": "verified-in-isolated-source-worktrees",
     "artifact_bytes_cross_component": "verified-for-runtime-v2-v3-v4-and-seeded-run",
     "cross_consumer_build": "not-run",
-    "hosted_watchdog_runs": [34545569428, 34545569573],
-    "hosted_watchdog_standards_runs": [34545569465, 34545569607],
-    "hosted_watchdog_status_at_capture": "passed-at-62bf0fc on Ubuntu and Windows; standards runs 34545569465 and 34545569607 passed; native service-session remains separately unverified",
+    "hosted_watchdog_runs": [34558375972, 34558376087],
+    "hosted_watchdog_standards_runs": [34558375948, 34558376119],
+    "hosted_watchdog_status_at_capture": "passed-at-cfd0686 on Ubuntu and Windows; standards runs 34558375948 and 34558376119 passed; native service-session remains separately unverified",
     "native_worker_smoke": {
       "watchdog_pr": 9,
+      "watchdog_revision": "cfd06860a77e8be11267eaeb668452ac810a8a22",
       "harness_pr": 66,
       "harness_revision": "58dede2eb661133d8910a1f785e8a90346efe8dd",
       "harness_main": "a0ace6712686cb30d6f0b556cb6814ad4c0721d1",
       "harness_image_sha256": "5286706d03c27c00e32493c1adf8864e972f7a53d1f863c046aed32d56a1644f",
-      "result": "1 passed, 0 failed, 0 ignored; 25.33s; authenticated bootstrap/control/dispatch admission and durable stop/cleanup after endpoint hardening",
+      "watchdog_image_sha256": "96d0eca7d22f585fbacb9c6162e09f4bb698c458170501e23308a65f1cb2a4f6",
+      "test_image_sha256": "2220833acae0c7d3f88ec9d7dd2dff1637fb0070646274b94b9c5f67d575009d",
+      "result": "1 passed, 0 failed, 0 ignored; 9.44s on supplied Train Linux VM; authenticated bootstrap/control/dispatch admission and durable stop/cleanup after endpoint hardening",
       "classification": "confirmed native Linux process-boundary evidence with synthetic HTTP503 gateway and /usr/bin/true MCP downstream; hardening image from PR #66 head; not gameplay/provider/deployment/reboot/soak"
     },
     "live_host": "not-run",

@@ -216,7 +216,8 @@ or soak claim follows.
 
 ## Train native VM validation, 2026-09-11
 
-The integrated candidate was exercised on the supplied Train guests with fresh
+Watchdog PR #9 candidate `cfd06860a77e8be11267eaeb668452ac810a8a22` was
+exercised on the supplied Train guests with fresh
 guest-side copies of the test binaries.  These runs are native process-boundary
 evidence only; they do not install a service, launch the game, invoke a model
 provider, reboot a host, or establish live recovery.
