@@ -609,6 +609,20 @@ descendant execution (S03/S16, FAULT-01) therefore remains unobserved, and the
 requested orchestration must not be labeled verified. Independent authorized
 work continues.
 
+### Native user-scope systemd lifecycle evidence (2026-09-11)
+
+The supported Linux system-service path (`install.sh`) still requires root and
+remains unauthorized. As bounded native evidence, a `systemd-run --user`
+transient unit on the supplied Train host demonstrated `Type=notify` readiness,
+`WATCHDOG=1` keepalive (survived more than twice `WatchdogSec=10`), `Restart=on-failure`
+recovery after `SIGKILL` with a new `MainPID`, `KillMode=control-group`
+containment, clean stop, and retained owner-local state (`restart_generation=3`).
+Exact host, binary digest, journals, and boundaries are recorded in
+[`native-user-systemd-lifecycle-20260911.md`](native-user-systemd-lifecycle-20260911.md).
+This improves the S12/S17 Linux service-adapter evidence but does not verify the
+installed root service, WSL, uninstall idempotence, live host, reboot,
+activation/rollback, or soak.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
