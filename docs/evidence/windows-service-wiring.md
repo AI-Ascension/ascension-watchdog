@@ -44,6 +44,10 @@ It parses both wrappers and verifies that mismatched verifier bytes and a
 failed release inspection stop before SCM mutation. It performs no service or
 filesystem installation.
 
+The existing Windows workspace test lane invokes this preflight through
+`crates/watchdog/tests/windows_packaging.rs`. That test is a deployment-script
+gate only: it does not install, start, stop, or remove an SCM service.
+
 Validation from the isolated service-wiring worktree:
 
 ```text
