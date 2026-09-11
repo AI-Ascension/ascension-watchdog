@@ -10,8 +10,9 @@ mod failed_launch_cleanup;
 #[path = "orphan_cleanup_tests.rs"]
 mod orphan_cleanup;
 
-struct FakeBackend {
-    starts: usize,
+pub(super) struct FakeBackend {
+    pub(super) starts: usize,
+    pub(super) bootstraps: Vec<(bootstrap::BrokerBootstrapBinding, Vec<u8>)>,
     inspects: usize,
     stops: usize,
     units: BTreeMap<String, UnitObservation>,
@@ -28,12 +29,16 @@ struct FakeBackend {
     orphan_stops: usize,
     retirement_error: Option<BrokerError>,
     inspect_error: Option<BrokerError>,
+    queued_job: Option<ledger::JobBinding>,
+    queued_resolution: QueuedJobResolution,
+    queued_cancellations: usize,
 }
 
 impl FakeBackend {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             starts: 0,
+            bootstraps: Vec::new(),
             inspects: 0,
             stops: 0,
             units: BTreeMap::new(),
@@ -50,6 +55,9 @@ impl FakeBackend {
             orphan_stops: 0,
             retirement_error: None,
             inspect_error: None,
+            queued_job: None,
+            queued_resolution: QueuedJobResolution::Gone,
+            queued_cancellations: 0,
         }
     }
 }
@@ -71,9 +79,14 @@ impl SystemdBackend for FakeBackend {
         unit: &str,
         _request: &BrokerRequest,
         policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
         _deadline: Instant,
     ) -> BrokerResult<UnitObservation> {
         self.starts += 1;
+        if let Some(bootstrap) = bootstrap {
+            self.bootstraps
+                .push((bootstrap.binding().clone(), bootstrap.frame().to_vec()));
+        }
         let observation = self
             .start_override
             .clone()
@@ -261,6 +274,39 @@ impl SystemdBackend for FakeBackend {
     }
 }
 
+impl QueuedJobBackend for FakeBackend {
+    fn queued_job_binding(&self, unit: &str) -> Option<&ledger::JobBinding> {
+        self.queued_job.as_ref().filter(|job| job.unit() == unit)
+    }
+
+    fn resolve_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobResolution> {
+        if self.queued_job.as_ref() != Some(binding) {
+            return Err(BrokerError::Conflict(
+                "fake queued job binding changed".to_owned(),
+            ));
+        }
+        Ok(self.queued_resolution)
+    }
+
+    fn cancel_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobCancellation> {
+        if self.queued_job.as_ref() != Some(binding) {
+            return Err(BrokerError::Conflict(
+                "fake queued job binding changed".to_owned(),
+            ));
+        }
+        self.queued_cancellations += 1;
+        Ok(QueuedJobCancellation::Submitted)
+    }
+}
+
 fn digest(path: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(fs::read(path).expect("fixture executable must be readable"));
@@ -335,7 +381,7 @@ fn policy() -> BrokerPolicy {
         .expect("valid fixture policy")
 }
 
-fn transport_policy() -> BrokerPolicy {
+pub(super) fn transport_policy() -> BrokerPolicy {
     let base = policy();
     let executable = fs::canonicalize("/proc/self/exe").expect("test executable path");
     let peer = PeerPolicy {
@@ -344,14 +390,14 @@ fn transport_policy() -> BrokerPolicy {
         executable_sha256: digest(&executable),
         executable,
     };
-    // The real peer here is the large, unoptimized test image rather than the
-    // tiny sleep fixture. Its authenticated digest must fit the same bounded
-    // request window used by the real transport.
     let mut components = base.components.clone();
     for launch in components.values_mut() {
         launch.timeout = MAX_IO_TIMEOUT;
     }
-    BrokerPolicy::new(peer, components).expect("transport fixture policy")
+    // This fixture deliberately authenticates the current test process over a
+    // socket pair.  Production rejects procfs policy paths; the direct struct
+    // construction is test-only and keeps that production validation intact.
+    BrokerPolicy { peer, components }
 }
 
 fn credentials(policy: &BrokerPolicy) -> (PeerCredentials, std::process::Child) {
@@ -548,6 +594,7 @@ fn failed_launch_postcondition_cannot_authorize_cleanup_of_observed_cgroup() {
                 &unit,
                 &request,
                 launch_policy,
+                None,
                 Instant::now() + Duration::from_secs(2),
             )
             .expect("construct fixture observation");
@@ -740,6 +787,108 @@ fn durable_pending_record_never_relaunches_an_inactive_unit() {
     let _ = child.wait();
     assert!(matches!(error, BrokerError::Conflict(_)));
     assert_eq!(broker.backend.starts, 0);
+}
+
+#[test]
+fn stop_of_pending_launch_cancels_only_the_durable_queued_job_and_stays_uncertain() {
+    let policy = policy();
+    let request = request("pending-cancel");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let mut ledger = BrokerLedger::memory();
+    assert!(
+        ledger
+            .reserve(&request, &unit, launch_policy)
+            .expect("reserve pending launch")
+    );
+    let binding = ledger::JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/91")
+        .expect("canonical queued job binding");
+    ledger
+        .bind_job(&request, launch_policy, &binding)
+        .expect("persist queued job binding");
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding);
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, ledger);
+    let (peer, mut child) = credentials(&policy);
+
+    let error = broker
+        .stop(peer, request.clone())
+        .expect_err("pending cancellation cannot claim terminal execution");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(matches!(error, BrokerError::Conflict(_)));
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    assert_eq!(
+        broker.ledger.state(&request),
+        Some(ledger::LedgerState::Pending)
+    );
+    assert!(
+        broker
+            .ledger
+            .pending_cancel_requested(&request, launch_policy)
+            .expect("pending cancellation intent")
+    );
+    assert_eq!(
+        broker
+            .ledger
+            .pending_job_binding(&request, launch_policy)
+            .expect("pending job binding"),
+        broker.backend.queued_job.clone()
+    );
+}
+
+#[test]
+fn pending_cancel_intent_replays_after_broker_reopen() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir_in(std::env::current_dir()?)?;
+    let path = directory.path().join("ledger.jsonl");
+    let policy = policy();
+    let request = request("pending-cancel-reopen");
+    let unit = unit_name(&request);
+    let launch_policy = policy
+        .component(BrokerComponent::Synthetic)
+        .expect("launch policy");
+    let binding = ledger::JobBinding::from_object_path(&unit, "/org/freedesktop/systemd1/job/92")?;
+    let mut ledger = BrokerLedger::init(&path)?;
+    assert!(ledger.reserve(&request, &unit, launch_policy)?);
+    ledger.bind_job(&request, launch_policy, &binding)?;
+
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding.clone());
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, ledger);
+    let (peer, mut child) = credentials(&policy);
+    assert!(matches!(
+        broker.stop(peer, request.clone()),
+        Err(BrokerError::Conflict(_))
+    ));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    drop(broker);
+
+    let reopened = BrokerLedger::open(&path)?;
+    let mut backend = FakeBackend::new();
+    backend.queued_job = Some(binding);
+    backend.queued_resolution = QueuedJobResolution::Queued;
+    let mut broker = LinuxSystemdBroker::new_with_ledger(policy.clone(), backend, reopened);
+    let (peer, mut child) = credentials(&policy);
+    assert!(matches!(
+        broker.stop(peer, request.clone()),
+        Err(BrokerError::Conflict(_))
+    ));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(broker.backend.queued_cancellations, 1);
+    assert!(
+        broker
+            .ledger
+            .pending_cancel_requested(&request, launch_policy)?
+    );
+    Ok(())
 }
 
 #[test]

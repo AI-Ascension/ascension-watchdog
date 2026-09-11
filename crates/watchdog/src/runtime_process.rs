@@ -6,6 +6,8 @@
 
 #[cfg(target_os = "linux")]
 use crate::config::DesiredMode;
+#[cfg(target_os = "linux")]
+use crate::config::hex_digest;
 use crate::config::{ComponentConfig, WatchdogConfig, validate_digest};
 use crate::error::{Result, WatchdogError};
 #[cfg(any(windows, test))]
@@ -23,6 +25,8 @@ use crate::storage::Store;
 use crate::storage::{LaunchIntent, LaunchIntentState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(target_os = "linux")]
+use sha2::Digest;
 use std::collections::BTreeMap;
 #[cfg(target_os = "linux")]
 use std::fs;
@@ -79,8 +83,19 @@ impl std::fmt::Debug for RuntimeChildHandle {
 enum NativeChild {
     #[cfg(target_os = "linux")]
     Linux(OwnedProcess),
+    #[cfg(target_os = "linux")]
+    LinuxBroker(BrokerOwnedProcess),
     #[cfg(windows)]
     Windows(ascension_platform_windows::JobOwnedProcess),
+}
+
+/// Exact broker receipt retained with the child.  The broker is the process
+/// authority; the runtime never reconstructs a unit from a PID or executable
+/// name after this receipt has been obtained.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+struct BrokerOwnedProcess {
+    receipt: crate::platform::LaunchReceipt,
 }
 
 /// Closed proof tying a platform process authority to a launch intent.
@@ -125,7 +140,9 @@ pub(crate) struct RuntimeProcessManager {
 #[derive(Debug)]
 enum NativeBackend {
     #[cfg(target_os = "linux")]
-    Linux(crate::platform::LinuxProcessAdapter),
+    Linux(Box<crate::platform::LinuxProcessAdapter>),
+    #[cfg(target_os = "linux")]
+    LinuxBroker(crate::platform::BrokerClient),
     #[cfg(windows)]
     Windows(WindowsBackend),
 }
@@ -180,6 +197,8 @@ impl RuntimeProcessManager {
                     .map(|id| id.as_str().to_owned())
                     .map_err(map_adapter_error)
             }
+            #[cfg(target_os = "linux")]
+            NativeBackend::LinuxBroker(_) => broker_planned_containment_for(specification),
             #[cfg(windows)]
             NativeBackend::Windows(_) => Ok(format!("windows-job:{}", specification.launch_nonce)),
         }
@@ -585,6 +604,14 @@ impl NativeBackend {
         let allowlist = native_allowlist(config)?;
         #[cfg(target_os = "linux")]
         {
+            if let Some(broker) = config.linux_broker.as_ref() {
+                let client = crate::platform::BrokerClient::new(
+                    broker.socket_path().to_path_buf(),
+                    broker.timeout(),
+                )
+                .map_err(map_broker_error)?;
+                return Ok(NativeBackend::LinuxBroker(client));
+            }
             let allowlist: BTreeMap<PlatformComponentKind, PathBuf> = allowlist
                 .into_iter()
                 .map(|(kind, (path, _digest))| (kind, path))
@@ -607,7 +634,7 @@ impl NativeBackend {
                 NATIVE_MAX_PROCESSES as usize,
                 launcher,
             )
-            .map(NativeBackend::Linux)
+            .map(|adapter| NativeBackend::Linux(Box::new(adapter)))
             .map_err(map_adapter_error)
         }
         #[cfg(windows)]
@@ -687,6 +714,62 @@ impl NativeBackend {
                         RuntimeLaunchError::Ordinary(map_adapter_error(error))
                     }
                 })
+            }
+            #[cfg(target_os = "linux")]
+            Self::LinuxBroker(client) => {
+                let request =
+                    broker_request_for(specification).map_err(RuntimeLaunchError::Ordinary)?;
+                let expected_containment = broker_planned_containment_for(specification)
+                    .map_err(RuntimeLaunchError::Ordinary)?;
+                if planned_containment != expected_containment {
+                    return Err(RuntimeLaunchError::Ordinary(
+                        WatchdogError::IdentityMismatch(
+                            "planned Linux broker identity differs from the launch request"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                let receipt = match (worker, gateway_health) {
+                    (Some(worker), None) => {
+                        let bootstrap = crate::platform::linux_broker::bootstrap::BrokerBootstrapLaunch::for_worker(
+                            &request,
+                            worker,
+                        )
+                        .map_err(map_broker_error)
+                        .map_err(RuntimeLaunchError::Ordinary)?;
+                        client
+                            .launch_with_bootstrap(&request, &bootstrap)
+                            .map_err(map_broker_bootstrap_launch_error)?
+                    }
+                    (None, Some(health)) => {
+                        let bootstrap = crate::platform::linux_broker::bootstrap::BrokerBootstrapLaunch::for_gateway(
+                            &request,
+                            watchdog_boot_id,
+                            health,
+                        )
+                        .map_err(map_broker_error)
+                        .map_err(RuntimeLaunchError::Ordinary)?;
+                        client
+                            .launch_with_bootstrap(&request, &bootstrap)
+                            .map_err(map_broker_bootstrap_launch_error)?
+                    }
+                    (None, None) => client.launch(&request).map_err(|error| {
+                        // The legacy client intentionally exposes one error
+                        // type for failures before and after transport write.
+                        // Treat every failed call as uncertain so a receipt
+                        // that may have been committed is reconciled by the
+                        // same request identity rather than relaunched.
+                        RuntimeLaunchError::CleanupUncertain(map_broker_error(error))
+                    })?,
+                    (Some(_), Some(_)) => {
+                        return Err(RuntimeLaunchError::Ordinary(WatchdogError::InvalidInput(
+                            "ambiguous Linux broker bootstrap".to_owned(),
+                        )));
+                    }
+                };
+                verify_broker_receipt(specification, planned_containment, &receipt)
+                    .map_err(RuntimeLaunchError::Ordinary)?;
+                Ok(NativeChild::LinuxBroker(BrokerOwnedProcess { receipt }))
             }
             #[cfg(windows)]
             Self::Windows(backend) => {
@@ -785,6 +868,31 @@ impl NativeBackend {
                     .map(map_stop_outcome)
                     .map_err(map_adapter_error)
             }
+            #[cfg(target_os = "linux")]
+            Self::LinuxBroker(client) => {
+                let request = broker_request_from_planned_containment(planned_containment)?;
+                // Stop is idempotent for a committed or terminal receipt and
+                // also gives the broker a chance to cancel an exact queued
+                // job for a still-pending reservation. An Inspect-first
+                // branch would turn that pending cancellation into a
+                // read-only conflict and leave the manager job untouched.
+                client
+                    .stop(&request)
+                    .map(|receipt| {
+                        if receipt.state
+                            == crate::platform::linux_broker::BrokerLifecycleState::Stopped
+                        {
+                            if receipt.duplicate {
+                                RuntimeStopOutcome::AlreadyExited
+                            } else {
+                                RuntimeStopOutcome::Exited(None)
+                            }
+                        } else {
+                            RuntimeStopOutcome::TimedOut
+                        }
+                    })
+                    .map_err(map_broker_error)
+            }
             #[cfg(windows)]
             Self::Windows(backend) => backend
                 .launcher
@@ -826,6 +934,26 @@ impl NativeBackend {
                 };
                 Ok(NativeChild::Linux(OwnedProcess { identity }))
             }
+            #[cfg(target_os = "linux")]
+            Self::LinuxBroker(client) => {
+                let request = broker_request_from_proof(proof)?;
+                let expected_containment = broker_planned_containment_for_request(&request)?;
+                if proof.containment_id != expected_containment {
+                    return Err(WatchdogError::IdentityMismatch(
+                        "Linux broker proof containment is not bound to its request".to_owned(),
+                    ));
+                }
+                let lifecycle = client.inspect(&request).map_err(map_broker_error)?;
+                if lifecycle.state != crate::platform::linux_broker::BrokerLifecycleState::Active {
+                    return Err(WatchdogError::Conflict(
+                        "Linux broker receipt is not active during recovery".to_owned(),
+                    ));
+                }
+                verify_broker_receipt_against_proof(&lifecycle.receipt, proof)?;
+                Ok(NativeChild::LinuxBroker(BrokerOwnedProcess {
+                    receipt: lifecycle.receipt,
+                }))
+            }
             #[cfg(windows)]
             Self::Windows(_) => {
                 let identity = windows_process_identity(proof)?;
@@ -848,6 +976,26 @@ impl NativeBackend {
                 .inspect(process)
                 .map(|observation| map_platform_observation(&observation))
                 .map_err(map_adapter_error),
+            #[cfg(target_os = "linux")]
+            (Self::LinuxBroker(client), NativeChild::LinuxBroker(process)) => {
+                let lifecycle = client
+                    .inspect(&process.receipt.request)
+                    .map_err(map_broker_error)?;
+                verify_broker_receipt_binding(&lifecycle.receipt, &process.receipt)?;
+                Ok(match lifecycle.state {
+                    crate::platform::linux_broker::BrokerLifecycleState::Active => {
+                        RuntimeObservation::Running
+                    }
+                    crate::platform::linux_broker::BrokerLifecycleState::Stopped => {
+                        RuntimeObservation::Exited { code: None }
+                    }
+                })
+            }
+            #[cfg(target_os = "linux")]
+            (Self::Linux(_), NativeChild::LinuxBroker(_))
+            | (Self::LinuxBroker(_), NativeChild::Linux(_)) => Err(WatchdogError::Conflict(
+                "native process backend and child authority differ".to_owned(),
+            )),
             #[cfg(windows)]
             (Self::Windows(_), NativeChild::Windows(process)) => process
                 .is_running()
@@ -881,6 +1029,28 @@ impl NativeBackend {
                 .map_err(map_adapter_error)?;
                 Ok(map_stop_outcome(outcome))
             }
+            #[cfg(target_os = "linux")]
+            (Self::LinuxBroker(client), NativeChild::LinuxBroker(process)) => {
+                let lifecycle = client
+                    .stop(&process.receipt.request)
+                    .map_err(map_broker_error)?;
+                verify_broker_receipt_binding(&lifecycle.receipt, &process.receipt)?;
+                if lifecycle.state != crate::platform::linux_broker::BrokerLifecycleState::Stopped {
+                    return Err(WatchdogError::Conflict(
+                        "Linux broker stop did not reach a terminal state".to_owned(),
+                    ));
+                }
+                Ok(if lifecycle.duplicate {
+                    RuntimeStopOutcome::AlreadyExited
+                } else {
+                    RuntimeStopOutcome::Exited(None)
+                })
+            }
+            #[cfg(target_os = "linux")]
+            (Self::Linux(_), NativeChild::LinuxBroker(_))
+            | (Self::LinuxBroker(_), NativeChild::Linux(_)) => Err(WatchdogError::Conflict(
+                "native process backend and child authority differ".to_owned(),
+            )),
             #[cfg(windows)]
             (Self::Windows(_), NativeChild::Windows(process)) => {
                 let graceful = process.graceful_stop();
@@ -935,6 +1105,18 @@ impl NativeChild {
                     specification,
                     planned_containment,
                     &identity,
+                    now_ms,
+                )?;
+                Ok((proof.portable_identity(), proof))
+            }
+            #[cfg(target_os = "linux")]
+            Self::LinuxBroker(process) => {
+                let proof = OwnershipProof::from_broker_receipt(
+                    "linux",
+                    intent_id,
+                    specification,
+                    planned_containment,
+                    &process.receipt,
                     now_ms,
                 )?;
                 Ok((proof.portable_identity(), proof))
@@ -1009,6 +1191,36 @@ impl OwnershipProof {
                 "platform returned an identity different from the launch request".to_owned(),
             ));
         }
+        bound_proof(proof)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_broker_receipt(
+        backend: &str,
+        intent_id: &str,
+        specification: &LaunchSpec,
+        planned_containment: &str,
+        receipt: &crate::platform::LaunchReceipt,
+        now_ms: u64,
+    ) -> Result<Self> {
+        verify_broker_receipt(specification, planned_containment, receipt)?;
+        let proof = Self {
+            version: 1,
+            backend: backend.to_owned(),
+            intent_id: intent_id.to_owned(),
+            deployment_id: specification.deployment_id.clone(),
+            instance_id: specification.instance_id.clone(),
+            component: specification.instance_id.clone(),
+            incarnation: specification.incarnation.clone(),
+            launch_nonce: specification.launch_nonce.clone(),
+            containment_id: planned_containment.to_owned(),
+            pid: receipt.pid,
+            creation_token: receipt.creation_token.clone(),
+            executable: receipt.executable.clone(),
+            executable_sha256: receipt.executable_sha256.clone(),
+            session_id: None,
+            started_at_ms: now_ms,
+        };
         bound_proof(proof)
     }
 
@@ -1126,6 +1338,284 @@ fn map_adapter_error(error: AdapterError) -> WatchdogError {
     }
 }
 
+#[cfg(target_os = "linux")]
+const BROKER_CONTAINMENT_PREFIX: &str = "linux-broker-v1";
+
+#[cfg(target_os = "linux")]
+fn map_broker_error(error: crate::platform::linux_broker::BrokerError) -> WatchdogError {
+    use crate::platform::linux_broker::BrokerError;
+    match error {
+        BrokerError::Invalid(message) => WatchdogError::InvalidInput(message),
+        BrokerError::Unauthorized(message) => WatchdogError::Unauthorized(message),
+        BrokerError::Conflict(message) => WatchdogError::Conflict(message),
+        BrokerError::Unavailable(message) => WatchdogError::Unsupported(message),
+        BrokerError::Io(message) => WatchdogError::Io(std::io::Error::other(message)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn map_broker_bootstrap_launch_error(
+    error: crate::platform::linux_broker::BrokerBootstrapLaunchError,
+) -> RuntimeLaunchError {
+    use crate::platform::linux_broker::BrokerBootstrapLaunchError;
+    match error {
+        BrokerBootstrapLaunchError::NotDispatched(error) => {
+            RuntimeLaunchError::Ordinary(map_broker_error(error))
+        }
+        BrokerBootstrapLaunchError::Unknown(error) => {
+            RuntimeLaunchError::CleanupUncertain(map_broker_error(error))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn broker_component(component: PlatformComponentKind) -> crate::platform::BrokerComponent {
+    match component {
+        PlatformComponentKind::Gateway => crate::platform::BrokerComponent::Gateway,
+        PlatformComponentKind::Harness => crate::platform::BrokerComponent::Harness,
+        PlatformComponentKind::HostBroker => crate::platform::BrokerComponent::HostBroker,
+        PlatformComponentKind::Synthetic => crate::platform::BrokerComponent::Synthetic,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn broker_component_name(component: crate::platform::BrokerComponent) -> &'static str {
+    match component {
+        crate::platform::BrokerComponent::Gateway => "gateway",
+        crate::platform::BrokerComponent::Harness => "harness",
+        crate::platform::BrokerComponent::HostBroker => "hostbroker",
+        crate::platform::BrokerComponent::Synthetic => "synthetic",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn broker_component_from_name(value: &str) -> Result<crate::platform::BrokerComponent> {
+    match value {
+        "gateway" => Ok(crate::platform::BrokerComponent::Gateway),
+        "harness" => Ok(crate::platform::BrokerComponent::Harness),
+        "hostbroker" => Ok(crate::platform::BrokerComponent::HostBroker),
+        "synthetic" => Ok(crate::platform::BrokerComponent::Synthetic),
+        _ => Err(WatchdogError::InvalidInput(
+            "Linux broker containment has an unsupported component".to_owned(),
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn valid_broker_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_broker_request(request: &crate::platform::BrokerRequest) -> Result<()> {
+    if !valid_broker_identity(&request.instance)
+        || !valid_broker_identity(&request.incarnation)
+        || !valid_broker_identity(&request.nonce)
+    {
+        return Err(WatchdogError::InvalidInput(
+            "Linux broker request identity is outside its bounded contract".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn broker_request_for(specification: &LaunchSpec) -> Result<crate::platform::BrokerRequest> {
+    specification
+        .validate()
+        .map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
+    let request = crate::platform::BrokerRequest {
+        component: broker_component(specification.component),
+        instance: specification.instance_id.clone(),
+        incarnation: specification.incarnation.clone(),
+        nonce: specification.launch_nonce.clone(),
+    };
+    validate_broker_request(&request)?;
+    Ok(request)
+}
+
+#[cfg(target_os = "linux")]
+fn broker_unit_name(request: &crate::platform::BrokerRequest) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(broker_component_name(request.component).as_bytes());
+    hasher.update([0]);
+    hasher.update(request.instance.as_bytes());
+    hasher.update([0]);
+    hasher.update(request.incarnation.as_bytes());
+    hasher.update([0]);
+    hasher.update(request.nonce.as_bytes());
+    let digest = hasher.finalize();
+    format!(
+        "ascension-watchdog-{}-{}.service",
+        broker_component_name(request.component),
+        &hex_digest(&digest)[..24]
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn broker_planned_containment_for(specification: &LaunchSpec) -> Result<String> {
+    let request = broker_request_for(specification)?;
+    broker_planned_containment_for_request(&request)
+}
+
+#[cfg(target_os = "linux")]
+fn broker_planned_containment_for_request(
+    request: &crate::platform::BrokerRequest,
+) -> Result<String> {
+    validate_broker_request(request)?;
+    let value = format!(
+        "{BROKER_CONTAINMENT_PREFIX}:{}:{}:{}:{}",
+        broker_component_name(request.component),
+        request.instance,
+        request.incarnation,
+        request.nonce
+    );
+    if value.len() > 512 {
+        return Err(WatchdogError::InvalidInput(
+            "Linux broker containment identity exceeds its bound".to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn broker_request_from_planned_containment(value: &str) -> Result<crate::platform::BrokerRequest> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if parts.len() != 5 || parts[0] != BROKER_CONTAINMENT_PREFIX {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker planned containment is not a complete request identity".to_owned(),
+        ));
+    }
+    let request = crate::platform::BrokerRequest {
+        component: broker_component_from_name(parts[1])?,
+        instance: parts[2].to_owned(),
+        incarnation: parts[3].to_owned(),
+        nonce: parts[4].to_owned(),
+    };
+    if broker_planned_containment_for_request(&request)?.as_str() != value {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker planned containment does not round-trip its request".to_owned(),
+        ));
+    }
+    Ok(request)
+}
+
+#[cfg(target_os = "linux")]
+fn broker_request_from_proof(proof: &OwnershipProof) -> Result<crate::platform::BrokerRequest> {
+    let request = crate::platform::BrokerRequest {
+        component: broker_component(platform_component_kind(&proof.component)?),
+        instance: proof.instance_id.clone(),
+        incarnation: proof.incarnation.clone(),
+        nonce: proof.launch_nonce.clone(),
+    };
+    let planned = broker_planned_containment_for_request(&request)?;
+    if proof.containment_id != planned {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker proof containment does not match its request".to_owned(),
+        ));
+    }
+    Ok(request)
+}
+
+#[cfg(target_os = "linux")]
+fn verify_broker_receipt(
+    specification: &LaunchSpec,
+    planned_containment: &str,
+    receipt: &crate::platform::LaunchReceipt,
+) -> Result<()> {
+    let request = broker_request_for(specification)?;
+    if planned_containment != broker_planned_containment_for_request(&request)? {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker planned containment differs from its launch request".to_owned(),
+        ));
+    }
+    verify_broker_receipt_request(&request, receipt)?;
+    let executable_matches = receipt.executable == specification.executable
+        || std::fs::canonicalize(&receipt.executable)
+            .ok()
+            .zip(std::fs::canonicalize(&specification.executable).ok())
+            .is_some_and(|(actual, expected)| actual == expected);
+    if !executable_matches || receipt.executable_sha256 != specification.executable_sha256 {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker receipt executable differs from the launch specification".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_broker_receipt_request(
+    request: &crate::platform::BrokerRequest,
+    receipt: &crate::platform::LaunchReceipt,
+) -> Result<()> {
+    let expected_unit = broker_unit_name(request);
+    if receipt.request != *request
+        || receipt.unit != expected_unit
+        || receipt.pid == 0
+        || receipt.creation_token.is_empty()
+        || !receipt.executable.is_absolute()
+        || validate_digest(&receipt.executable_sha256).is_err()
+        || receipt.uid == 0
+        || receipt.gid == 0
+        || receipt.capability_bounding_set != 0
+        || receipt.ambient_capabilities != 0
+        || !receipt
+            .control_group
+            .ends_with(&format!("/{expected_unit}"))
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker receipt does not correlate to the exact request".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_broker_receipt_against_proof(
+    receipt: &crate::platform::LaunchReceipt,
+    proof: &OwnershipProof,
+) -> Result<()> {
+    let request = broker_request_from_proof(proof)?;
+    verify_broker_receipt_request(&request, receipt)?;
+    if receipt.pid != proof.pid
+        || receipt.creation_token != proof.creation_token
+        || receipt.executable != proof.executable
+        || receipt.executable_sha256 != proof.executable_sha256
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker recovery receipt differs from the persisted process proof".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_broker_receipt_binding(
+    actual: &crate::platform::LaunchReceipt,
+    expected: &crate::platform::LaunchReceipt,
+) -> Result<()> {
+    verify_broker_receipt_request(&expected.request, actual)?;
+    if actual.pid != expected.pid
+        || actual.creation_token != expected.creation_token
+        || actual.executable != expected.executable
+        || actual.executable_sha256 != expected.executable_sha256
+        || actual.uid != expected.uid
+        || actual.gid != expected.gid
+        || actual.capability_bounding_set != expected.capability_bounding_set
+        || actual.ambient_capabilities != expected.ambient_capabilities
+        || actual.control_group != expected.control_group
+    {
+        return Err(WatchdogError::IdentityMismatch(
+            "Linux broker lifecycle receipt changed its process binding".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_proof(
     config: &WatchdogConfig,
     intent: &LaunchIntent,
@@ -1204,7 +1694,7 @@ fn validate_proof(
         intent.launch_nonce.clone(),
         proof.incarnation.clone(),
     )?;
-    let expected_containment = expected_containment_for(&specification)?;
+    let expected_containment = expected_containment_for(config, &specification)?;
     if expected_containment != proof.containment_id {
         return Err(WatchdogError::IdentityMismatch(
             "launch ownership proof containment is not derived from its incarnation and request"
@@ -1225,14 +1715,20 @@ fn validate_proof(
 }
 
 #[cfg(target_os = "linux")]
-fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
+fn expected_containment_for(config: &WatchdogConfig, specification: &LaunchSpec) -> Result<String> {
+    if config.linux_broker.is_some() {
+        return broker_planned_containment_for(specification);
+    }
     crate::platform::LinuxProcessAdapter::planned_containment_for(specification)
         .map(|containment| containment.as_str().to_owned())
         .map_err(map_adapter_error)
 }
 
 #[cfg(windows)]
-fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
+fn expected_containment_for(
+    _config: &WatchdogConfig,
+    specification: &LaunchSpec,
+) -> Result<String> {
     specification
         .validate()
         .map_err(|error| WatchdogError::InvalidInput(error.to_string()))?;
@@ -1240,7 +1736,10 @@ fn expected_containment_for(specification: &LaunchSpec) -> Result<String> {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn expected_containment_for(_specification: &LaunchSpec) -> Result<String> {
+fn expected_containment_for(
+    _config: &WatchdogConfig,
+    _specification: &LaunchSpec,
+) -> Result<String> {
     Err(WatchdogError::Unsupported(
         "native process containment is unsupported on this platform".to_owned(),
     ))
@@ -1838,6 +2337,57 @@ mod tests {
         assert!(validate_exact_cgroup_child(&trusted_leaf, &trusted).is_ok());
         assert!(validate_exact_cgroup_child(&sibling_leaf, &trusted).is_err());
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn broker_containment_round_trips_the_complete_request_identity() {
+        let request = crate::platform::BrokerRequest {
+            component: crate::platform::BrokerComponent::Gateway,
+            instance: "gateway".to_owned(),
+            incarnation: "watchdog-generation-7".to_owned(),
+            nonce: "12345678-1234-4234-8234-123456789abc".to_owned(),
+        };
+        let planned = broker_planned_containment_for_request(&request).expect("planned identity");
+        assert_eq!(
+            broker_request_from_planned_containment(&planned).expect("request identity"),
+            request
+        );
+        let malformed = planned.replace(&request.nonce, "bad:nonce");
+        assert!(broker_request_from_planned_containment(&malformed).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn broker_receipt_correlation_rejects_changed_process_binding() {
+        let request = crate::platform::BrokerRequest {
+            component: crate::platform::BrokerComponent::Harness,
+            instance: "harness".to_owned(),
+            incarnation: "watchdog-generation-2".to_owned(),
+            nonce: "22345678-1234-4234-8234-123456789abc".to_owned(),
+        };
+        let unit = broker_unit_name(&request);
+        let receipt = crate::platform::LaunchReceipt {
+            request: request.clone(),
+            unit: unit.clone(),
+            pid: 42,
+            creation_token: "boot:kernel:start".to_owned(),
+            executable: PathBuf::from("/usr/local/lib/ascension/harness"),
+            executable_sha256: "a".repeat(64),
+            uid: 1001,
+            gid: 1002,
+            capability_bounding_set: 0,
+            ambient_capabilities: 0,
+            control_group: format!("/system.slice/{unit}"),
+            duplicate: false,
+        };
+        verify_broker_receipt_request(&request, &receipt).expect("valid receipt");
+        let mut changed = receipt.clone();
+        changed.pid = receipt.pid + 1;
+        assert!(verify_broker_receipt_binding(&changed, &receipt).is_err());
+        changed = receipt.clone();
+        changed.request.nonce = "32345678-1234-4234-8234-123456789abc".to_owned();
+        assert!(verify_broker_receipt_binding(&changed, &receipt).is_err());
     }
 
     #[test]

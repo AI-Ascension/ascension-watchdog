@@ -13,10 +13,17 @@ use native_descriptor_store::NativeDescriptorStore;
 #[path = "native_activation.rs"]
 mod native_activation;
 
+#[path = "native_bootstrap.rs"]
+mod native_bootstrap;
+
 struct NativeSystemdBackend {
     retained: BTreeMap<String, RetainedContainment>,
     descriptor_store: Option<NativeDescriptorStore>,
     unavailable: native_activation::CapturedDescriptors,
+    /// Job object paths returned by PID 1 are retained by generated unit
+    /// until the broker binds them into its durable ledger.  The map is
+    /// bounded by the same active-process limit as launch admission.
+    queued_jobs: BTreeMap<String, ledger::JobBinding>,
 }
 
 struct RetainedContainment {
@@ -26,9 +33,141 @@ struct RetainedContainment {
     manager_stored: bool,
 }
 
+const MAX_JOB_RESULT_BYTES: usize = 64;
+
+/// Whether PID 1 still has the exact job object returned by
+/// `StartTransientUnit`.  `Gone` is deliberately not a success witness: the
+/// caller must reconcile the exact unit and, when available, its
+/// `JobRemoved` event before deciding whether the effect happened.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueuedJobResolution {
+    Queued,
+    Gone,
+}
+
+/// Result of asking PID 1 to cancel one exact queued job.  A raced removal is
+/// reported separately from a submitted cancellation and never interpreted as
+/// proof that the unit was not started.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueuedJobCancellation {
+    Submitted,
+    AlreadyGone,
+}
+
+/// Safe, bounded representation of the systemd `JobRemoved` signal payload.
+/// The object path and unit are checked against the immutable job binding
+/// before its result can influence reconciliation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobRemovedEvent {
+    binding: ledger::JobBinding,
+    result: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JobRemovalOutcome {
+    Done,
+    Canceled,
+    Failed,
+}
+
+impl JobRemovedEvent {
+    pub fn new(binding: ledger::JobBinding, result: impl Into<String>) -> BrokerResult<Self> {
+        binding.validate_syntax_for_backend()?;
+        let result = result.into();
+        if result.is_empty()
+            || result.len() > MAX_JOB_RESULT_BYTES
+            || result
+                .bytes()
+                .any(|byte| !(byte.is_ascii_lowercase() || matches!(byte, b'-')))
+        {
+            return Err(BrokerError::Invalid(
+                "systemd job removal result is out of bounds".to_owned(),
+            ));
+        }
+        Ok(Self { binding, result })
+    }
+
+    pub fn binding(&self) -> &ledger::JobBinding {
+        &self.binding
+    }
+
+    pub fn result(&self) -> &str {
+        &self.result
+    }
+
+    fn outcome(&self) -> JobRemovalOutcome {
+        match self.result() {
+            "done" => JobRemovalOutcome::Done,
+            "canceled" => JobRemovalOutcome::Canceled,
+            _ => JobRemovalOutcome::Failed,
+        }
+    }
+}
+
+/// Optional queued-job control contract for a backend.  Existing fake and
+/// delegated backends may retain their old lifecycle behavior and receive
+/// conservative `Unavailable` defaults; the native systemd backend overrides
+/// each method with exact object-path validation.  This keeps cancellation an
+/// explicit opt-in rather than making a unit pathname a fallback identity.
+pub trait QueuedJobBackend {
+    fn queued_job_binding(&self, _unit: &str) -> Option<&ledger::JobBinding> {
+        None
+    }
+
+    fn take_queued_job_binding(
+        &mut self,
+        _unit: &str,
+        _deadline: Instant,
+    ) -> BrokerResult<ledger::JobBinding> {
+        Err(BrokerError::Unavailable(
+            "backend does not retain a systemd job object identity".to_owned(),
+        ))
+    }
+
+    fn resolve_queued_job(
+        &mut self,
+        _binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobResolution> {
+        Err(BrokerError::Unavailable(
+            "backend does not support exact queued-job resolution".to_owned(),
+        ))
+    }
+
+    fn cancel_queued_job(
+        &mut self,
+        _binding: &ledger::JobBinding,
+        _deadline: Instant,
+    ) -> BrokerResult<QueuedJobCancellation> {
+        Err(BrokerError::Unavailable(
+            "backend does not support exact queued-job cancellation".to_owned(),
+        ))
+    }
+
+    fn observe_job_removed(
+        &mut self,
+        binding: &ledger::JobBinding,
+        event: JobRemovedEvent,
+        deadline: Instant,
+    ) -> BrokerResult<JobRemovalOutcome> {
+        remaining(deadline)?;
+        if event.binding() != binding {
+            return Err(BrokerError::Conflict(
+                "systemd JobRemoved event does not match the retained job".to_owned(),
+            ));
+        }
+        Ok(event.outcome())
+    }
+}
+
 fn unit_is_missing(error: &zbus::Error) -> bool {
     matches!(error, zbus::Error::MethodError(name, _, _)
         if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit")
+}
+
+fn job_is_missing(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::MethodError(name, _, _)
+        if name.as_str() == "org.freedesktop.systemd1.NoSuchJob")
 }
 
 #[cfg(target_os = "linux")]
@@ -38,6 +177,127 @@ impl NativeSystemdBackend {
             retained: BTreeMap::new(),
             descriptor_store: None,
             unavailable: BTreeMap::new(),
+            queued_jobs: BTreeMap::new(),
+        }
+    }
+
+    fn remember_queued_job(&mut self, binding: ledger::JobBinding) -> BrokerResult<()> {
+        let unit = binding.unit().to_owned();
+        if let Some(previous) = self.queued_jobs.get(&unit) {
+            if previous == &binding {
+                return Ok(());
+            }
+            return Err(BrokerError::Conflict(
+                "systemd unit has a different retained job object".to_owned(),
+            ));
+        }
+        if self.queued_jobs.len() >= MAX_ACTIVE_PROCESSES {
+            return Err(BrokerError::Unavailable(
+                "queued systemd job capacity is exhausted".to_owned(),
+            ));
+        }
+        self.queued_jobs.insert(unit, binding);
+        Ok(())
+    }
+
+    /// Resolve one retained manager job without looking up a replacement job
+    /// from a unit name.  The returned object path, numeric ID, and Job.Unit
+    /// property must all agree with the durable binding.
+    fn resolve_queued_job_native(
+        binding: &ledger::JobBinding,
+        deadline: Instant,
+    ) -> BrokerResult<QueuedJobResolution> {
+        remaining(deadline)?;
+        binding.validate_syntax_for_backend()?;
+        let connection = Self::connection(deadline)?;
+        let manager = Self::manager(&connection)?;
+        let path: zbus::zvariant::OwnedObjectPath =
+            match manager.call("GetJob", &(binding.job_id(),)) {
+                Ok(path) => path,
+                Err(error) if job_is_missing(&error) => return Ok(QueuedJobResolution::Gone),
+                Err(error) => {
+                    return Err(BrokerError::Unavailable(format!(
+                        "systemd queued job lookup failed: {error}"
+                    )));
+                }
+            };
+        if path.as_str() != binding.job_path() {
+            return Err(BrokerError::Conflict(
+                "systemd queued job object path differs from its durable binding".to_owned(),
+            ));
+        }
+        let job_id: u32 = Self::property(
+            path.as_str(),
+            "org.freedesktop.systemd1.Job",
+            "Id",
+            deadline,
+        )?;
+        if job_id != binding.job_id() {
+            return Err(BrokerError::Conflict(
+                "systemd queued job ID differs from its durable binding".to_owned(),
+            ));
+        }
+        let job_unit: zbus::zvariant::OwnedObjectPath = Self::property(
+            path.as_str(),
+            "org.freedesktop.systemd1.Job",
+            "Unit",
+            deadline,
+        )?;
+        let expected_unit: zbus::zvariant::OwnedObjectPath =
+            match manager.call("GetUnit", &(binding.unit(),)) {
+                Ok(path) => path,
+                Err(error) if unit_is_missing(&error) => {
+                    return Err(BrokerError::Conflict(
+                        "systemd queued job unit is missing during exact resolution".to_owned(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(BrokerError::Unavailable(format!(
+                        "systemd queued job unit lookup failed: {error}"
+                    )));
+                }
+            };
+        if job_unit != expected_unit {
+            return Err(BrokerError::Conflict(
+                "systemd queued job belongs to a different unit".to_owned(),
+            ));
+        }
+        Ok(QueuedJobResolution::Queued)
+    }
+
+    fn cancel_queued_job_native(
+        binding: &ledger::JobBinding,
+        deadline: Instant,
+    ) -> BrokerResult<QueuedJobCancellation> {
+        match Self::resolve_queued_job_native(binding, deadline)? {
+            QueuedJobResolution::Gone => return Ok(QueuedJobCancellation::AlreadyGone),
+            QueuedJobResolution::Queued => {}
+        }
+        remaining(deadline)?;
+        let connection = Self::connection(deadline)?;
+        let manager = Self::manager(&connection)?;
+        let result: BrokerResult<()> =
+            manager
+                .call("CancelJob", &(binding.job_id(),))
+                .map_err(|error| {
+                    if job_is_missing(&error) {
+                        BrokerError::Conflict(
+                            "systemd queued job disappeared during exact cancellation".to_owned(),
+                        )
+                    } else {
+                        BrokerError::Unavailable(format!(
+                            "systemd queued job cancellation failed: {error}"
+                        ))
+                    }
+                });
+        match result {
+            Ok(()) => Ok(QueuedJobCancellation::Submitted),
+            Err(BrokerError::Conflict(message))
+                if message == "systemd queued job disappeared during exact cancellation" =>
+            {
+                Ok(QueuedJobCancellation::AlreadyGone)
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -250,8 +510,9 @@ impl SystemdBackend for NativeSystemdBackend {
     fn start(
         &mut self,
         unit: &str,
-        _request: &BrokerRequest,
+        request: &BrokerRequest,
         policy: &LaunchPolicy,
+        bootstrap: Option<&bootstrap::BrokerBootstrapLaunch>,
         deadline: Instant,
     ) -> BrokerResult<UnitObservation> {
         if self.descriptor_store.is_none() {
@@ -280,11 +541,7 @@ impl SystemdBackend for NativeSystemdBackend {
         .map_err(|error| {
             BrokerError::Invalid(format!("systemd ExecStart value failed: {error}"))
         })?;
-        let environment = policy
-            .environment
-            .iter()
-            .map(|(name, value)| format!("{name}={value}"))
-            .collect::<Vec<_>>();
+        let environment = bootstrap_transport::launch_environment(policy, request, bootstrap)?;
         let mut properties = Vec::new();
         // The broker service is the owner of every transient unit.  If PID 1
         // observes this service leave active state, BindsTo tears down the
@@ -302,6 +559,14 @@ impl SystemdBackend for NativeSystemdBackend {
                 .map_err(|error| BrokerError::Invalid(error.to_string()))?,
         ));
         properties.push(("ExecStart", exec_start));
+        if let Some(bootstrap) = bootstrap {
+            // D-Bus transports this value as an out-of-band Unix descriptor,
+            // not StandardInputData or secret bytes in unit properties.
+            properties.push((
+                "StandardInputFileDescriptor",
+                native_bootstrap::stdin_property(request, bootstrap)?,
+            ));
+        }
         properties.push((
             "User",
             zbus::zvariant::Value::new(policy.target_uid.to_string())
@@ -383,11 +648,17 @@ impl SystemdBackend for NativeSystemdBackend {
             zbus::zvariant::OwnedValue::from(timeout_us),
         ));
         let aux: Vec<(String, Vec<(String, zbus::zvariant::OwnedValue)>)> = Vec::new();
-        let _: zbus::zvariant::OwnedObjectPath = manager
+        let job_path: zbus::zvariant::OwnedObjectPath = manager
             .call("StartTransientUnit", &(unit, "fail", properties, aux))
             .map_err(|error| {
                 BrokerError::Unavailable(format!("systemd transient unit start failed: {error}"))
             })?;
+        // Keep the exact object returned by PID 1.  Reconstructing a job ID
+        // from `unit` would permit a late or reused job to be mistaken for
+        // this launch; the durable ledger binding is populated by the broker
+        // integration seam after this method returns.
+        let binding = ledger::JobBinding::from_object_path(unit, job_path.as_str())?;
+        self.remember_queued_job(binding)?;
         loop {
             if let Some(observation) = Self::unit_observation(unit, policy, deadline)? {
                 return Ok(observation);
@@ -686,6 +957,108 @@ impl SystemdBackend for NativeSystemdBackend {
     }
 }
 
+impl QueuedJobBackend for NativeSystemdBackend {
+    fn queued_job_binding(&self, unit: &str) -> Option<&ledger::JobBinding> {
+        self.queued_jobs.get(unit)
+    }
+
+    fn take_queued_job_binding(
+        &mut self,
+        unit: &str,
+        deadline: Instant,
+    ) -> BrokerResult<ledger::JobBinding> {
+        remaining(deadline)?;
+        let binding = self.queued_jobs.get(unit).cloned().ok_or_else(|| {
+            BrokerError::Conflict(
+                "queued systemd job binding is unavailable for the generated unit".to_owned(),
+            )
+        })?;
+        if binding.unit() != unit {
+            return Err(BrokerError::Conflict(
+                "queued systemd job binding unit does not match its map key".to_owned(),
+            ));
+        }
+        binding.validate_syntax_for_backend()?;
+        self.queued_jobs.remove(unit);
+        Ok(binding)
+    }
+
+    fn resolve_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        deadline: Instant,
+    ) -> BrokerResult<QueuedJobResolution> {
+        Self::resolve_queued_job_native(binding, deadline)
+    }
+
+    fn cancel_queued_job(
+        &mut self,
+        binding: &ledger::JobBinding,
+        deadline: Instant,
+    ) -> BrokerResult<QueuedJobCancellation> {
+        Self::cancel_queued_job_native(binding, deadline)
+    }
+
+    fn observe_job_removed(
+        &mut self,
+        binding: &ledger::JobBinding,
+        event: JobRemovedEvent,
+        deadline: Instant,
+    ) -> BrokerResult<JobRemovalOutcome> {
+        let outcome = validate_job_removed(binding, &event, deadline)?;
+        // A matching JobRemoved signal proves that this manager job no longer
+        // occupies a queue slot. It does not prove that its unit was stopped;
+        // callers still reconcile the exact unit/containment separately.
+        if self.queued_jobs.get(binding.unit()) == Some(binding) {
+            self.queued_jobs.remove(binding.unit());
+        }
+        Ok(outcome)
+    }
+}
+
+fn validate_job_removed(
+    binding: &ledger::JobBinding,
+    event: &JobRemovedEvent,
+    deadline: Instant,
+) -> BrokerResult<JobRemovalOutcome> {
+    remaining(deadline)?;
+    if event.binding() != binding {
+        return Err(BrokerError::Conflict(
+            "systemd JobRemoved event does not match the retained job".to_owned(),
+        ));
+    }
+    Ok(event.outcome())
+}
+
+/// Decode a manager `JobRemoved` signal without treating arbitrary signals as
+/// lifecycle evidence. The caller must still pass the result through
+/// `QueuedJobBackend::observe_job_removed` with the durable binding.
+pub fn decode_job_removed(message: &zbus::Message) -> BrokerResult<JobRemovedEvent> {
+    let header = message.header();
+    if message.message_type() != zbus::message::Type::Signal
+        || header.path().map(zbus::zvariant::ObjectPath::as_str)
+            != Some("/org/freedesktop/systemd1")
+        || header.interface().map(zbus::names::InterfaceName::as_str)
+            != Some("org.freedesktop.systemd1.Manager")
+        || header.member().map(zbus::names::MemberName::as_str) != Some("JobRemoved")
+    {
+        return Err(BrokerError::Invalid(
+            "systemd message is not a Manager.JobRemoved signal".to_owned(),
+        ));
+    }
+    let (job_id, job_path, unit, result): (u32, zbus::zvariant::OwnedObjectPath, String, String) =
+        message.body().deserialize().map_err(|_| {
+            BrokerError::Invalid("systemd JobRemoved payload is invalid".to_owned())
+        })?;
+    let binding = ledger::JobBinding::from_object_path(&unit, job_path.as_str())?;
+    if binding.job_id() != job_id {
+        return Err(BrokerError::Conflict(
+            "systemd JobRemoved ID does not match its object path".to_owned(),
+        ));
+    }
+    JobRemovedEvent::new(binding, result)
+}
+
 fn verify_held_process(
     expected: &UnitObservation,
     controls: &mut HeldCgroup,
@@ -957,6 +1330,209 @@ fn boot_scoped_start_token(boot_id: &str, stat: &str) -> BrokerResult<String> {
     // A durable receipt must not collide with the same PID/start tick after a
     // reboot. This broker token is separate from decimal worker-IPC birth fields.
     Ok(format!("boot:{boot_id}:{ticks}"))
+}
+
+#[cfg(test)]
+mod queued_job_tests {
+    use super::*;
+
+    fn binding(unit: &str, id: u32) -> ledger::JobBinding {
+        ledger::JobBinding::from_object_path(unit, &format!("/org/freedesktop/systemd1/job/{id}"))
+            .expect("valid queued job binding")
+    }
+
+    struct NoQueuedJobBackend;
+
+    impl QueuedJobBackend for NoQueuedJobBackend {}
+
+    #[test]
+    fn default_queued_job_methods_fail_closed() {
+        let mut backend = NoQueuedJobBackend;
+        let job = binding("synthetic.service", 7);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert!(backend.queued_job_binding(job.unit()).is_none());
+        assert!(matches!(
+            backend.take_queued_job_binding(job.unit(), deadline),
+            Err(BrokerError::Unavailable(_))
+        ));
+        assert!(matches!(
+            backend.resolve_queued_job(&job, deadline),
+            Err(BrokerError::Unavailable(_))
+        ));
+        assert!(matches!(
+            backend.cancel_queued_job(&job, deadline),
+            Err(BrokerError::Unavailable(_))
+        ));
+        let event =
+            JobRemovedEvent::new(job.clone(), "done").expect("valid matching job removal event");
+        assert_eq!(
+            backend
+                .observe_job_removed(&job, event, deadline)
+                .expect("matching event"),
+            JobRemovalOutcome::Done
+        );
+    }
+
+    #[test]
+    fn native_queued_job_resolution_and_cancellation_honor_deadline() {
+        let job = binding("synthetic.service", 8);
+        let expired = Instant::now();
+        assert!(matches!(
+            NativeSystemdBackend::resolve_queued_job_native(&job, expired),
+            Err(BrokerError::Unavailable(_))
+        ));
+        assert!(matches!(
+            NativeSystemdBackend::cancel_queued_job_native(&job, expired),
+            Err(BrokerError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn retained_job_identity_rejects_replacement_and_late_removal() {
+        let mut backend = NativeSystemdBackend::connect();
+        let first = binding("synthetic.service", 11);
+        let replacement = binding("synthetic.service", 12);
+        backend
+            .remember_queued_job(first.clone())
+            .expect("first queued job");
+        assert_eq!(backend.queued_job_binding(first.unit()), Some(&first));
+        backend
+            .remember_queued_job(first.clone())
+            .expect("idempotent duplicate retention");
+        assert!(matches!(
+            backend.remember_queued_job(replacement.clone()),
+            Err(BrokerError::Conflict(_))
+        ));
+
+        let late =
+            JobRemovedEvent::new(replacement, "done").expect("valid but unrelated late event");
+        assert!(matches!(
+            backend.observe_job_removed(&first, late, Instant::now() + Duration::from_secs(1)),
+            Err(BrokerError::Conflict(_))
+        ));
+        assert_eq!(backend.queued_job_binding(first.unit()), Some(&first));
+
+        let removed =
+            JobRemovedEvent::new(first.clone(), "canceled").expect("valid matching removal event");
+        assert_eq!(
+            backend
+                .observe_job_removed(&first, removed, Instant::now() + Duration::from_secs(1))
+                .expect("matching removal"),
+            JobRemovalOutcome::Canceled
+        );
+        assert!(backend.queued_job_binding(first.unit()).is_none());
+        assert!(matches!(
+            backend.take_queued_job_binding(first.unit(), Instant::now() + Duration::from_secs(1)),
+            Err(BrokerError::Conflict(_))
+        ));
+    }
+
+    #[derive(Default)]
+    struct FakeCancellationBackend {
+        binding: Option<ledger::JobBinding>,
+        cancel_calls: usize,
+    }
+
+    impl QueuedJobBackend for FakeCancellationBackend {
+        fn queued_job_binding(&self, unit: &str) -> Option<&ledger::JobBinding> {
+            self.binding
+                .as_ref()
+                .filter(|binding| binding.unit() == unit)
+        }
+
+        fn resolve_queued_job(
+            &mut self,
+            binding: &ledger::JobBinding,
+            deadline: Instant,
+        ) -> BrokerResult<QueuedJobResolution> {
+            remaining(deadline)?;
+            match self.binding.as_ref() {
+                Some(retained) if retained == binding => Ok(QueuedJobResolution::Queued),
+                Some(_) => Err(BrokerError::Conflict(
+                    "fake queued job binding differs from the retained job".to_owned(),
+                )),
+                None => Ok(QueuedJobResolution::Gone),
+            }
+        }
+
+        fn cancel_queued_job(
+            &mut self,
+            binding: &ledger::JobBinding,
+            deadline: Instant,
+        ) -> BrokerResult<QueuedJobCancellation> {
+            match self.resolve_queued_job(binding, deadline)? {
+                QueuedJobResolution::Gone => Ok(QueuedJobCancellation::AlreadyGone),
+                QueuedJobResolution::Queued => {
+                    self.cancel_calls += 1;
+                    self.binding = None;
+                    Ok(QueuedJobCancellation::Submitted)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fake_concurrent_stop_attempts_cancel_only_the_exact_job_once() {
+        let job = binding("synthetic.service", 13);
+        let mut backend = FakeCancellationBackend {
+            binding: Some(job.clone()),
+            ..FakeCancellationBackend::default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            backend.cancel_queued_job(&job, deadline),
+            Ok(QueuedJobCancellation::Submitted)
+        );
+        assert_eq!(
+            backend.cancel_queued_job(&job, deadline),
+            Ok(QueuedJobCancellation::AlreadyGone)
+        );
+        assert_eq!(backend.cancel_calls, 1);
+    }
+
+    #[test]
+    fn job_removed_decoder_requires_exact_manager_signal_and_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let unit = "synthetic.service";
+        let id = 14;
+        let path: zbus::zvariant::OwnedObjectPath =
+            format!("/org/freedesktop/systemd1/job/{id}").try_into()?;
+        let message = zbus::Message::signal(
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "JobRemoved",
+        )?
+        .build(&(id, path.clone(), unit.to_owned(), "done".to_owned()))?;
+        let event = decode_job_removed(&message)?;
+        assert_eq!(event.binding(), &binding(unit, id));
+        assert_eq!(event.result(), "done");
+        assert_eq!(event.outcome(), JobRemovalOutcome::Done);
+
+        let wrong_id = zbus::Message::signal(
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "JobRemoved",
+        )?
+        .build(&(id + 1, path, unit.to_owned(), "canceled".to_owned()))?;
+        assert!(matches!(
+            decode_job_removed(&wrong_id),
+            Err(BrokerError::Conflict(_))
+        ));
+
+        let wrong_header = zbus::Message::signal(
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "UnitRemoved",
+        )?
+        .build(&(id, binding(unit, id).job_path(), unit.to_owned()))?;
+        assert!(matches!(
+            decode_job_removed(&wrong_header),
+            Err(BrokerError::Invalid(_))
+        ));
+        assert!(JobRemovedEvent::new(binding(unit, id), "DONE").is_err());
+        assert!(JobRemovedEvent::new(binding(unit, id), "").is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

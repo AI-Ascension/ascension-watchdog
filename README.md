@@ -1,6 +1,10 @@
-# Ascension watchdog
+# Ascension Watchdog
 
 Deterministic Rust deployment supervision and crash recovery for AI-Ascension.
+
+This is a bounded [Ascension](https://github.com/AI-Ascension/sts2-harness)
+operations component. **The Climb — by AI Ascension** does not imply that a
+watchdog service, 24/7 operation, or recovery guarantee has been verified.
 
 Status: watchdog implementation patch is in review; cross-repository release
 admission remains blocked. No service, live-host recovery, reboot or soak
