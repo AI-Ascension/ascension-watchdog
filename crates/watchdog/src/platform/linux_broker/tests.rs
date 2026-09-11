@@ -396,8 +396,16 @@ fn observation(policy: &LaunchPolicy, unit: &str) -> UnitObservation {
 }
 
 fn protected_tempdir() -> tempfile::TempDir {
-    let runtime_directory =
-        PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()));
+    // A user manager normally provides XDG_RUNTIME_DIR, but the repository's
+    // Linux test lane also runs in minimal containers where /run/user does
+    // not exist.  Keep the fixture on an existing private directory so the
+    // protected-ancestor checks exercise the same ownership/mode contract
+    // without requiring host-level runtime-directory provisioning.
+    let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
     tempdir_in(runtime_directory).expect("protected test directory")
 }
 

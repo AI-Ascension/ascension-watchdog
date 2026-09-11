@@ -42,6 +42,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "init"
                 | "migrate"
                 | "doctor"
+                | "diagnostics"
                 | "preflight"
                 | "release"
                 | "restore"
@@ -51,6 +52,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "resume"
                 | "drain"
                 | "stop"
+                | "quarantine"
                 | "retry"
                 | "reconcile"
                 | "backup"
@@ -96,11 +98,12 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "init" => init_command(&mut args, &config_path),
         "migrate" => migration_command(&args, &config_path),
         "doctor" => doctor_command(&config_path),
+        "diagnostics" => diagnostics_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args, &config_path),
         "restore" => restore_command(&mut args, &config_path),
-        "status" | "start" | "pause" | "resume" | "drain" | "stop" | "retry" | "reconcile"
-        | "backup" => operator_command(&command, &mut args, &config_path),
+        "status" | "start" | "pause" | "resume" | "drain" | "stop" | "quarantine" | "retry"
+        | "reconcile" | "backup" => operator_command(&command, &mut args, &config_path),
         "daemon" | "run" => daemon_command(&mut args, &config_path),
         #[cfg(windows)]
         "service" => crate::windows_service::service_command(&mut args, &config_path),
@@ -119,7 +122,8 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
 fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<Option<String>> {
     use crate::admin::{
         AdminClient, AdminClientConfig, AdminCommand, BackupRequest, Capability, EmptyParams,
-        ReconcileRequest, ReconcileTarget, ReplyStatus, RetryPolicy, RetryRequest,
+        QuarantineRequest, ReconcileRequest, ReconcileTarget, ReplyStatus, RetryPolicy,
+        RetryRequest,
     };
     let key = take_option(args, "--idempotency-key");
     let backup_id =
@@ -138,6 +142,20 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         } else {
             None
         };
+    let quarantine_attempt_id = if name == "quarantine" {
+        Some(take_option(args, "--attempt-id").ok_or_else(|| {
+            WatchdogError::InvalidInput("quarantine requires --attempt-id".to_owned())
+        })?)
+    } else {
+        None
+    };
+    let quarantine_reason = if name == "quarantine" {
+        Some(take_option(args, "--reason").ok_or_else(|| {
+            WatchdogError::InvalidInput("quarantine requires --reason".to_owned())
+        })?)
+    } else {
+        None
+    };
     let retry_policy = if name == "retry" {
         match take_option(args, "--policy")
             .as_deref()
@@ -193,6 +211,11 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
                 "reconcile requires authenticated admin configuration".to_owned(),
             ));
         }
+        if name == "quarantine" {
+            return Err(WatchdogError::Unauthorized(
+                "quarantine requires authenticated admin configuration".to_owned(),
+            ));
+        }
         if !config.allow_synthetic_children {
             return Err(WatchdogError::Unauthorized(
                 "mutating commands require authenticated admin configuration".to_owned(),
@@ -218,6 +241,14 @@ fn operator_command(name: &str, args: &mut Vec<String>, path: &Path) -> Result<O
         "pause" => AdminCommand::Pause(EmptyParams {}),
         "drain" => AdminCommand::Drain(EmptyParams {}),
         "stop" => AdminCommand::Stop(EmptyParams {}),
+        "quarantine" => AdminCommand::Quarantine(QuarantineRequest {
+            attempt_id: quarantine_attempt_id.ok_or_else(|| {
+                WatchdogError::InvalidInput("quarantine requires --attempt-id".to_owned())
+            })?,
+            reason: quarantine_reason.ok_or_else(|| {
+                WatchdogError::InvalidInput("quarantine requires --reason".to_owned())
+            })?,
+        }),
         "retry" => AdminCommand::Retry(RetryRequest {
             attempt_id: retry_attempt_id.ok_or_else(|| {
                 WatchdogError::InvalidInput("retry requires --attempt-id".to_owned())
@@ -520,6 +551,44 @@ fn doctor_command(config_path: &Path) -> Result<Option<String>> {
             "durability": status.durability,
             "wal_full": status.durability.is_wal_full(),
             "database": config.database,
+        })
+        .to_string(),
+    ))
+}
+
+/// Emit a bounded, read-only diagnostic bundle.  This deliberately stays
+/// local to the owner store: it does not contact supervised processes, read
+/// job payloads/results, or make a recovery decision.
+fn diagnostics_command(config_path: &Path) -> Result<Option<String>> {
+    let config = WatchdogConfig::from_file(config_path)?;
+    let store = Store::open_read_only(&config.database, &config)?;
+    let status = store.status()?;
+    let integrity_ok = store.integrity_check()?;
+    let release_selection = store.release_selection()?;
+    let operator_receipts_retained = store.operator_command_count()?;
+    Ok(Some(
+        json!({
+            "diagnostics_version": 1,
+            "config_valid": true,
+            "initialized": true,
+            "integrity_ok": integrity_ok,
+            "durability": status.durability,
+            "database": status.database,
+            "deployment_id": status.deployment_id,
+            "desired_mode": status.desired_mode,
+            "schema_version": status.schema_version,
+            "restart_generation": status.restart_generation,
+            "config_digest": status.config_digest,
+            "approved_release_digest": status.approved_release_digest,
+            "jobs": {
+                "queued": status.jobs_queued,
+                "running": status.jobs_running,
+                "completed": status.jobs_completed,
+                "quarantined": status.jobs_quarantined,
+            },
+            "operator_receipts_retained": operator_receipts_retained,
+            "release_selection": release_selection,
+            "admin_configured": config.admin.is_some(),
         })
         .to_string(),
     ))
@@ -954,5 +1023,29 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "ascension-watchdog\n\nUsage:\n  watchdog config validate [PATH]\n  watchdog config sample [PATH]\n  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n  watchdog release inspect --config PATH --release-id ID\n  watchdog release inspect --manifest PATH --root PATH\n  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n  watchdog init --config PATH [--database PATH]\n  watchdog migrate gateway-health --config PATH\n  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n  watchdog daemon --config PATH [--once]\n  watchdog service install --config PATH [--executable PATH] [--account NAME]\n  watchdog service uninstall --config PATH\n  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n  watchdog job list|claim|complete|fail --config PATH ...\n\nRead-only status and doctor never initialize missing state."
+    concat!(
+        "ascension-watchdog\n\nUsage:\n",
+        "  watchdog config validate [PATH]\n",
+        "  watchdog config sample [PATH]\n",
+        "  watchdog preflight --state-directory PATH [--reserve-bytes N] [--staging-bytes N] [--backup-bytes N]\n",
+        "  watchdog release inspect --config PATH --release-id ID\n",
+        "  watchdog release inspect --manifest PATH --root PATH\n",
+        "  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
+        "  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
+        "  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n",
+        "  watchdog init --config PATH [--database PATH]\n",
+        "  watchdog migrate gateway-health --config PATH\n",
+        "  watchdog diagnostics --config PATH\n",
+        "  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n",
+        "  watchdog quarantine --config PATH --idempotency-key KEY --attempt-id ID --reason REASON\n",
+        "  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n",
+        "  watchdog reconcile --config PATH --idempotency-key KEY --target deployment|component|job|attempt [--id ID]\n",
+        "  watchdog backup --config PATH --idempotency-key KEY --backup-id ID\n",
+        "  watchdog daemon --config PATH [--once]\n",
+        "  watchdog service install --config PATH [--executable PATH] [--account NAME]\n",
+        "  watchdog service uninstall --config PATH\n",
+        "  watchdog job submit --config PATH --idempotency-key KEY --kind KIND [--payload JSON|--payload-file PATH]\n",
+        "  watchdog job list|claim|complete|fail --config PATH ...\n\n",
+        "Read-only status and doctor never initialize missing state."
+    )
 }
