@@ -12,11 +12,12 @@
 # Usage:
 #   crossrepo-campaign.sh --bin-dir DIR --results PATH --duration-seconds N \
 #     [--fault-interval-seconds N] [--max-failure-diagnostics N] \
+#     [--max-execution-stores N] \
 #     [--mod-addr ADDR] [--gateway-port-base N]
 set -eu
 
 usage() {
-    printf '%s\n' 'usage: crossrepo-campaign.sh --bin-dir DIR --results PATH --duration-seconds N [--fault-interval-seconds N] [--max-failure-diagnostics N] [--mod-addr ADDR] [--gateway-port-base N]' >&2
+    printf '%s\n' 'usage: crossrepo-campaign.sh --bin-dir DIR --results PATH --duration-seconds N [--fault-interval-seconds N] [--max-failure-diagnostics N] [--max-execution-stores N] [--mod-addr ADDR] [--gateway-port-base N]' >&2
     exit 64
 }
 
@@ -25,6 +26,7 @@ results=
 duration=
 fault_interval=900
 max_failure_diagnostics=16
+max_execution_stores=64
 mod_addr=127.0.0.1:20001
 gateway_port_base=21000
 while [ "$#" -gt 0 ]; do
@@ -34,6 +36,7 @@ while [ "$#" -gt 0 ]; do
         --duration-seconds) [ "$#" -ge 2 ] || usage; duration=$2; shift 2 ;;
         --fault-interval-seconds) [ "$#" -ge 2 ] || usage; fault_interval=$2; shift 2 ;;
         --max-failure-diagnostics) [ "$#" -ge 2 ] || usage; max_failure_diagnostics=$2; shift 2 ;;
+        --max-execution-stores) [ "$#" -ge 2 ] || usage; max_execution_stores=$2; shift 2 ;;
         --mod-addr) [ "$#" -ge 2 ] || usage; mod_addr=$2; shift 2 ;;
         --gateway-port-base) [ "$#" -ge 2 ] || usage; gateway_port_base=$2; shift 2 ;;
         *) usage ;;
@@ -44,6 +47,10 @@ case "$max_failure_diagnostics" in
     ''|*[!0-9]*) usage ;;
 esac
 [ "$max_failure_diagnostics" -gt 0 ] || usage
+case "$max_execution_stores" in
+    ''|*[!0-9]*) usage ;;
+esac
+[ "$max_execution_stores" -gt 0 ] || usage
 
 for name in synthetic_mod_server sts2-gateway-runtime sts2-harness-runtime sts2-mcp-server bridge.sh; do
     [ -e "$bin_dir/$name" ] || { printf '%s\n' "missing campaign input: $bin_dir/$name" >&2; exit 66; }
@@ -61,7 +68,18 @@ trim_failure_diagnostics() {
         oldest=$(find "$diagnostics_dir" -maxdepth 1 -type f -name 'failure-*.runtime.log' | sort | head -n 1)
         [ -n "$oldest" ] || return 0
         base=${oldest%.runtime.log}
-        rm -f "$oldest" "$base.gateway.log"
+        rm -f "$oldest" "$base.gateway.log" "$base.execution.sqlite3" \
+            "$base.execution.sqlite3-shm" "$base.execution.sqlite3-wal"
+        retained=$((retained - 1))
+    done
+}
+
+trim_execution_stores() {
+    retained=$(find "$results" -maxdepth 1 -type f -name 'execution-*.sqlite3' | wc -l)
+    while [ "$retained" -gt "$max_execution_stores" ]; do
+        oldest=$(find "$results" -maxdepth 1 -type f -name 'execution-*.sqlite3' | sort | head -n 1)
+        [ -n "$oldest" ] || return 0
+        rm -f "$oldest" "$oldest-shm" "$oldest-wal"
         retained=$((retained - 1))
     done
 }
@@ -128,16 +146,23 @@ while [ "$(date +%s)" -lt "$end" ]; do
     wait "$gateway_pid" 2>/dev/null || true
     if [ "$outcome" = pass ]; then
         rm -f "$gateway_log" "$runtime_log"
+        trim_execution_stores
         printf '{"ts":"%s","iteration":%d,"result":"pass"}\n' \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$iterations" >> "$results_file"
     else
         retained_gateway=$diagnostics_dir/failure-$iterations.gateway.log
         retained_runtime=$diagnostics_dir/failure-$iterations.runtime.log
+        retained_execution=$diagnostics_dir/failure-$iterations.execution.sqlite3
+        execution_store_json=null
         mv "$gateway_log" "$retained_gateway"
         mv "$runtime_log" "$retained_runtime"
+        if [ -f "$results/execution-$iterations.sqlite3" ]; then
+            mv "$results/execution-$iterations.sqlite3" "$retained_execution"
+            execution_store_json=$(printf '"failure-diagnostics/failure-%d.execution.sqlite3"' "$iterations")
+        fi
         trim_failure_diagnostics
-        printf '{"ts":"%s","iteration":%d,"result":"fail","runtime_exit":%d,"gateway_log":"failure-diagnostics/failure-%d.gateway.log","runtime_log":"failure-diagnostics/failure-%d.runtime.log"}\n' \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$iterations" "$runtime_exit" "$iterations" "$iterations" >> "$results_file"
+        printf '{"ts":"%s","iteration":%d,"result":"fail","runtime_exit":%d,"gateway_log":"failure-diagnostics/failure-%d.gateway.log","runtime_log":"failure-diagnostics/failure-%d.runtime.log","execution_store":%s}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$iterations" "$runtime_exit" "$iterations" "$iterations" "$execution_store_json" >> "$results_file"
     fi
     sleep 4
 done
