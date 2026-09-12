@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T06:51:47Z",
+  "captured_at": "2026-09-12T07:02:15Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -434,15 +434,16 @@
     "account": "completetech",
     "container": "ascension-crossrepo-soak (rootless podman)",
     "persistent_downstream": "sts2-harness synthetic mod server (PR #89) on 127.0.0.1:20001",
-    "started_at": "2026-09-12T06:50:36Z",
-    "target_completion": "2026-09-13T06:50:36Z",
+    "started_at": "2026-09-12T07:01:36Z",
+    "target_completion": "2026-09-13T07:01:36Z",
     "observed_so_far": {
-      "iterations": 9,
-      "pass": 9,
+      "iterations": 6,
+      "pass": 6,
       "fail": 0
     },
     "classification": "fresh gateway/harness per iteration; not a continuous single-deployment soak",
     "telemetry_outage_exercised": true,
-    "supersedes": "composition_campaign"
+    "supersedes": "composition_campaign",
+    "fault_injection": "downstream killed and restarted every 15 minutes, recorded as a downstream_restart event"
   }
 }
