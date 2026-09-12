@@ -719,6 +719,31 @@ This strengthens the user-scope S12/S17 and INV-08/INV-10 evidence; the installe
 root service, Windows SCM, live host, cold boot, rollback, and cross-repository
 soak remain open.
 
+### Native Linux system-service lifecycle completed (2026-09-11)
+
+The supported root `systemd` deployment was executed on the supplied Train host:
+`deploy/linux/install.sh` installed the unit, service account, protected paths,
+and read-only release (rc 0); `systemctl start` reached `active/running` under
+`Type=notify` with `NotifyAccess=main`, `User=Group=ascension-watchdog`, and
+`KillMode=control-group`; `SIGKILL` produced a `Restart=on-failure` recovery
+(`Result=success`, `active/running`); an authenticated `stop` set durable
+`desired_mode=stopped`; and `uninstall.sh` removed the enabled unit while
+preserving state and releases (rc 0). See
+[`native-system-service-lifecycle-20260911.md`](native-system-service-lifecycle-20260911.md).
+
+A defect in this path was also fixed: `uninstall.sh` proved durable stopped
+intent with `watchdog status`, which uses the authenticated admin endpoint when
+configured; the root uninstaller cannot satisfy the admin client's endpoint
+owner check, so uninstall failed for admin-configured deployments. The
+uninstaller now uses the local read-only `diagnostics` snapshot, and the
+namespace installer harness fails `status` to lock the behavior in.
+
+This moves S12/S17 and INV-08/INV-14 to source- and native-installed-service
+evidence for install/start/status/stop/uninstall, readiness, recovery,
+containment, and durable stop. Windows SCM, WSL termination, uninstall's data
+option, live host, cold boot, on-host activation/rollback, and soak remain open.
+The host was not rebooted.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,

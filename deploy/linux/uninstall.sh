@@ -33,13 +33,19 @@ done
 # termination could leave the store in Running mode and a later reinstall
 # could revive work. Require an existing owner binary/config, stop an active
 # unit, then inspect the same owner-local store before removing the unit.
+#
+# The durable-mode check must not depend on the authenticated admin channel:
+# `status` uses that channel when a deployment configures one, and the admin
+# endpoint is owned by the service account, so the root uninstaller could not
+# reach it. `diagnostics` is a bounded read-only owner-store snapshot that
+# needs no admin transport, so it works for the root uninstaller.
 [ -x "$watchdog" ] || { printf '%s\n' "watchdog executable is missing: $watchdog" >&2; exit 66; }
 [ -f "$config" ] || { printf '%s\n' "watchdog configuration is missing: $config" >&2; exit 66; }
 if systemctl is-active --quiet ascension-watchdog.service; then
     systemctl stop ascension-watchdog.service
 fi
-status_json=$("$watchdog" status --config "$config") || {
-    printf '%s\n' 'watchdog status could not prove the owner-local store is readable' >&2
+status_json=$("$watchdog" diagnostics --config "$config") || {
+    printf '%s\n' 'watchdog diagnostics could not prove the owner-local store is readable' >&2
     exit 1
 }
 printf '%s' "$status_json" | jq -e '.desired_mode == "stopped"' >/dev/null || {

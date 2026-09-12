@@ -145,7 +145,24 @@ owner-local state; see
 It does not prove the installed root system-service path, live host, reboot,
 activation, rollback, or soak, so items 1–5 above still require authorization.
 
-## Status
+## Status update — 2026-09-11 (system service executed)
 
-No item above has been executed. Native service, live-host, cold-boot, rollback,
+- **Item 1 (native Linux systemd service lifecycle) is now executed** on the
+  supplied Train host with root authorization: `install.sh`, `systemctl start`
+  (notify readiness), authenticated `status`/`stop` (durable), and
+  `uninstall.sh` all passed. See
+  [`native-system-service-lifecycle-20260911.md`](native-system-service-lifecycle-20260911.md).
+  The host was not rebooted. A defect uncovered here (the root uninstaller could
+  not read durable mode through an admin-configured endpoint) was fixed in
+  `deploy/linux/uninstall.sh`.
+- **Item 2 (live-host recovery)** is partially covered at user scope
+  (`native-crash-campaign-20260911.md`); a real gameplay/host recovery campaign
+  still needs an approved target.
+- **Items 3–5 (cold boot, on-host activation/rollback, 24-hour soak)** remain
+  unauthorized. Cold boot still needs explicit reboot authorization for a
+  disposable target; the shared Train host must not be rebooted.
+
+## Status (historical, before the execution above)
+
+No item above had been executed. Native service, live-host, cold-boot, rollback,
 and soak axes remain unverified.
