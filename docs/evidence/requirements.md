@@ -675,6 +675,21 @@ This improves the S12/S17 Linux service-adapter evidence but does not verify the
 installed root service, WSL, uninstall idempotence, live host, reboot,
 activation/rollback, or soak.
 
+### Implementation defect resolved — admin socket crash recovery (2026-09-11)
+
+A native user-scope systemd run exposed a crash-recovery defect: with an
+authenticated admin endpoint configured, `SIGKILL` left the Unix socket file
+behind and every `Restart=on-failure` retry failed with
+`watchdog store is already owned: <state>/admin.sock`, so systemd exhausted its
+restart burst. `bind_endpoint` now reclaims a socket only when a connection
+probe is refused (proving no listener) and the socket file is unchanged, while a
+live incumbent still returns `BUSY`. A unit test covers both halves and the fix
+was re-verified on the host (`NRestarts=1`, `active/running`, `Result=success`
+after `SIGKILL`). See
+[`admin-socket-recovery-fix-20260911.md`](admin-socket-recovery-fix-20260911.md).
+This improves INV-08/S12/S14 crash-recovery evidence; it does not verify the
+installed root service, live host, cold boot, activation/rollback, or soak.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
