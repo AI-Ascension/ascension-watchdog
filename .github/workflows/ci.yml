@@ -37,20 +37,25 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Run unit and synthetic tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
-      - name: Run service-session synthetic worker admission when available
+      - name: Classify Windows hosted-session evidence
         if: runner.os == 'Windows'
         timeout-minutes: 3
         shell: pwsh
         run: |
           $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-          if ($session -ne 0) {
-            Write-Output "UNVERIFIED: session-0 worker admission requires a session-0 runner; current session is $session. No service or session change will be attempted."
-            exit 0
-          }
-          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child -- --exact --ignored --nocapture
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job -- --exact --ignored --nocapture
-          exit $LASTEXITCODE
+          $receipt = Join-Path $env:RUNNER_TEMP "watchdog-hosted-session-classification.log"
+          "hosted Windows session: $session" | Set-Content -NoNewline $receipt
+          $digest = (Get-FileHash -Algorithm SHA256 $receipt).Hash.ToLowerInvariant()
+          @{
+            schema_version = 1
+            repository = "AI-Ascension/ascension-watchdog"
+            evidence_kind = "synthetic"
+            result = "passed"
+            source_revision = "${{ github.sha }}"
+            runner = @{ os = "windows"; session_id = $session; service_session_zero = $false }
+            checks = @(@{ name = "hosted-windows-session-classification"; outcome = "passed"; receipt_sha256 = $digest })
+          } | ConvertTo-Json -Depth 4 -Compress | Write-Output
+          Write-Output "This hosted synthetic lane does not run or qualify the session-0 native boundary. Native qualification is restricted to native-qualification.yml."
       - name: Build exact locked release
         run: cargo build --workspace --release --locked
 

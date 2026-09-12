@@ -1,0 +1,79 @@
+name: Windows session-0 native qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-session-0:
+    # This label is an admission prerequisite, not an instruction to install or
+    # mutate a service. Without an approved runner, no native pass is emitted.
+    name: Qualified-native release gate (Windows session 0)
+    runs-on: [self-hosted, windows, session-0]
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        shell: pwsh
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt --no-self-update
+      - name: Prove service-session prerequisite
+        shell: pwsh
+        run: |
+          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          if ($session -ne 0) {
+            Write-Error "Native qualification refused: expected Windows service session 0, observed session $session."
+            exit 1
+          }
+      - name: Run required native admission checks and retain receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $receipt = Join-Path $env:RUNNER_TEMP "watchdog-native-session-0-receipt.log"
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child -- --exact --ignored --nocapture *>&1 | Tee-Object -FilePath $receipt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -LiteralPath $receipt -Pattern '^test result: ok\. 1 passed;' -Quiet)) {
+            Write-Error "Native qualification refused: the first required test did not execute exactly once."
+            exit 1
+          }
+          cargo test --locked -p ascension-watchdog --lib --all-features runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job -- --exact --ignored --nocapture *>&1 | Tee-Object -FilePath $receipt -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Select-String -LiteralPath $receipt -Pattern '^test result: ok\. 1 passed;').Count -ne 2) {
+            Write-Error "Native qualification refused: each required test must execute exactly once."
+            exit 1
+          }
+          $digest = (Get-FileHash -Algorithm SHA256 $receipt).Hash.ToLowerInvariant()
+          $evidence = Join-Path $env:RUNNER_TEMP "watchdog-native-session-0-evidence.json"
+          @{
+            schema_version = 1
+            repository = "AI-Ascension/ascension-watchdog"
+            evidence_kind = "native-session0"
+            result = "passed"
+            source_revision = "${{ github.sha }}"
+            runner = @{ os = "windows"; session_id = 0; service_session_zero = $true }
+            checks = @(
+              @{ name = "native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child"; outcome = "passed"; receipt_sha256 = $digest },
+              @{ name = "native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job"; outcome = "passed"; receipt_sha256 = $digest }
+            )
+          } | ConvertTo-Json -Depth 4 -Compress | Set-Content -NoNewline $evidence
+          "NATIVE_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "NATIVE_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Verify fail-closed qualified-native evidence
+        shell: pwsh
+        run: cargo run --locked -p ascension-watchdog --bin watchdog -- qualification verify-native --evidence "$env:NATIVE_EVIDENCE" --receipt "$env:NATIVE_RECEIPT" --expected-source-revision "${{ github.sha }}"
+      - name: Retain native evidence and receipt
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: watchdog-native-session-0-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/watchdog-native-session-0-evidence.json
+            ${{ runner.temp }}/watchdog-native-session-0-receipt.log
+          if-no-files-found: error
+          retention-days: 90
