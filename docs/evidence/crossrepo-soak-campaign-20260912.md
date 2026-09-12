@@ -21,12 +21,16 @@ behavior against a long-lived downstream.
   runtime one episode (which launches MCP via `STS2_MCP_BINARY`) with
   `STS2_PROVIDER_KIND=synthetic` and the bounded exo bridge, then stop the
   gateway and record `{"ts","iteration","result"}`.
-- Duration: 24 hours from `2026-09-12T06:50:36Z` (target
-  `2026-09-13T06:50:36Z`).
+- Fault injection: every 15 minutes the persistent downstream is killed and
+  restarted on the same address, and the outcome is recorded as a
+  `downstream_restart` event, so the campaign also covers a downstream outage
+  and recovery.
+- Duration: 24 hours from `2026-09-12T07:01:36Z` (target
+  `2026-09-13T07:01:36Z`).
 
 ## Observed so far
 
-- First iteration `2026-09-12T06:50:36Z`: `pass`; 9/9 iterations `pass`.
+- First iterations at `2026-09-12T07:01:36Z` onward: `pass` (6/6 at capture).
 
 Each harness run reports `telemetry export status=partial sent=0 failed=3`
 because no collector is configured, so the campaign also exercises telemetry
