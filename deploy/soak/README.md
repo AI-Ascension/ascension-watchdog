@@ -25,6 +25,10 @@ deploy/soak/supervisor-soak.sh finalize \
 `release-manifest.json`; the script reuses `deploy/linux/install.sh` and the
 unit file from `deploy/linux/`.
 
+Each sample includes the daemon RSS, restart counter, supervised child counts, and
+(when the release binary supports `watchdog components`) the durable component
+records for restart attempts and backoff state.
+
 `finalize` prints the sample count, first/last timestamp, elapsed seconds, and
 `soak_complete=true` only when elapsed wall-clock is at least the requested
 duration. A shorter run is reported `soak_complete=false`, so an accelerated

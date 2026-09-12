@@ -21,7 +21,9 @@ two-component synthetic configuration:
 A `soak-collect.timer` (60 s) appends one JSON line per sample to a host volume:
 
 ```json
-{"ts":"...","active":"active","restarts":0,"rss_kb":7064,"stable":1,"cycler":0}
+{"ts":"...","active":"active","restarts":0,"rss_kb":7064,"stable":1,"cycler":0,
+ "components":[{"id":"cycler","state":"quarantined","restart_attempts":5,...},
+               {"id":"stable","state":"suspect","restart_attempts":1,...}]}
 ```
 
 Observed so far (start `2026-09-12T02:26:51Z`):

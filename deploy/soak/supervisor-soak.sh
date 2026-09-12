@@ -103,8 +103,10 @@ ACTIVE=$(systemctl is-active ascension-watchdog.service)
 RESTARTS=$(systemctl show ascension-watchdog.service -p NRestarts --value)
 STABLE=$(ps -eo comm,args | awk '$1=="sleep" && $3=="100000"' | wc -l)
 CYCLER=$(ps -eo comm,args | awk '$1=="sleep" && $3=="90"' | wc -l)
-printf '{"ts":"%s","active":"%s","restarts":%s,"rss_kb":%s,"stable":%s,"cycler":%s}\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ACTIVE" "${RESTARTS:-0}" "${RSS:-0}" "$STABLE" "$CYCLER" >> "$LOG"
+# Component-level restart/budget state when the release binary supports it.
+COMPONENTS=$(su -s /bin/sh ascension-watchdog -c "/opt/ascension-watchdog/current/watchdog components --config /etc/ascension-watchdog/watchdog.json" 2>/dev/null || printf '[]')
+printf '{"ts":"%s","active":"%s","restarts":%s,"rss_kb":%s,"stable":%s,"cycler":%s,"components":%s}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ACTIVE" "${RESTARTS:-0}" "${RSS:-0}" "$STABLE" "$CYCLER" "$COMPONENTS" >> "$LOG"
 COL
 cat > "$staging/soak-setup.sh" <<'SETUP'
 set -eu
