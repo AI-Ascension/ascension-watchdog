@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T05:37:52Z",
+  "captured_at": "2026-09-12T06:40:49Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -419,6 +419,12 @@
       "pass": 1,
       "fail": 0
     },
-    "classification": "repeated composition, not the continuous cross-repository deployment soak"
+    "classification": "repeated composition, not the continuous cross-repository deployment soak",
+    "continuous_deployment_limitation": {
+      "companion_capability": "sts2-harness PR #89 (merged 9e85c29049e942140b97d8fbab2e52ba95475964): long-lived synthetic downstream operator server",
+      "finding": "reusing one gateway instance for a second episode fails with 'episode launch failed'; the current contract admits one episode per gateway instance/lease",
+      "consequence": "cross-repo soak must restart the whole stack per iteration; a continuous single-deployment soak needs companion support for repeated episodes",
+      "note": "each harness run already reports telemetry export failed=3 with no collector, exercising telemetry-outage behavior"
+    }
   }
 }

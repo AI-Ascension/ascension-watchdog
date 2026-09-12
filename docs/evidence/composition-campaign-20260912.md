@@ -29,6 +29,26 @@ deployment running across restart/archive/budget/telemetry-outage injection.
 Completion evidence will report the iteration count and pass/fail totals, so a
 run shorter than 24 hours cannot be presented as the campaign.
 
+## Why a single continuous deployment is not yet possible
+
+To see whether one running deployment could be soaked continuously, the topology
+was exercised outside the test: a long-lived synthetic downstream
+(`sts2-harness` PR [#89](https://github.com/AI-Ascension/sts2-harness/pull/89),
+merged as `9e85c29049e942140b97d8fbab2e52ba95475964`) plus a persistent gateway,
+with the harness runtime launched repeatedly against the same gateway instance.
+The first episode succeeded (`rc=0`); the second failed:
+
+```text
+sts2-harness runtime failed: Runtime-v3 episode failed: episode launch failed
+```
+
+So the current companion contract admits one episode per gateway
+instance/lease; a continuous single-deployment soak needs companion support for
+repeated episodes (or one fresh gateway per episode). The campaign here
+therefore restarts the whole stack each iteration, which still exercises
+cross-repo coordination, restart, and telemetry-outage behavior: each harness run
+reports `telemetry export status=partial sent=0 failed=3` with no collector.
+
 ## Boundary
 
 No first effect is produced against a real game, and no continuous deployment
