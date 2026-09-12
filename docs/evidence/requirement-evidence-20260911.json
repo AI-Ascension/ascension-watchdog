@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T05:28:52Z",
+  "captured_at": "2026-09-12T05:37:52Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -405,5 +405,20 @@
       },
       "in_container_check": "cross-repo composition operator test passed as completetech inside a rootless container"
     }
+  },
+  "composition_campaign": {
+    "status": "running: 24h repeated cross-repo composition campaign",
+    "evidence": "docs/evidence/composition-campaign-20260912.md",
+    "host": "train.home.complete.tech",
+    "account": "completetech (rootless podman container ascension-composition-soak)",
+    "started_at": "2026-09-12T05:36:55Z",
+    "target_completion": "2026-09-13T05:36:55Z",
+    "interval_seconds": 30,
+    "observed_so_far": {
+      "iterations": 1,
+      "pass": 1,
+      "fail": 0
+    },
+    "classification": "repeated composition, not the continuous cross-repository deployment soak"
   }
 }
