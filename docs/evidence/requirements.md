@@ -825,6 +825,21 @@ This moves `COLD_BOOT_RECOVERY_VERIFIED` from container-scope to a real VM reboo
 host-level reboot, Windows SCM, WSL, live-host gameplay, and the cross-repo soak
 remain open.
 
+### Native cross-repo executable composition (2026-09-12)
+
+The harness operator test
+`executable_runtime_v4_composes_unknown_reconcile_and_foreign_state_fence` was
+run natively on the Train host with the real gateway, MCP, and harness binaries
+plus a test-support fake mod server and `synthetic` provider; it passed and
+verified unknown-outcome reconciliation without a second effect and rejection of
+foreign expert state. See
+[`native-cross-repo-composition-20260912.md`](native-cross-repo-composition-20260912.md).
+Provenance caveat: the companion harness worktree advanced to `main` `544605b3`
+and no longer materializes the admitted `4584c4cb` pin, so this is
+current-companion-main evidence and a fresh admission/release staging is needed
+to tie it to a release. It is not gameplay, not the watchdog service, and not
+the 24-hour soak.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
