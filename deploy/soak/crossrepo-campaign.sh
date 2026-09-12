@@ -51,6 +51,7 @@ done
 mkdir -p "$results"
 results_file=$results/iterations.jsonl
 diagnostics_dir=$results/failure-diagnostics
+mod_log=$results/synthetic-mod.log
 mkdir -p "$diagnostics_dir"
 : > "$results_file"
 
@@ -67,11 +68,11 @@ trim_failure_diagnostics() {
 
 start_mod() {
     STS2_SYNTHETIC_MOD_ADDR=$mod_addr "$bin_dir/synthetic_mod_server" \
-        --ignored --exact run_synthetic_downstream_until_terminated --nocapture > /tmp/campaign-mod.log 2>&1 &
+        --ignored --exact run_synthetic_downstream_until_terminated --nocapture > "$mod_log" 2>&1 &
     mod_pid=$!
     tries=0
     while [ "$tries" -lt 50 ]; do
-        if grep -q synthetic_mod_listening /tmp/campaign-mod.log 2>/dev/null; then return 0; fi
+        if grep -q synthetic_mod_listening "$mod_log" 2>/dev/null; then return 0; fi
         sleep 0.2
         tries=$((tries + 1))
     done

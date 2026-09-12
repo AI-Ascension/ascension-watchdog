@@ -45,6 +45,9 @@ and gateway logs under `failure-diagnostics/` and records both relative paths
 plus its runtime exit status in JSONL. Retention defaults to 16 failure pairs
 and is bounded with `--max-failure-diagnostics`; this prevents a long campaign
 from overwriting the only diagnostics needed to investigate a failure.
+The long-lived synthetic downstream log is retained as `synthetic-mod.log` in
+the supplied results directory, rather than in `/tmp`, so startup and restart
+diagnostics survive host temporary-file cleanup.
 
 `crossrepo-campaign-finalize.sh --results PATH --duration-seconds N` summarizes a
 cross-repo campaign results file (iterations, pass/fail, downstream faults and
