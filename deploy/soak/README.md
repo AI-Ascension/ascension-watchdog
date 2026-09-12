@@ -31,7 +31,7 @@ records for restart attempts and backoff state.
 
 `crossrepo-campaign.sh --bin-dir DIR --results PATH --duration-seconds N
 [--fault-interval-seconds N] [--max-failure-diagnostics N] [--mod-addr ADDR]
-[--gateway-port-base N]` runs the
+[--gateway-port-base N] [--max-execution-stores N]` runs the
 cross-repo campaign: it keeps one synthetic downstream (`synthetic_mod_server`
 from `sts2-harness` test support) running for the whole window while each
 iteration starts a fresh gateway and runs one harness episode (which launches
@@ -48,6 +48,12 @@ from overwriting the only diagnostics needed to investigate a failure.
 The long-lived synthetic downstream log is retained as `synthetic-mod.log` in
 the supplied results directory, rather than in `/tmp`, so startup and restart
 diagnostics survive host temporary-file cleanup.
+
+Successful per-episode execution stores are bounded as well: the runner retains
+at most 64 `execution-*.sqlite3` files by default, configurable with
+`--max-execution-stores`. Failed iterations move their execution store into the
+same bounded failure-diagnostic group as their logs. This keeps a fixed-duration
+campaign from accumulating an unbounded per-episode database history.
 
 `crossrepo-campaign-finalize.sh --results PATH --duration-seconds N` summarizes a
 cross-repo campaign results file (iterations, pass/fail, downstream faults and
