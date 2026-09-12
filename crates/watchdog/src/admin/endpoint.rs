@@ -229,9 +229,44 @@ impl Drop for EndpointGuard {
     }
 }
 
-/// Bind a protected Unix endpoint.  Existing paths are never unlinked as a
-/// stale-socket convenience; the kernel's `EADDRINUSE` remains a `BUSY`
-/// condition so an incumbent cannot be displaced.
+/// Return true only when `path` names a Unix socket owned by this user that no
+/// process is listening on, and the same file is still present when it is
+/// removed.  Any other condition returns false, so a live or unverifiable
+/// incumbent is never displaced.
+#[cfg(unix)]
+fn reclaim_stale_socket(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::os::unix::net::UnixStream;
+
+    let Ok(before) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    if !before.file_type().is_socket() || before.uid() != current_uid() {
+        return Ok(false);
+    }
+    let before_identity = (before.dev(), before.ino());
+
+    match UnixStream::connect(path) {
+        Ok(_stream) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            let Ok(after) = fs::symlink_metadata(path) else {
+                return Ok(false);
+            };
+            if !after.file_type().is_socket() || (after.dev(), after.ino()) != before_identity {
+                return Ok(false);
+            }
+            fs::remove_file(path)?;
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+/// Bind a protected Unix endpoint.  A live incumbent is never displaced: an
+/// `EADDRINUSE` whose socket still accepts a connection stays a `BUSY`
+/// condition.  A socket whose connection probe is refused is provably
+/// orphaned (for example after an unclean crash), so it is reclaimed once,
+/// which is required for service-manager restart recovery.
 #[cfg(unix)]
 pub(crate) fn bind_endpoint(
     path: &Path,
@@ -240,13 +275,22 @@ pub(crate) fn bind_endpoint(
     use std::os::unix::net::UnixListener;
 
     validate_unix_path(path)?;
-    let listener = UnixListener::bind(path).map_err(|error| {
-        if matches!(error.kind(), std::io::ErrorKind::AddrInUse) {
-            WatchdogError::Busy(path.to_path_buf())
-        } else {
-            WatchdogError::Io(error)
+    let listener = match UnixListener::bind(path) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            if !reclaim_stale_socket(path)? {
+                return Err(WatchdogError::Busy(path.to_path_buf()));
+            }
+            UnixListener::bind(path).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    WatchdogError::Busy(path.to_path_buf())
+                } else {
+                    WatchdogError::Io(error)
+                }
+            })?
         }
-    })?;
+        Err(error) => return Err(WatchdogError::Io(error)),
+    };
     // UnixListener::bind follows the process umask, but the endpoint policy is
     // explicit and must hold even under a permissive umask.
     if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
@@ -269,4 +313,45 @@ pub(crate) fn bind_endpoint(path: &Path) -> Result<((), EndpointGuard)> {
     Err(WatchdogError::Unsupported(
         "filesystem endpoint binding is unavailable on this platform".to_string(),
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::FileTypeExt;
+
+    fn socket_path(directory: &Path) -> PathBuf {
+        directory.join("admin.sock")
+    }
+
+    #[test]
+    fn stale_socket_is_reclaimed_but_a_live_incumbent_is_not_displaced() {
+        let directory = tempfile::tempdir().expect("directory");
+        let path = socket_path(directory.path());
+
+        // Live incumbent: the endpoint stays BUSY.
+        let (listener, guard) = bind_endpoint(&path).expect("first bind");
+        match bind_endpoint(&path) {
+            Err(WatchdogError::Busy(_)) => {}
+            other => panic!("live incumbent must stay busy: {other:?}"),
+        }
+
+        // Simulated unclean crash: close the listener without running the
+        // cleanup guard, leaving an orphaned socket file behind.
+        std::mem::forget(guard);
+        drop(listener);
+        assert!(
+            fs::symlink_metadata(&path)
+                .expect("stale socket")
+                .file_type()
+                .is_socket()
+        );
+
+        let (_listener, guard) = bind_endpoint(&path).expect("stale socket is reclaimed");
+        drop(guard);
+        assert!(
+            fs::symlink_metadata(&path).is_err(),
+            "cleanup must remove the reclaimed socket"
+        );
+    }
 }

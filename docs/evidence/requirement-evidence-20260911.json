@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-11T23:30:12Z",
+  "captured_at": "2026-09-11T23:54:38Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -95,7 +95,7 @@
     "synthetic_integration_verified": "partial",
     "unified_build_verified": "pass for the admitted current-main set: locked release builds plus component conformance tests; compile/component evidence only",
     "windows_service_verified": "unverified",
-    "linux_service_adapter_verified": "partial: native user-scope systemd lifecycle verified; installed root system service and uninstall still require authorization",
+    "linux_service_adapter_verified": "partial: native user-scope systemd lifecycle verified and admin crashed-restart recovery fixed; installed root system service and uninstall still require authorization",
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "unverified",
     "rollback_verified": "unverified",
@@ -167,5 +167,15 @@
       }
     },
     "classification": "component/source evidence for the pinned heads; not a cross-repository runtime proof"
+  },
+  "defects_resolved": {
+    "admin_socket_crash_recovery": {
+      "evidence": "docs/evidence/admin-socket-recovery-fix-20260911.md",
+      "defect": "orphaned admin Unix socket blocked every Restart=on-failure retry (store is already owned)",
+      "fix": "reclaim only when a connect probe is refused and the socket file is unchanged; live incumbent stays BUSY",
+      "unit_test": "admin::endpoint::tests::stale_socket_is_reclaimed_but_a_live_incumbent_is_not_displaced",
+      "native_reverification": "SIGKILL then systemd restart reached active/running with NRestarts=1, Result=success",
+      "watched_binary_sha256": "ff34fca397628fca5aa4e8b0bb5066c96fc249ed7a99063378a067da6ff87ced"
+    }
   }
 }
