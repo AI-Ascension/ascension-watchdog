@@ -7,8 +7,11 @@ soak cannot be assembled from this workspace.
 
 ## Running supervisor soak
 
-A disposable privileged Podman container (`ascension-soak`,
-`jrei/systemd-ubuntu:24.04`, systemd PID 1) runs the shipped unit with a
+The campaign is reproducible via `deploy/soak/supervisor-soak.sh`
+(`start` provisions and runs; `finalize` reports elapsed wall-clock and refuses
+to call a run complete before the requested duration). The currently running
+instance is a disposable privileged Podman container (`ascension-soak`,
+`jrei/systemd-ubuntu:24.04`, systemd PID 1) with the shipped unit and a
 two-component synthetic configuration:
 
 - `stable`: `/bin/sleep 100000`, `restart=true`;
