@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T02:55:51Z",
+  "captured_at": "2026-09-12T03:16:14Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -307,6 +307,22 @@
       "max_stable_children": 1
     },
     "classification": "supervisor-level only; not the cross-repo soak",
-    "cross_repo_blocker": "harness requires the companion game/MCP topology: gateway+mcp start with tokens, but harness fails with 'MCP tool get_state content was not JSON; gateway returned HTTP 409'"
+    "cross_repo_blocker": "harness requires the companion game/MCP topology: gateway+mcp start with tokens, but harness fails with 'MCP tool get_state content was not JSON; gateway returned HTTP 409'",
+    "component_snapshot_sampled": {
+      "cycler": {
+        "state": "quarantined",
+        "restart_attempts": 5,
+        "last_error": "component is blocked or quarantined; autonomous relaunch is disabled"
+      },
+      "stable": {
+        "state": "suspect",
+        "restart_attempts": 1,
+        "pid": 187
+      }
+    },
+    "read_only_command": "watchdog components --config PATH (admin-independent durable component listing)"
+  },
+  "read_only_commands": {
+    "components": "durable component records (state, restart attempts, last backoff error) in id order; no admin transport and no launch authority"
   }
 }

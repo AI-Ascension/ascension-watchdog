@@ -762,6 +762,27 @@ pub struct ComponentRecord {
     pub last_error: Option<String>,
 }
 
+fn component_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ComponentRecord> {
+    let state: String = row.get(1)?;
+    Ok(ComponentRecord {
+        id: row.get(0)?,
+        state: component_state_parse(&state).map_err(to_sqlite_error)?,
+        launch_nonce: row.get(2)?,
+        pid: sqlite_optional_u32(row.get::<_, Option<i64>>(3)?, "component pid")?,
+        executable_digest: row.get(4)?,
+        started_at_ms: sqlite_optional_u64(
+            row.get::<_, Option<i64>>(5)?,
+            "component started_at_ms",
+        )?,
+        restart_attempts: sqlite_u32(row.get::<_, i64>(6)?, "component restart_attempts")?,
+        last_restart_at_ms: sqlite_optional_u64(
+            row.get::<_, Option<i64>>(7)?,
+            "component last_restart_at_ms",
+        )?,
+        last_error: row.get(8)?,
+    })
+}
+
 /// Durable pre-spawn ownership admission. The platform adapter supplies the
 /// closed proof after it has created the exact process/container; runtime
 /// validates that proof against the immutable binding before storage records
@@ -2118,35 +2139,25 @@ impl Store {
             .query_row(
                 "SELECT id, state, launch_nonce, pid, executable_digest, started_at_ms, restart_attempts, last_restart_at_ms, last_error FROM components WHERE id=?",
                 params![id],
-                |row| {
-                    let state: String = row.get(1)?;
-                    Ok(ComponentRecord {
-                        id: row.get(0)?,
-                        state: component_state_parse(&state).map_err(to_sqlite_error)?,
-                        launch_nonce: row.get(2)?,
-                        pid: sqlite_optional_u32(
-                            row.get::<_, Option<i64>>(3)?,
-                            "component pid",
-                        )?,
-                        executable_digest: row.get(4)?,
-                        started_at_ms: sqlite_optional_u64(
-                            row.get::<_, Option<i64>>(5)?,
-                            "component started_at_ms",
-                        )?,
-                        restart_attempts: sqlite_u32(
-                            row.get::<_, i64>(6)?,
-                            "component restart_attempts",
-                        )?,
-                        last_restart_at_ms: sqlite_optional_u64(
-                            row.get::<_, Option<i64>>(7)?,
-                            "component last_restart_at_ms",
-                        )?,
-                        last_error: row.get(8)?,
-                    })
-                },
+                component_record_from_row,
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Durable component records in stable identifier order.  This is
+    /// read-only reporting state (including restart attempts and backoff
+    /// errors) and never grants launch authority.
+    pub fn components(&self) -> Result<Vec<ComponentRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, state, launch_nonce, pid, executable_digest, started_at_ms, restart_attempts, last_restart_at_ms, last_error FROM components ORDER BY id",
+        )?;
+        let rows = statement.query_map([], component_record_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
     }
 
     /// Persist the complete launch identity, including the OS creation

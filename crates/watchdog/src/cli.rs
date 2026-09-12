@@ -47,6 +47,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
                 | "migrate"
                 | "doctor"
                 | "diagnostics"
+                | "components"
                 | "preflight"
                 | "release"
                 | "restore"
@@ -103,6 +104,7 @@ pub fn execute(args: Vec<String>) -> Result<Option<String>> {
         "migrate" => migration_command(&args, &config_path),
         "doctor" => doctor_command(&config_path),
         "diagnostics" => diagnostics_command(&config_path),
+        "components" => components_command(&config_path),
         "preflight" => preflight_command(&mut args),
         "release" => release_command(&mut args, &config_path),
         "restore" => restore_command(&mut args, &config_path),
@@ -706,6 +708,12 @@ fn doctor_command(config_path: &Path) -> Result<Option<String>> {
 /// Emit a bounded, read-only diagnostic bundle.  This deliberately stays
 /// local to the owner store: it does not contact supervised processes, read
 /// job payloads/results, or make a recovery decision.
+fn components_command(config_path: &Path) -> Result<Option<String>> {
+    let config = WatchdogConfig::from_file(config_path)?;
+    let store = Store::open_read_only(&config.database, &config)?;
+    Ok(Some(serde_json::to_string(&store.components()?)?))
+}
+
 fn diagnostics_command(config_path: &Path) -> Result<Option<String>> {
     let config = WatchdogConfig::from_file(config_path)?;
     let store = Store::open_read_only(&config.database, &config)?;
@@ -1186,6 +1194,7 @@ fn usage() -> &'static str {
         "  watchdog init --config PATH [--database PATH]\n",
         "  watchdog migrate gateway-health --config PATH\n",
         "  watchdog diagnostics --config PATH\n",
+        "  watchdog components --config PATH\n",
         "  watchdog doctor|status|start|pause|resume|drain|stop --config PATH\n",
         "  watchdog quarantine --config PATH --idempotency-key KEY --attempt-id ID --reason REASON\n",
         "  watchdog retry --config PATH --idempotency-key KEY --attempt-id ID [--policy requeue|reconstruction]\n",
