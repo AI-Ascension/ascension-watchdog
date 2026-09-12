@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T04:08:55Z",
+  "captured_at": "2026-09-12T04:26:28Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -321,7 +321,13 @@
         "pid": 187
       }
     },
-    "read_only_command": "watchdog components --config PATH (admin-independent durable component listing)"
+    "read_only_command": "watchdog components --config PATH (admin-independent durable component listing)",
+    "cross_repo_execution_plan": {
+      "blocking_dependency": "the synthetic downstream (fake mod server + STS2_PROVIDER_KIND=synthetic bridge) lives in sts2-harness test-support code and runs for one scenario only; a 24h campaign needs the companion stack to expose that topology as a runnable service",
+      "target": "gateway + MCP + harness runtime supervised by the watchdog, with the synthetic provider and fake mod server",
+      "fault_schedule": "component kill/restart (budget/backoff), archive growth beyond 64 receipts, budget exhaustion, telemetry outage",
+      "acceptance": "elapsed >= 24h; no second effect; bounded memory/queues; unresolved operations retained; every restart recorded"
+    }
   },
   "read_only_commands": {
     "components": "durable component records (state, restart attempts, last backoff error) in id order; no admin transport and no launch authority"

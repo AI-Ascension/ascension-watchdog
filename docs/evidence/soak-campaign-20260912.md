@@ -72,6 +72,34 @@ provider configuration, which the watchdog repository does not own and this
 workspace cannot assemble. A cross-repo gameplay soak therefore requires an
 environment provisioned by the companion stack (or its own integration harness).
 
+## Concrete cross-repo soak execution plan
+
+The composition test proves the real gateway/MCP/harness binaries compose with a
+`synthetic` provider and a fake mod server, so the remaining work is turning
+that topology into a long-running, fault-injected campaign. What is required,
+and what this workspace cannot supply alone:
+
+1. A long-lived synthetic downstream: the composition's fake mod server and
+   `STS2_PROVIDER_KIND=synthetic` bridge live in `sts2-harness` test-support
+   code, which the harness operator test starts for a single scenario and then
+   tears down. A 24-hour campaign needs the companion stack to expose that
+   topology as a runnable service (or its own soak harness), since the watchdog
+   repository does not own provider/gameplay execution.
+2. Target and commands (once (1) exists): start gateway with `STS2_GATEWAY_ADDR`,
+   `STS2_GATEWAY_TOKEN`, `STS2_MOD_ADDR`, `STS2_MOD_TOKEN`, `STS2_INSTANCE_ID`;
+   start MCP and point `STS2_MCP_BINARY` at it; run the harness runtime with the
+   synthetic provider; supervise all three as watchdog components; then inject
+   the fault schedule below for 24 h.
+3. Fault schedule: periodic component kill and restart (budget/backoff),
+   operation-archive growth beyond 64 receipts, budget exhaustion, and a
+   telemetry-collector outage while authoritative persistence stays healthy.
+4. Acceptance: elapsed wall-clock >= 24 h; no second effect for any reconciled
+   operation; bounded memory/queues; unresolved operations retained; every
+   restart recorded.
+
+Until (1) is supplied, `SOAK_VERIFIED` stays partial: the supervisor soak below
+is real and running, but it is not the cross-repo campaign.
+
 ## Boundary
 
 Verified: a real 24-hour-scale supervisor soak can run and is running with
