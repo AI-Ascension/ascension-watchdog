@@ -6,6 +6,37 @@ current source-set record, and machine-readable requirement snapshot carry the
 current source pins. This audit does not declare an implementation or release
 complete.
 
+## Current authoritative refresh — 2026-09-12
+
+The current-main companion refreshes are now merged and admitted as one exact
+source set. Protocol PR #43 (`5688e0b`), gateway PR #45 (`79c31ca`), MCP PR #46
+(`1417cbb`), and harness PR #90 (`174a61d`) all passed their required hosted
+quality and policy checks before merge. The watchdog `bootstrap` revision is
+`f5346cdd798b3431ddba55c6558d350693f39916`.
+
+The manifest
+[`workspace-manifest.current-main-refresh-20260912.json`](../../workspace-manifest.current-main-refresh-20260912.json)
+has SHA-256
+`f4458966fbf94765ffa82a641949d21b73ea96560b31a942a1c197689f1dd44d`.
+Read-only source-set admission returned `admitted=true` for eight clean
+worktrees, four synchronized artifacts, identical contract/golden bytes, and
+complete checksum inventories. The machine-readable admission record is
+[`current-main-refresh-source-set-20260912.json`](current-main-refresh-source-set-20260912.json).
+
+The same manifest passed the pinned unified build-set:
+[`current-main-refresh-build-set-20260912.json`](current-main-refresh-build-set-20260912.json).
+With toolchain `1.97.1`, all seven Cargo repositories built using
+`cargo +1.97.1 build --locked --release`; watchdog schema, gateway recovery,
+harness recovery/replay, MCP runtime-artifact, and protocol consumer
+conformance tests also passed. The external scratch target was removed and no
+companion worktree was written.
+
+This closes current-main source admission and locked build/component
+conformance. It does not activate a release and does not promote native
+service, live-host recovery, cold-boot, rollback, or completed soak evidence.
+The current status is therefore **partial**: implementation and component
+gates are evidenced, while those operational axes remain independently open.
+
 ## Wave 48 current refresh — 2026-09-10
 
 The authoritative watchdog source is PR #9 source

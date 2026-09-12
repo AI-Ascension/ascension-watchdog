@@ -9,15 +9,22 @@ watchdog service, 24/7 operation, or recovery guarantee has been verified.
 Status: watchdog PRs [#11](https://github.com/AI-Ascension/ascension-watchdog/pull/11)
 and [#6](https://github.com/AI-Ascension/ascension-watchdog/pull/6) are merged
 into `bootstrap`, and the watchdog's product and hosted quality gates pass.
-Current-main cross-repository source-set admission now passes after the
-post-merge consumer refreshes were merged. The candidate remains unactivated,
-and no service, live-host recovery, reboot or soak validation is claimed. See
-the [current-main refresh evidence](docs/evidence/current-main-refresh-source-set-20260911.md)
-and [current-main machine-readable result](docs/evidence/current-main-refresh-source-set-20260911.json),
+The synchronized protocol/gateway/MCP/harness refreshes are merged in companion
+PRs [#43](https://github.com/AI-Ascension/sts2-protocol/pull/43),
+[#45](https://github.com/AI-Ascension/sts2-gateway/pull/45),
+[#46](https://github.com/AI-Ascension/sts2-mcp-server/pull/46), and
+[#90](https://github.com/AI-Ascension/sts2-harness/pull/90). Current-main
+source-set admission and the pinned unified build/component-conformance gate
+pass. The candidate remains unactivated, and no native service, live-host
+recovery, host reboot, refreshed-release rollback, or completed soak validation
+is claimed. See the [current-main refresh evidence](docs/evidence/current-main-refresh-source-set-20260912.md)
+and [current-main machine-readable result](docs/evidence/current-main-refresh-source-set-20260912.json),
+the [unified build evidence](docs/evidence/current-main-refresh-build-set-20260912.md),
+and [requirement reconciliation](docs/evidence/requirement-evidence-20260912.json),
 as well as the
 [post-merge refresh evidence](docs/evidence/postmerge-refresh-source-set-20260911.md)
 and [machine-readable release checkpoint](docs/evidence/release-set-verification-20260911.json)
-for the historical pre-refresh checkpoint and independent verification boundaries.
+for historical checkpoints and independent verification boundaries.
 
 The OS service manager owns the watchdog. The watchdog supervises gateway and
 harness executables. The gateway owns game lifecycle authority and uses a
