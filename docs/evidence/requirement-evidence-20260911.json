@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T01:11:57Z",
+  "captured_at": "2026-09-12T01:43:17Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -100,7 +100,8 @@
     "cold_boot_recovery_verified": "unverified",
     "rollback_verified": "unverified",
     "soak_verified": "unverified",
-    "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated"
+    "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated",
+    "activation_rollback_verified": "pass at native scope for a root-owned staged six-role set (authenticated inspect/activate/rollback); cold boot, WSL, Windows, live gameplay, and soak remain open"
   },
   "blockers": [
     "nested depth-2/depth-3 Luna-Max delegation surface is unavailable in this session",
@@ -230,5 +231,33 @@
       "24-hour soak"
     ],
     "host_rebooted": false
+  },
+  "native_release_activation_rollback": {
+    "status": "pass (authenticated on-host inspection, activation, and rollback over a root-owned staged six-role set)",
+    "evidence": "docs/evidence/native-release-activation-rollback-20260911.md",
+    "catalog_root": "/opt/ascension-watchdog/releases",
+    "releases": {
+      "native-activation-20260912-a": {
+        "manifest_sha256": "f3e71ecc3b4ee9628b7228c32069fd4d751ae5ec058f249886c14a152e392d2e"
+      },
+      "native-activation-20260912-b": {
+        "manifest_sha256": "8e67d1b9fb046a544c6525d89eb23a3c73ed80d747dcd6e63040c8d32f2ab37f"
+      }
+    },
+    "configuration_sha256": "c390c90166eef35f567d357f22e3f6b0c8a42f9864cff7e479ab209fd1b5e3c3",
+    "observed": {
+      "inspect_a": "OK compatible=true",
+      "activate_a": "OK",
+      "activate_b": "OK (previous=a)",
+      "rollback_a": "OK (previous=b)"
+    },
+    "limitation": "the two releases share identical artifact bytes and differ only in release identity/manifest bytes",
+    "not_verified": [
+      "cold boot",
+      "Windows SCM",
+      "WSL",
+      "live-host gameplay",
+      "24-hour soak"
+    ]
   }
 }
