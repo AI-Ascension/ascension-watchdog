@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "audit_id": "current-main-requirement-reconciliation-20260912",
+  "captured_at": "2026-09-12T09:17:12Z",
+  "classification": "partial; current-main source admission and unified build passed; operational axes remain open",
+  "requirements_ledger": "docs/evidence/requirements.md",
+  "source_set": {
+    "manifest": "workspace-manifest.current-main-refresh-20260912.json",
+    "manifest_sha256": "f4458966fbf94765ffa82a641949d21b73ea96560b31a942a1c197689f1dd44d",
+    "admitted": true,
+    "repository_count": 8,
+    "artifact_count": 4,
+    "issues": [],
+    "evidence": "docs/evidence/current-main-refresh-source-set-20260912.json"
+  },
+  "unified_build_set": {
+    "plan": "workspace-build-plan.current-main-refresh-20260911.json",
+    "plan_sha256": "a4c7bd6953b1d3317b6ebaa0fb28add0b634145a0027aafde613dcf030d71fb2",
+    "report": "docs/evidence/current-main-refresh-build-set-20260912.json",
+    "toolchain": "1.97.1",
+    "admitted": true,
+    "built": true,
+    "repositories": 7,
+    "issues": [],
+    "postconditions": "external scratch removed; companion worktrees unchanged"
+  },
+  "merged_delivery": {
+    "sts2-protocol": {
+      "pull_request": 43,
+      "merge_commit": "5688e0b1387704d3af123d01cfa022b6825a2966"
+    },
+    "sts2-gateway": {
+      "pull_request": 45,
+      "merge_commit": "79c31ca5984e51c33dc1a3c53a952c5eb6784649"
+    },
+    "sts2-mcp-server": {
+      "pull_request": 46,
+      "merge_commit": "1417cbbb508b976d056e0bd646ea001f324a34ba"
+    },
+    "sts2-harness": {
+      "pull_request": 90,
+      "merge_commit": "174a61d79dd399e5356eb607b2407835ca84cb17"
+    }
+  },
+  "evidence_axes": {
+    "implementation_and_component_gates": "pass for the admitted current-main source set",
+    "native_linux_process_boundary": "pass; prior synthetic process-boundary smoke only",
+    "native_linux_service": "unverified",
+    "native_windows_service": "unverified",
+    "live_host_recovery": "unverified",
+    "cold_boot_recovery": "unverified at host scope; prior disposable container/VM evidence has narrower scope",
+    "activation_rollback": "unverified for this refreshed build set",
+    "soak": "in progress; target-duration completion not recorded",
+    "release_ready": false
+  },
+  "next_gate": "obtain applicable authorization and run each remaining operational axis independently; do not infer service, reboot, live, rollback, or soak completion from source/build evidence"
+}

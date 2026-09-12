@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "audit_id": "current-main-refresh-orchestration-20260912",
+  "captured_at": "2026-09-12T09:17:12Z",
+  "owner": "root",
+  "base_commit": "f5346cdd798b3431ddba55c6558d350693f39916",
+  "manifest": {
+    "path": "workspace-manifest.current-main-refresh-20260912.json",
+    "sha256": "f4458966fbf94765ffa82a641949d21b73ea96560b31a942a1c197689f1dd44d",
+    "admitted": true
+  },
+  "build_set": {
+    "plan": "workspace-build-plan.current-main-refresh-20260911.json",
+    "plan_sha256": "a4c7bd6953b1d3317b6ebaa0fb28add0b634145a0027aafde613dcf030d71fb2",
+    "report": "docs/evidence/current-main-refresh-build-set-20260912.json",
+    "status": "pass",
+    "toolchain": "1.97.1"
+  },
+  "completed": [
+    "synchronized companion consumer artifacts",
+    "merged protocol/gateway/MCP/harness refresh PRs",
+    "current-main source-set admission",
+    "unified locked build and declared component conformance"
+  ],
+  "open": [
+    "native Linux service acceptance",
+    "native Windows service/SCM acceptance",
+    "live-host recovery",
+    "host-level cold boot",
+    "refreshed-release activation and rollback evidence",
+    "target-duration cross-repository soak",
+    "release-readiness decision"
+  ],
+  "authorization_boundary": "No service installation, reboot, game/provider execution, destructive fault injection, or release activation was performed by this wave."
+}

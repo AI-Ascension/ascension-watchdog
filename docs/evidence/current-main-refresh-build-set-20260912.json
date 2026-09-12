@@ -1,0 +1,249 @@
+{
+  "orchestrator_version": 2,
+  "audit_id": "current-main-refresh-build-set-20260912",
+  "captured_at": "2026-09-12T09:17:12Z",
+  "plan_sha256": "a4c7bd6953b1d3317b6ebaa0fb28add0b634145a0027aafde613dcf030d71fb2",
+  "manifest_sha256": "f4458966fbf94765ffa82a641949d21b73ea96560b31a942a1c197689f1dd44d",
+  "classification": "current-main-refresh-build-and-conformance-not-activated",
+  "admitted": true,
+  "built": true,
+  "toolchain": "1.97.1",
+  "repository_count": 7,
+  "repositories": {
+    "ascension-watchdog": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 231534,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        },
+        {
+          "name": "schema-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "test", "--locked", "-p", "watchdog-fault-fixture", "--test", "schema"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 36334,
+          "stdout_tail": "3 passed; 0 failed",
+          "stderr_tail": "Finished test profile [unoptimized + debuginfo]",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-game-core": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 11124,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-game-mod": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 17046,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-gateway": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 156910,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        },
+        {
+          "name": "recovery-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "test", "--locked", "-p", "sts2-gateway", "--test", "recovery"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 54360,
+          "stdout_tail": "7 passed; 0 failed",
+          "stderr_tail": "Finished test profile [unoptimized + debuginfo]",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-harness": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 183142,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        },
+        {
+          "name": "recovery-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-harness",
+            "--test",
+            "completed_resume_process",
+            "--test",
+            "execution_store",
+            "--test",
+            "replay",
+            "--test",
+            "phase2_recovery"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 95363,
+          "stdout_tail": "60 passed; 0 failed",
+          "stderr_tail": "Finished test profile [unoptimized + debuginfo]",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-mcp-server": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 9326,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        },
+        {
+          "name": "artifact-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-mcp-server",
+            "--test",
+            "runtime_v2_artifact"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 27233,
+          "stdout_tail": "1 passed; 0 failed",
+          "stderr_tail": "Finished test profile [unoptimized + debuginfo]",
+          "issues": []
+        }
+      ],
+      "issues": []
+    },
+    "sts2-protocol": {
+      "status": "pass",
+      "steps": [
+        {
+          "name": "build",
+          "status": "pass",
+          "program": "cargo",
+          "args": ["+1.97.1", "build", "--locked", "--release"],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 19931,
+          "stdout_tail": "",
+          "stderr_tail": "Finished release profile [optimized] target(s)",
+          "issues": []
+        },
+        {
+          "name": "consumer-conformance",
+          "status": "pass",
+          "program": "cargo",
+          "args": [
+            "+1.97.1",
+            "test",
+            "--locked",
+            "-p",
+            "sts2-protocol",
+            "--test",
+            "coop_native_consumer_conformance"
+          ],
+          "working_directory": "<host-path>",
+          "exit_code": 0,
+          "timed_out": false,
+          "duration_millis": 30047,
+          "stdout_tail": "1 passed; 0 failed",
+          "stderr_tail": "Finished test profile [unoptimized + debuginfo]",
+          "issues": []
+        }
+      ],
+      "issues": []
+    }
+  },
+  "issues": [],
+  "postconditions": {
+    "scratch_removed": true,
+    "companion_worktrees_written": false,
+    "native_service_installed": false,
+    "release_activated": false
+  }
+}
