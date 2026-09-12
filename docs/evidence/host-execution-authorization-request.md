@@ -162,9 +162,15 @@ activation, rollback, or soak, so items 1–5 above still require authorization.
   six-role release set was inspected, activated, and rolled back through the
   authenticated channel; see
   [`native-release-activation-rollback-20260911.md`](native-release-activation-rollback-20260911.md).
-- **Items 3 and 5 (cold boot, 24-hour soak)** remain unauthorized. Cold boot
-  still needs explicit reboot authorization or an approved disposable target;
-  the shared Train host must not be rebooted.
+- **Item 3 (cold boot) is partially executed**: with permission to use a VM or
+  Podman but not to restart the host, a disposable privileged Podman container
+  with systemd was cold-booted; the enabled service auto-started into READY and a
+  durable stopped intent survived the boot. See
+  [`native-container-cold-boot-20260911.md`](native-container-cold-boot-20260911.md).
+  A host-level or VM-level cold boot and autonomous resumption of a real
+  component remain open.
+- **Item 5 (24-hour soak)** remains unauthorized; it needs a target running the
+  gateway/harness/MCP stack for a full day.
 
 ## Status (historical, before the execution above)
 

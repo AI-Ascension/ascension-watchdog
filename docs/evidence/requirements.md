@@ -763,6 +763,22 @@ This closes the on-host activation/rollback portion of S13/S17 and INV-12 at
 native scope. Cold boot, Windows SCM, WSL, live-host gameplay, and the 24-hour
 soak remain open.
 
+### Container-scope cold boot (2026-09-11)
+
+With explicit permission to use a VM or Podman but **not** to restart the shared
+host, a disposable privileged Podman container (`jrei/systemd-ubuntu:24.04`,
+systemd as PID 1) was used for a container-scope cold boot. On boot the enabled
+`ascension-watchdog.service` auto-started into `active/running` (READY); after an
+authenticated durable stop, a graceful cold boot left `Status:
+watchdog_loop=Stopped`, `desired_mode=stopped`, and no supervised child. A boot
+with `desired_mode=running` did not relaunch the synthetic child: its persisted
+launch intent is unreconstructable, so the supervisor quarantines instead of
+repeating an uncertain launch (documented `runtime.rs` behavior). The container
+and image were removed and the host was not rebooted. See
+[`native-container-cold-boot-20260911.md`](native-container-cold-boot-20260911.md).
+Host/VM-level cold boot and autonomous resumption of a real component remain
+open.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T01:43:17Z",
+  "captured_at": "2026-09-12T02:11:33Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -97,7 +97,7 @@
     "windows_service_verified": "unverified",
     "linux_service_adapter_verified": "partial-to-strong: installed root systemd install/start/status/stop/uninstall, readiness, recovery, containment, and durable stop verified on the supplied host; uninstall data option, WSL, live host, cold boot, rollback, and soak remain open",
     "live_host_recovery_verified": "unverified",
-    "cold_boot_recovery_verified": "unverified",
+    "cold_boot_recovery_verified": "partial: container-scope cold boot verified (podman + systemd); host/VM-level cold boot and real-component resumption remain open",
     "rollback_verified": "unverified",
     "soak_verified": "unverified",
     "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated",
@@ -259,5 +259,24 @@
       "live-host gameplay",
       "24-hour soak"
     ]
+  },
+  "container_cold_boot": {
+    "status": "partial: container-scope cold boot verified; host/VM-level cold boot not performed",
+    "evidence": "docs/evidence/native-container-cold-boot-20260911.md",
+    "method": "disposable privileged podman container running systemd (not a host reboot, not a VM)",
+    "verified": [
+      "boot auto-starts the enabled service into READY",
+      "durable stopped intent survives the boot (loop Stopped, desired stopped, no child revived)",
+      "unreconstructable synthetic intent quarantined rather than relaunched"
+    ],
+    "not_verified": [
+      "host-level or VM-level cold boot",
+      "autonomous resumption of a real supervised component across boot",
+      "Windows SCM",
+      "WSL",
+      "live-host gameplay",
+      "24-hour soak"
+    ],
+    "host_rebooted": false
   }
 }
