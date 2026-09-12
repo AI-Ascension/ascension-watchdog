@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T04:37:24Z",
+  "captured_at": "2026-09-12T05:04:58Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -382,5 +382,16 @@
       "WSL",
       "24-hour cross-repo soak"
     ]
+  },
+  "podman_environment": {
+    "status": "pass: rootless podman environment available and validated with the Ascension composition",
+    "evidence": "docs/evidence/podman-environment-20260912.md",
+    "host": "train.home.complete.tech",
+    "podman": "4.9.3 (rootless, overlay)",
+    "created": {
+      "network": "ascension-watchdog",
+      "volume": "ascension-watchdog-state"
+    },
+    "in_container_check": "cross-repo composition operator test passed inside a rootless podman container (ubuntu:24.04, binaries mounted read-only)"
   }
 }
