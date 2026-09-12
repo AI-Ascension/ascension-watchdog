@@ -2,7 +2,7 @@
 # Synthetic, namespace-isolated coverage for the Linux install/uninstall
 # wrappers.  This never touches the host's /etc, /opt, or /var trees and never
 # starts a service; it exercises only the wrapper control flow with command
-# shims and a fake watchdog status binary.
+# shims and a fake watchdog diagnostics binary.
 set -eu
 
 repository=$1
@@ -171,6 +171,17 @@ release=/opt/ascension-watchdog/releases/test-release
 mkdir -p "$release"
 cat >"$release/watchdog" <<'EOF'
 #!/bin/sh
+# The uninstaller must not need the authenticated admin channel, which an
+# unprivileged admin endpoint cannot offer the root uninstaller. Fail `status`
+# (the admin-channel command) and serve only the local read-only diagnostics.
+case "${1:-}" in
+    status)
+        printf '%s\n' 'watchdog: unauthorized: admin socket parent is not owned by the current user' >&2
+        exit 1
+        ;;
+    diagnostics) : ;;
+    *) exit 2 ;;
+esac
 if [ -e /run/stop-requested ]; then
     printf '%s\n' '{"desired_mode":"stopped"}'
 else
