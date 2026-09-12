@@ -703,6 +703,22 @@ This closes the user-scope durable-stop and service-manager-recovery portions of
 S12/S17 and INV-08/INV-14; the installed root service, uninstall idempotence,
 WSL, live host, cold boot, activation/rollback, and soak remain open.
 
+### Native crash/restart campaign (2026-09-11)
+
+A user-scope systemd unit with `Restart=on-failure` and `KillMode=control-group`
+supervised a synthetic child across five `SIGKILL`/restart cycles: the unit
+returned to `active` each time with `NRestarts` 1→5 and a new `MainPID`, and the
+child was never duplicated (count 1 at start, 0 after every restart). After the
+first unclean death the component health was `phase=blocked`, and `policy.rs`
+disables autonomous relaunch for a blocked/quarantined component — the deliberate
+"reconcile before relaunch" behavior required by `INV-08`/`INV-10`. A later
+`SIGKILL` after an authenticated durable stop recovered the unit into
+`active/running` without reviving the component. See
+[`native-crash-campaign-20260911.md`](native-crash-campaign-20260911.md).
+This strengthens the user-scope S12/S17 and INV-08/INV-10 evidence; the installed
+root service, Windows SCM, live host, cold boot, rollback, and cross-repository
+soak remain open.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
