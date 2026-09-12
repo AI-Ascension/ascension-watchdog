@@ -162,13 +162,14 @@ activation, rollback, or soak, so items 1–5 above still require authorization.
   six-role release set was inspected, activated, and rolled back through the
   authenticated channel; see
   [`native-release-activation-rollback-20260911.md`](native-release-activation-rollback-20260911.md).
-- **Item 3 (cold boot) is partially executed**: with permission to use a VM or
-  Podman but not to restart the host, a disposable privileged Podman container
-  with systemd was cold-booted; the enabled service auto-started into READY and a
-  durable stopped intent survived the boot. See
-  [`native-container-cold-boot-20260911.md`](native-container-cold-boot-20260911.md).
-  A host-level or VM-level cold boot and autonomous resumption of a real
-  component remain open.
+- **Item 3 (cold boot) is executed at VM level**: with permission to use a VM or
+  Podman but not to restart the host, a disposable libvirt guest was provisioned
+  from the official Ubuntu cloud image and cold-booted twice; the enabled service
+  auto-started into READY and a durable stopped intent survived the reboot. See
+  [`native-vm-cold-boot-20260912.md`](native-vm-cold-boot-20260912.md) (earlier
+  container-scope evidence:
+  [`native-container-cold-boot-20260911.md`](native-container-cold-boot-20260911.md)).
+  A host-level reboot and autonomous resumption of a real component remain open.
 - **Item 5 (24-hour soak)** remains unauthorized; it needs a target running the
   gateway/harness/MCP stack for a full day.
 

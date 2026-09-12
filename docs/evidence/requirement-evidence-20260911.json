@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T03:16:14Z",
+  "captured_at": "2026-09-12T03:37:01Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -97,7 +97,7 @@
     "windows_service_verified": "unverified",
     "linux_service_adapter_verified": "partial-to-strong: installed root systemd install/start/status/stop/uninstall, readiness, recovery, containment, and durable stop verified on the supplied host; uninstall data option, WSL, live host, cold boot, rollback, and soak remain open",
     "live_host_recovery_verified": "unverified",
-    "cold_boot_recovery_verified": "partial: container-scope cold boot verified (podman + systemd); host/VM-level cold boot and real-component resumption remain open",
+    "cold_boot_recovery_verified": "verified at VM level on a disposable guest (boot-time readiness + durable stop across reboot); host-level reboot, Windows, WSL, live gameplay, and cross-repo soak remain open",
     "rollback_verified": "unverified",
     "soak_verified": "partial: supervisor-level 24h soak running; cross-repo soak externally blocked by missing companion game/MCP topology",
     "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated",
@@ -324,5 +324,25 @@
   },
   "read_only_commands": {
     "components": "durable component records (state, restart attempts, last backoff error) in id order; no admin transport and no launch authority"
+  },
+  "vm_cold_boot": {
+    "status": "pass: VM-level cold boot on a disposable libvirt guest",
+    "evidence": "docs/evidence/native-vm-cold-boot-20260912.md",
+    "base_image": "ubuntu 24.04 noble-server-cloudimg-amd64",
+    "method": "cloud-init seed (ssh key + NOPASSWD sudo) + qcow2 overlay + virt-install --import",
+    "observed": {
+      "boot_1": "enabled ascension-watchdog.service auto-started to active (running) after a real guest reboot",
+      "durable_stop": "child count 1 -> 0",
+      "boot_2": "service auto-started; desired_mode=stopped persisted; child count 0 (no revival); unreconstructable intent quarantined"
+    },
+    "host_rebooted": false,
+    "cleanup": "domain destroyed/undefined with storage; cloud image/seed/overlay/key removed",
+    "not_verified": [
+      "host-level reboot",
+      "Windows SCM",
+      "WSL",
+      "live-host gameplay",
+      "cross-repo soak"
+    ]
   }
 }

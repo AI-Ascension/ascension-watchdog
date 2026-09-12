@@ -811,6 +811,20 @@ See [`soak-campaign-20260912.md`](soak-campaign-20260912.md). `SOAK_VERIFIED`
 therefore remains partial: supervisor-level soak running, cross-repo soak
 externally blocked.
 
+### VM-level cold boot (2026-09-12)
+
+A disposable libvirt guest was provisioned from the official Ubuntu 24.04 cloud
+image with a cloud-init seed (injected SSH key, NOPASSWD sudo) and the shipped
+system service installed. A real guest reboot restarted the enabled unit into
+`active (running)` (READY). After an authenticated durable stop, a second guest
+reboot preserved `desired_mode=stopped`, left the child count at 0, and retained
+the unreconstructable synthetic intent as a quarantined orphan rather than
+relaunching it. The host was not rebooted; the domain and cloud artifacts were
+removed. See [`native-vm-cold-boot-20260912.md`](native-vm-cold-boot-20260912.md).
+This moves `COLD_BOOT_RECOVERY_VERIFIED` from container-scope to a real VM reboot;
+host-level reboot, Windows SCM, WSL, live-host gameplay, and the cross-repo soak
+remain open.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
