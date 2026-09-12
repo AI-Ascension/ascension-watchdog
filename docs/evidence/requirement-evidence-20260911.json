@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T00:19:20Z",
+  "captured_at": "2026-09-12T00:57:46Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -188,5 +188,18 @@
       "after_sigkill_restart": "NRestarts=1, Result=success, active/running; child count 0"
     },
     "classification": "user-scope synthetic-child evidence; not the installed root service"
+  },
+  "native_crash_campaign": {
+    "status": "pass (user-scope systemd; synthetic child)",
+    "evidence": "docs/evidence/native-crash-campaign-20260911.md",
+    "watched_binary_sha256": "ff34fca397628fca5aa4e8b0bb5066c96fc249ed7a99063378a067da6ff87ced",
+    "observed": {
+      "cycles": 5,
+      "unit_after_each_restart": "active with NRestarts 1..5 and a new MainPID",
+      "child_count": "1 at start; 0 after every restart (control-group containment; no duplicate relaunch)",
+      "component_health_after_unclean_crash": "blocked; policy disables autonomous relaunch",
+      "after_durable_stop_then_sigkill": "NRestarts=6, active/running, Result=success, child count 0"
+    },
+    "classification": "user-scope synthetic-child evidence; not the installed root service or cross-repository soak"
   }
 }
