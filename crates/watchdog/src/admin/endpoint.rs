@@ -326,7 +326,13 @@ mod tests {
 
     #[test]
     fn stale_socket_is_reclaimed_but_a_live_incumbent_is_not_displaced() {
+        use std::os::unix::fs::PermissionsExt;
+
         let directory = tempfile::tempdir().expect("directory");
+        // The endpoint policy requires an owner-only parent; tempfile's mode
+        // follows the ambient umask, so set it explicitly.
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("owner-only directory");
         let path = socket_path(directory.path());
 
         // Live incumbent: the endpoint stays BUSY.
