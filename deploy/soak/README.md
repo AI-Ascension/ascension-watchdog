@@ -29,6 +29,16 @@ Each sample includes the daemon RSS, restart counter, supervised child counts, a
 (when the release binary supports `watchdog components`) the durable component
 records for restart attempts and backoff state.
 
+`crossrepo-campaign.sh --bin-dir DIR --results PATH --duration-seconds N
+[--fault-interval-seconds N] [--mod-addr ADDR] [--gateway-port-base N]` runs the
+cross-repo campaign: it keeps one synthetic downstream (`synthetic_mod_server`
+from `sts2-harness` test support) running for the whole window while each
+iteration starts a fresh gateway and runs one harness episode (which launches
+MCP), restarting the downstream every fault interval. It records
+`{"ts","iteration","result"}` and `{"ts","fault","result"}` lines. Validated
+end-to-end with a 70-second run: 13/13 iterations pass, 2 downstream faults
+recovered, `campaign_complete=true`.
+
 `crossrepo-campaign-finalize.sh --results PATH --duration-seconds N` summarizes a
 cross-repo campaign results file (iterations, pass/fail, downstream faults and
 recoveries, elapsed seconds) and prints `campaign_complete=true` only when the
