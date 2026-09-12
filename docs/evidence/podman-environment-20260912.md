@@ -40,6 +40,21 @@ Result: `1 passed` — the same unknown-outcome reconciliation without a second
 effect and foreign-state fencing verified on the host also holds inside a
 rootless container, so the composition is reproducible without root.
 
+## Dedicated `completetech` account
+
+At the operator's direction, a dedicated local account was created on the same
+host and its rootless Podman environment set up:
+
+- `completetech` (uid/gid 1003) with a home directory, key-based SSH access
+  (the operator's existing ed25519 key added to `authorized_keys`; no password
+  was set), `/etc/subuid`+`/etc/subgid` ranges, and `loginctl enable-linger`.
+- Rootless Podman 4.9.3 verified as that account (`Rootless=true`, overlay),
+  with a dedicated network `ascension-watchdog` and volume
+  `ascension-watchdog-state`, and a container run confirmed against both.
+- The cross-repo composition operator test was then run as `completetech`
+  inside a rootless container with the built gateway/MCP/harness binaries
+  mounted read-only: `1 passed`.
+
 ## Boundary
 
 Verified: a rootless Podman environment is available on the host and can run the

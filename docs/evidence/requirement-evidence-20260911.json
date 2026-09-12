@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T05:13:53Z",
+  "captured_at": "2026-09-12T05:28:52Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -393,6 +393,17 @@
       "network": "ascension-watchdog",
       "volume": "ascension-watchdog-state"
     },
-    "in_container_check": "cross-repo composition operator test passed inside a rootless podman container (ubuntu:24.04, binaries mounted read-only)"
+    "in_container_check": "cross-repo composition operator test passed inside a rootless podman container (ubuntu:24.04, binaries mounted read-only)",
+    "completetech_account": {
+      "status": "created and verified",
+      "uid": 1003,
+      "access": "key-based SSH with the operator's existing ed25519 key; no password set; /etc/subuid+/etc/subgid ranges; linger enabled",
+      "podman": "4.9.3 rootless (Rootless=true, overlay)",
+      "created": {
+        "network": "ascension-watchdog",
+        "volume": "ascension-watchdog-state"
+      },
+      "in_container_check": "cross-repo composition operator test passed as completetech inside a rootless container"
+    }
   }
 }
