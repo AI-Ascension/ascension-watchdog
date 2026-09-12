@@ -29,6 +29,12 @@ Each sample includes the daemon RSS, restart counter, supervised child counts, a
 (when the release binary supports `watchdog components`) the durable component
 records for restart attempts and backoff state.
 
+`crossrepo-campaign-finalize.sh --results PATH --duration-seconds N` summarizes a
+cross-repo campaign results file (iterations, pass/fail, downstream faults and
+recoveries, elapsed seconds) and prints `campaign_complete=true` only when the
+elapsed wall-clock reaches the duration, there are no failed iterations, and
+every downstream fault recovered.
+
 `finalize` prints the sample count, first/last timestamp, elapsed seconds, and
 `soak_complete=true` only when elapsed wall-clock is at least the requested
 duration. A shorter run is reported `soak_complete=false`, so an accelerated
