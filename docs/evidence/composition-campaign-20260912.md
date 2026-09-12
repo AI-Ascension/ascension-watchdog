@@ -42,9 +42,15 @@ The first episode succeeded (`rc=0`); the second failed:
 sts2-harness runtime failed: Runtime-v3 episode failed: episode launch failed
 ```
 
-So the current companion contract admits one episode per gateway
-instance/lease; a continuous single-deployment soak needs companion support for
-repeated episodes (or one fresh gateway per episode). The campaign here
+A follow-up experiment varied `STS2_SESSION_ID`, `STS2_LEASE_ID`, and
+`STS2_LEASE_EPOCH` per episode against one gateway; every attempt still failed
+with `episode launch failed` (the gateway pins its configured session, and a
+second episode on the same instance is rejected). So the current companion
+contract admits one episode per gateway instance; a continuous
+single-deployment soak needs companion support for repeated episodes (or one
+fresh gateway per episode), which is why the running campaign restarts the
+gateway/harness stack each iteration while keeping the synthetic downstream
+persistent. The campaign here
 therefore restarts the whole stack each iteration, which still exercises
 cross-repo coordination, restart, and telemetry-outage behavior: each harness run
 reports `telemetry export status=partial sent=0 failed=3` with no collector.
