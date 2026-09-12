@@ -797,6 +797,20 @@ returned `OK` with selector `active=-c, previous=-a`. This moves the S13/S16-G
 release-build portions from hand-assembled to reproducible; activation remains a
 separate audited operation and no live-host/cold-boot/Windows/soak claim changes.
 
+### Supervisor soak campaign and cross-repo boundary (2026-09-12)
+
+A 24-hour-scale supervisor soak is running in a disposable container (start
+`2026-09-12T02:26:51Z`, target `2026-09-13T02:26:54Z`): all samples `active`,
+daemon RSS bounded 7064-7640 KB, and never more than one `stable` child (no
+duplicate launches); the `cycler` component exercises restart-budget backoff.
+The specified cross-repo soak cannot be assembled here: `gateway` and `mcp`
+start with the token environment, but `harness` (given `STS2_MCP_BINARY`) fails
+with `MCP tool get_state content was not JSON; gateway returned HTTP 409`,
+because it needs the companion game/MCP topology and provider configuration.
+See [`soak-campaign-20260912.md`](soak-campaign-20260912.md). `SOAK_VERIFIED`
+therefore remains partial: supervisor-level soak running, cross-repo soak
+externally blocked.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
