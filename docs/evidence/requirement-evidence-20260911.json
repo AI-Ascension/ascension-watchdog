@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T04:26:28Z",
+  "captured_at": "2026-09-12T04:37:24Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -327,6 +327,12 @@
       "target": "gateway + MCP + harness runtime supervised by the watchdog, with the synthetic provider and fake mod server",
       "fault_schedule": "component kill/restart (budget/backoff), archive growth beyond 64 receipts, budget exhaustion, telemetry outage",
       "acceptance": "elapsed >= 24h; no second effect; bounded memory/queues; unresolved operations retained; every restart recorded"
+    },
+    "reproducible_tool": {
+      "path": "deploy/soak/supervisor-soak.sh",
+      "usage": "start --release-dir DIR --duration-seconds N [--container NAME] [--image IMAGE] [--out-dir DIR]; finalize --out-dir DIR --duration-seconds N",
+      "validation": "short real run: 3 samples, elapsed 68s, correctly reported soak_complete=false required_seconds=90; validation container removed",
+      "classification": "supervisor-scope campaign tool; not the cross-repository soak"
     }
   },
   "read_only_commands": {
