@@ -29,6 +29,19 @@ Observed so far (start `2026-09-12T02:26:51Z`):
 - `cycler` is frequently 0 because it exits every 90 s and the restart budget
   puts it into backoff — the intended restart/budget behavior.
 
+Component-level snapshot (read-only `watchdog components`, added this wave;
+`/usr/local/bin/watchdog-components` in the soak container):
+
+```json
+[{"id":"cycler","state":"quarantined","restart_attempts":5,"last_error":"component is blocked or quarantined; autonomous relaunch is disabled"},
+ {"id":"stable","state":"suspect","restart_attempts":1,"pid":187}]
+```
+
+So the `cycler` reached the restart budget (5 attempts in the 600 s window) and
+was quarantined rather than relaunched forever, while `stable` remained the only
+supervised child. This is the durable restart/budget behavior the soak is meant
+to exercise.
+
 Completion criterion: elapsed wall-clock >= 24 h (target
 `2026-09-13T02:26:54Z`). Any shorter observation must not be reported as a
 24-hour soak.

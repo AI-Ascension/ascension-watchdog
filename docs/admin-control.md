@@ -15,7 +15,10 @@ read credential. `watchdog quarantine --config PATH --idempotency-key KEY
 durably classify an uncertain attempt without retrying or settling it.
 `watchdog diagnostics --config PATH` is a bounded, read-only owner-store
 snapshot; it does not contact children, include payload/result text, or make a
-recovery decision. Acknowledgment means intent accepted, not completed cleanup.
+recovery decision. `watchdog components --config PATH` is a read-only,
+admin-independent listing of the durable component records (state, restart
+attempts, last backoff error) in stable identifier order; it grants no launch
+authority and never contacts a component. Acknowledgment means intent accepted, not completed cleanup.
 
 `watchdog job submit --config PATH --idempotency-key KEY --kind KIND
 --payload JSON` submits a bounded watchdog-owned job through the same
