@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T02:44:42Z",
+  "captured_at": "2026-09-12T02:55:51Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -99,7 +99,7 @@
     "live_host_recovery_verified": "unverified",
     "cold_boot_recovery_verified": "partial: container-scope cold boot verified (podman + systemd); host/VM-level cold boot and real-component resumption remain open",
     "rollback_verified": "unverified",
-    "soak_verified": "unverified",
+    "soak_verified": "partial: supervisor-level 24h soak running; cross-repo soak externally blocked by missing companion game/MCP topology",
     "remote_delivery_status": "watchdog PR #13 merged at 1925f28; companion mains admitted and build-verified; release not activated",
     "activation_rollback_verified": "pass at native scope for a root-owned staged six-role set (authenticated inspect/activate/rollback); cold boot, WSL, Windows, live gameplay, and soak remain open"
   },
@@ -291,5 +291,22 @@
       "selector": "active=-c previous=-a"
     },
     "classification": "staging is filesystem/manifest work only; activation remains a separate audited operation"
+  },
+  "soak_campaign": {
+    "status": "running: supervisor-level measured soak (24h target)",
+    "evidence": "docs/evidence/soak-campaign-20260912.md",
+    "started_at": "2026-09-12T02:26:51Z",
+    "target_completion": "2026-09-13T02:26:54Z",
+    "container": "ascension-soak (privileged podman + systemd)",
+    "collector": "60s systemd timer appending JSONL to a host volume",
+    "observed_so_far": {
+      "samples": 31,
+      "active": "31/31",
+      "rss_kb_min": 7064,
+      "rss_kb_max": 7640,
+      "max_stable_children": 1
+    },
+    "classification": "supervisor-level only; not the cross-repo soak",
+    "cross_repo_blocker": "harness requires the companion game/MCP topology: gateway+mcp start with tokens, but harness fails with 'MCP tool get_state content was not JSON; gateway returned HTTP 409'"
   }
 }
