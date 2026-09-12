@@ -105,6 +105,11 @@ step for the repositories that expose one:
 workspace, so it has no step. Build and test output is directed to
 `{scratch}/target`, keeping every companion worktree clean.
 
+The pipeline continues with `watchdog release stage-set`, which turns the built
+role artifacts plus the source-set manifest and deployment configuration into an
+immutable release directory; see
+[`release-staging-workflow.md`](release-staging-workflow.md).
+
 ## Boundary
 
 A passing build-set is compile and component-conformance evidence for the exact
