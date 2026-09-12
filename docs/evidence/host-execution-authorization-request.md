@@ -158,9 +158,13 @@ activation, rollback, or soak, so items 1–5 above still require authorization.
 - **Item 2 (live-host recovery)** is partially covered at user scope
   (`native-crash-campaign-20260911.md`); a real gameplay/host recovery campaign
   still needs an approved target.
-- **Items 3–5 (cold boot, on-host activation/rollback, 24-hour soak)** remain
-  unauthorized. Cold boot still needs explicit reboot authorization for a
-  disposable target; the shared Train host must not be rebooted.
+- **Item 4 (on-host activation/rollback) is now executed**: a root-owned staged
+  six-role release set was inspected, activated, and rolled back through the
+  authenticated channel; see
+  [`native-release-activation-rollback-20260911.md`](native-release-activation-rollback-20260911.md).
+- **Items 3 and 5 (cold boot, 24-hour soak)** remain unauthorized. Cold boot
+  still needs explicit reboot authorization or an approved disposable target;
+  the shared Train host must not be rebooted.
 
 ## Status (historical, before the execution above)
 

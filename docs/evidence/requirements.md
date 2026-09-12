@@ -744,6 +744,25 @@ containment, and durable stop. Windows SCM, WSL termination, uninstall's data
 option, live host, cold boot, on-host activation/rollback, and soak remain open.
 The host was not rebooted.
 
+### Native on-host release activation and rollback (2026-09-11)
+
+A genuine six-role release set (watchdog, gateway, harness, MCP, mod,
+host_broker) was built from the admitted pins, staged read-only under a
+root-owned catalog with an exact manifest, and driven through the authenticated
+admin channel while the daemon stayed reachable in `stopped` mode. `release
+inspect` returned `compatible=true` with the exact manifest digest; `activate`
+`-a`, `activate` `-b`, and `rollback` to `-a` all returned `OK`, with the
+selector recording the exact previous identity at each step
+(`active=-b/previous=-a`, then `active=-a/previous=-b`). See
+[`native-release-activation-rollback-20260911.md`](native-release-activation-rollback-20260911.md).
+Honest limitation: the two releases share identical artifact bytes and differ
+only in release identity/manifest bytes, so this proves the selector, digest
+binding, compatibility gate, and rollback target — not two distinct builds.
+
+This closes the on-host activation/rollback portion of S13/S17 and INV-12 at
+native scope. Cold boot, Windows SCM, WSL, live-host gameplay, and the 24-hour
+soak remain open.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
