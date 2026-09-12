@@ -779,6 +779,24 @@ and image were removed and the host was not rebooted. See
 Host/VM-level cold boot and autonomous resumption of a real component remain
 open.
 
+### Reproducible release staging (2026-09-12)
+
+The pipeline from an admitted source set to an activatable release is now
+executable: `watchdog release build-set` compiles and runs component-conformance
+steps, and the new `watchdog release stage-set` turns the six role artifacts, the
+source-set revisions, the caller-supplied compatibility profile, and the exact
+deployment `configuration_sha256` into a closed, validated release manifest in a
+new catalog directory (never overwriting an existing release). See
+[`release-staging-workflow.md`](release-staging-workflow.md).
+
+End-to-end: staging produced `native-activation-20260912-c` (manifest
+`abaa7741a37e9064eab1dad99107267a633e4a16010bde93b14c1e1e66c0cff4`,
+`configuration_sha256` `c390c901…`); after a read-only copy into the root-owned
+catalog, `release inspect` returned `compatible=true` and `release activate`
+returned `OK` with selector `active=-c, previous=-a`. This moves the S13/S16-G
+release-build portions from hand-assembled to reproducible; activation remains a
+separate audited operation and no live-host/cold-boot/Windows/soak claim changes.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,

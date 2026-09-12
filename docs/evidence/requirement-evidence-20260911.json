@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "audit_id": "V36-ledger-implementation-reconciliation-20260911",
-  "captured_at": "2026-09-12T02:11:33Z",
+  "captured_at": "2026-09-12T02:44:42Z",
   "classification": "partial; unified build verified for the admitted set; runtime axes unverified",
   "requirements_ledger": "docs/evidence/requirements.md",
   "reconciliation": "docs/evidence/requirements.md#delivery-reconciliation--2026-09-11-post-pr-13",
@@ -278,5 +278,18 @@
       "24-hour soak"
     ],
     "host_rebooted": false
+  },
+  "reproducible_release_staging": {
+    "status": "pass: stage-set assembles and validates a closed release manifest from the admitted set",
+    "workflow": "docs/evidence/release-staging-workflow.md",
+    "release_id": "native-activation-20260912-c",
+    "manifest_sha256": "abaa7741a37e9064eab1dad99107267a633e4a16010bde93b14c1e1e66c0cff4",
+    "configuration_sha256": "c390c90166eef35f567d357f22e3f6b0c8a42f9864cff7e479ab209fd1b5e3c3",
+    "observed": {
+      "inspect": "compatible=true",
+      "activate": "OK",
+      "selector": "active=-c previous=-a"
+    },
+    "classification": "staging is filesystem/manifest work only; activation remains a separate audited operation"
   }
 }

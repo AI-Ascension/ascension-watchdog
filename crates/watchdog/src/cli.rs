@@ -375,7 +375,8 @@ fn init_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<Str
 fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
     let subcommand = args.first().map(String::as_str).ok_or_else(|| {
         WatchdogError::InvalidInput(
-            "release requires inspect, source-set, build-set, activate, or rollback".to_owned(),
+            "release requires inspect, source-set, build-set, stage-set, activate, or rollback"
+                .to_owned(),
         )
     })?;
     if subcommand == "source-set" {
@@ -385,6 +386,10 @@ fn release_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<
     if subcommand == "build-set" {
         args.remove(0);
         return build_set_command(args);
+    }
+    if subcommand == "stage-set" {
+        args.remove(0);
+        return stage_set_command(args, config_path);
     }
     if matches!(subcommand, "activate" | "rollback") {
         let rollback = subcommand == "rollback";
@@ -548,6 +553,41 @@ fn build_set_command(args: &mut Vec<String>) -> Result<Option<String>> {
     } else {
         Err(WatchdogError::VerificationFailed(output))
     }
+}
+
+fn stage_set_command(args: &mut Vec<String>, config_path: &Path) -> Result<Option<String>> {
+    let manifest = take_option(args, "--manifest").ok_or_else(|| {
+        WatchdogError::InvalidInput("release stage-set requires --manifest".to_owned())
+    })?;
+    let catalog = take_option(args, "--catalog").ok_or_else(|| {
+        WatchdogError::InvalidInput("release stage-set requires --catalog".to_owned())
+    })?;
+    let release_id = take_option(args, "--release-id").ok_or_else(|| {
+        WatchdogError::InvalidInput("release stage-set requires --release-id".to_owned())
+    })?;
+    let compatibility = take_option(args, "--compatibility").ok_or_else(|| {
+        WatchdogError::InvalidInput("release stage-set requires --compatibility".to_owned())
+    })?;
+    let role_sources = keyed_paths(args, "--role")?;
+    let repository_paths = keyed_paths(args, "--repo")?;
+    let artifact_paths = keyed_paths(args, "--artifact")?;
+    if !args.is_empty() {
+        return Err(WatchdogError::InvalidInput(
+            "unexpected release stage-set argument".to_owned(),
+        ));
+    }
+    let report = crate::release_stage_set::stage_release_set(
+        Path::new(&manifest),
+        Path::new(&catalog),
+        &release_id,
+        config_path,
+        Path::new(&compatibility),
+        &role_sources,
+        &repository_paths,
+        &artifact_paths,
+    )
+    .map_err(WatchdogError::InvalidInput)?;
+    Ok(Some(serde_json::to_string(&report)?))
 }
 
 fn keyed_paths(
@@ -1139,6 +1179,7 @@ fn usage() -> &'static str {
         "  watchdog release inspect --manifest PATH --root PATH\n",
         "  watchdog release source-set verify --manifest PATH --repo NAME=PATH [...] [--artifact NAME=PATH [...]]\n",
         "  watchdog release build-set --manifest PATH --plan PATH --repo NAME=PATH [...] [--artifact NAME=PATH [...]] [--scratch PATH]\n",
+        "  watchdog release stage-set --manifest PATH --catalog PATH --release-id ID --config PATH --compatibility PATH --role NAME=PATH [...] --repo NAME=PATH [...]\n",
         "  watchdog release activate --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog release rollback --config PATH --release-id ID --expected-release-digest DIGEST --idempotency-key KEY\n",
         "  watchdog restore --config PATH --backup PATH [--database PATH] --rekey\n",
