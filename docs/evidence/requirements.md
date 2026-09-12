@@ -690,6 +690,19 @@ after `SIGKILL`). See
 This improves INV-08/S12/S14 crash-recovery evidence; it does not verify the
 installed root service, live host, cold boot, activation/rollback, or soak.
 
+### Native durable-stop protection under the service manager (2026-09-11)
+
+A user-scope `systemd-run` unit with `Restart=on-failure` supervised a synthetic
+component (`/bin/sleep 987654`). After an authenticated `watchdog stop`, the
+child count dropped 1 -> 0. `SIGKILL` of the daemon produced a service-manager
+restart (`NRestarts=1`, `Result=success`, `active/running`), and the restarted
+daemon did **not** relaunch the durably stopped component (child count stayed 0).
+See
+[`native-durable-stop-protection-20260911.md`](native-durable-stop-protection-20260911.md).
+This closes the user-scope durable-stop and service-manager-recovery portions of
+S12/S17 and INV-08/INV-14; the installed root service, uninstall idempotence,
+WSL, live host, cold boot, activation/rollback, and soak remain open.
+
 ### Delivery decision (updated axes)
 
 `IMPLEMENTATION_COMPLETE = assignment incomplete`,
