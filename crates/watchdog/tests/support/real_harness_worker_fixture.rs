@@ -351,7 +351,7 @@ fn runtime_config_digest(
     Ok(hex_digest(&bytes))
 }
 
-fn copy_immutable_image(
+pub(super) fn copy_immutable_image(
     source: &Path,
     destination: &Path,
     expected_sha256: &str,
@@ -377,7 +377,7 @@ fn copy_immutable_image(
     Ok(())
 }
 
-fn hash_regular_file(path: &Path) -> Result<(String, u64), Box<dyn std::error::Error>> {
+pub(super) fn hash_regular_file(path: &Path) -> Result<(String, u64), Box<dyn std::error::Error>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
