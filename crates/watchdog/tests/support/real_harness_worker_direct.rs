@@ -305,6 +305,7 @@ fn exercise_protocol(
         .map_err(|error| io::Error::other(format!("direct dispatch: {error}")))?
         .ok_or_else(|| io::Error::other("job not dispatched"))?;
     assert_eq!(dispatched.handoff.job_id, job.id);
+    assert_eq!(dispatched.handoff.state, WorkerHandoffState::Admitted);
     let tuple = dispatched.handoff.tuple();
     // Close and reopen the owner-local store before historical reconciliation.
     drop(store);
@@ -327,9 +328,8 @@ fn exercise_protocol(
     assert_eq!(
         store
             .worker_handoff(&tuple.handoff_id)?
-            .ok_or_else(|| io::Error::other("receipt lost"))?
-            .state,
-        retained.state
+            .ok_or_else(|| io::Error::other("receipt lost"))?,
+        retained
     );
     drop(store);
     Ok(())
