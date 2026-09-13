@@ -23,6 +23,25 @@ use uuid::Uuid;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
+#[test]
+fn timed_out_owned_group_is_stopped_before_reap() -> TestResult {
+    let mut command = Command::new("/bin/sleep");
+    command
+        .arg("30")
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = ChildGuard {
+        child: Some(command.spawn()?),
+        group: true,
+    };
+    assert!(child.wait(Duration::from_millis(10)).is_err());
+    assert!(!child.finish()?.success());
+    assert!(child.child.is_none());
+    Ok(())
+}
+
 fn require_gate(name: &str) -> TestResult {
     if std::env::var(name).as_deref() != Ok("1") {
         return Err(io::Error::other(format!("{name}=1 is required")).into());
@@ -57,8 +76,24 @@ impl ChildGuard {
             })?;
         } else {
             // This remains our unreaped direct child, including on failure.
-            let _ = self.child()?.kill();
+            self.child()?.kill()?;
         }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )?
+        .is_none()
+        {
+            if Instant::now() >= deadline {
+                return Err(io::Error::other("child cleanup deadline expired").into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        if self.group {
+            verify_group_stopped(pid.as_raw_nonzero().get())?;
+        }
+        // waitid observed exit without reaping, so wait cannot await execution.
         let status = self.child()?.wait()?;
         self.child = None;
         Ok(status)
@@ -80,6 +115,40 @@ impl ChildGuard {
             }
             thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+fn verify_group_stopped(group: i32) -> TestResult {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut live = false;
+        for entry in fs::read_dir("/proc")? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let stat = match fs::read_to_string(entry.path().join("stat")) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let close = stat
+                .rfind(')')
+                .ok_or_else(|| io::Error::other("invalid process stat"))?;
+            let fields: Vec<_> = stat[close + 2..].split_whitespace().collect();
+            if fields.get(2).and_then(|value| value.parse::<i32>().ok()) == Some(group)
+                && !matches!(fields.first(), Some(&"Z" | &"X"))
+            {
+                live = true;
+            }
+        }
+        if !live {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other("owned group still has live processes").into());
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -159,6 +228,9 @@ pub(super) fn run_controller(
 ) -> TestResult {
     require_gate(gate)?;
     require_gate(controller_gate)?;
+    if rustix::process::getpgrp().as_raw_nonzero().get() != i32::try_from(std::process::id())? {
+        return Err(io::Error::other("controller must lead its test-owned process group").into());
+    }
     let mut fixture = Fixture::from_environment()?;
     let config = WatchdogConfig::from_file(fixture.config_path())?;
     let component = config
@@ -202,7 +274,7 @@ pub(super) fn run_controller(
         .envs(&component.environment)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::null());
     if let Some(cwd) = &component.cwd {
         command.current_dir(cwd);
     }

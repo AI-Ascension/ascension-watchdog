@@ -32,12 +32,14 @@ path limit. No provider credentials, proprietary game installation, host service
 installation, or privilege elevation are needed. The immutable controller is
 re-executed with an allowlisted environment in its own process group. Child waits
 are bounded and group cleanup occurs before reaping the controller to avoid
-signalling a recycled process-group identifier.
+signalling a recycled process-group identifier. The parent checks that no live
+process remains in that group; this is not cgroup containment of an adversarial
+process that deliberately escapes its group. The controller refuses to launch
+unless it leads its process group. Harness stdout and stderr are discarded.
 
 ## Local execution, 2026-09-13
 
 The exact opt-in test passed against the release image with SHA-256
 `92905c4938e9b0ea2a455e727a2929d98ca899dda7f0241fbe48f2ad4bf08e46`.
-Expected child output includes `episode launch failed` and
-`worker runtime exited unsuccessfully`; those failures are the scenario under
-test, not evidence of an episode completing successfully.
+The synthetic episode launch failure and unsuccessful worker exit are the
+scenario under test, not evidence of an episode completing successfully.
