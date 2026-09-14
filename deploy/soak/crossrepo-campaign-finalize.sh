@@ -23,8 +23,8 @@ done
 [ -n "$results" ] && [ -n "$duration" ] || usage
 [ -f "$results" ] || { printf '%s\n' "results file is missing: $results" >&2; exit 66; }
 
-first=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" | head -1)
-last=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" | tail -1)
+first=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" 2>/dev/null | head -1)
+last=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" 2>/dev/null | tail -1)
 [ -n "$first" ] && [ -n "$last" ] || { printf '%s\n' 'results file has no timestamped samples' >&2; exit 65; }
 
 # The runner's terminal record has exactly this shape on the final non-empty

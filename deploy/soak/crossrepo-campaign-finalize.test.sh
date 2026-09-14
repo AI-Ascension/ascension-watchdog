@@ -3,8 +3,8 @@
 #
 # Run: sh deploy/soak/crossrepo-campaign-finalize.test.sh
 #
-# Builds complete and deliberately incomplete results files and asserts that only
-# a reconciled terminal record authorizes campaign_complete=true.
+# Builds complete and deliberately incomplete results files and asserts the exact
+# exit status, done_iterations, records_reconciled, and campaign_complete outcome.
 set -eu
 
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -20,16 +20,23 @@ last=2026-09-13T00:00:00Z
 
 failures=0
 check() {
-    name=$1 expected_complete=$2 expected_reconciled=$3 file=$4
-    out=$("$finalize" --results "$file" --duration-seconds "$duration" 2>&1 || true)
-    got_complete=no
-    got_reconciled=no
-    case "$out" in *'campaign_complete=true'*) got_complete=yes ;; esac
-    case "$out" in *'records_reconciled=true'*) got_reconciled=yes ;; esac
-    if [ "$got_complete" = "$expected_complete" ] && [ "$got_reconciled" = "$expected_reconciled" ]; then
+    name=$1 want_complete=$2 want_reconciled=$3 want_done=$4 file=$5
+    status=0
+    if out=$("$finalize" --results "$file" --duration-seconds "$duration" 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    ok=yes
+    [ "$status" -eq 0 ] || ok=no
+    case "$out" in *"done_iterations=$want_done "*) : ;; *) ok=no ;; esac
+    case "$out" in *"records_reconciled=$want_reconciled "*) : ;; *) ok=no ;; esac
+    case "$out" in *"campaign_complete=$want_complete"*) : ;; *) ok=no ;; esac
+    if [ "$ok" = yes ]; then
         printf 'PASS %s\n' "$name"
     else
-        printf 'FAIL %s (expected complete=%s reconciled=%s)\n%s\n' "$name" "$expected_complete" "$expected_reconciled" "$out"
+        printf 'FAIL %s (expected exit=0 complete=%s reconciled=%s done=%s)\n%s\n' \
+            "$name" "$want_complete" "$want_reconciled" "$want_done" "$out"
         failures=$((failures + 1))
     fi
 }
@@ -40,27 +47,27 @@ cat > "$work/a.jsonl" <<EOF
 {"ts":"$last","iteration":2,"result":"pass"}
 {"ts":"$last","done":true,"iterations":2}
 EOF
-check complete yes yes "$work/a.jsonl"
+check complete true true 2 "$work/a.jsonl"
 
 cat > "$work/b.jsonl" <<EOF
 {"ts":"$first","iteration":1,"result":"pass"}
 {"ts":"$last","iteration":2,"result":"pass"}
 {"ts":"$last","done":true,"iterations":3}
 EOF
-check lost-records no no "$work/b.jsonl"
+check lost-records false false 3 "$work/b.jsonl"
 
 cat > "$work/c.jsonl" <<EOF
 {"ts":"$first","iteration":1,"result":"pass"}
 {"ts":"$last","iteration":2,"result":"pass"}
 EOF
-check missing-done no no "$work/c.jsonl"
+check missing-done false false missing "$work/c.jsonl"
 
 cat > "$work/d.jsonl" <<EOF
 {"ts":"$first","iteration":1,"result":"pass"}
 {"ts":"$last","iteration":2,"result":"fail"}
 {"ts":"$last","done":true,"iterations":2}
 EOF
-check failed-iteration no yes "$work/d.jsonl"
+check failed-iteration false true 2 "$work/d.jsonl"
 
 cat > "$work/e.jsonl" <<EOF
 {"ts":"$first","iteration":1,"result":"pass"}
@@ -68,23 +75,23 @@ cat > "$work/e.jsonl" <<EOF
 {"ts":"$last","iteration":2,"result":"pass"}
 {"ts":"$last","done":true,"iterations":2}
 EOF
-check unrecovered-fault no yes "$work/e.jsonl"
+check unrecovered-fault false true 2 "$work/e.jsonl"
 
 printf '%s\n' "{\"ts\":\"$first\",\"iteration\":1,\"result\":\"pass\"}" > "$work/f.jsonl"
 printf '%s\n' "{\"ts\":\"$last\",\"iteration\":2" >> "$work/f.jsonl"
 printf '%s\n' "{\"ts\":\"$last\",\"done\":true,\"iterations\":2}" >> "$work/f.jsonl"
-check truncated-record no no "$work/f.jsonl"
+check truncated-record false false 2 "$work/f.jsonl"
 
 printf '%s\n' "{\"ts\":\"$first\",\"iteration\":1,\"result\":\"pass\"}" > "$work/g.jsonl"
 printf '%s\n' "{\"ts\":\"$last\",\"done\":true,\"iterations\":1" >> "$work/g.jsonl"
-check torn-done no no "$work/g.jsonl"
+check torn-done false false missing "$work/g.jsonl"
 
 cat > "$work/h.jsonl" <<EOF
 {"ts":"$first","iteration":1,"result":"pass"}
 {"ts":"$last","done":true,"iterations":1}
 {"ts":"$last","iteration":2,"result":"pass"}
 EOF
-check nonterminal-done no no "$work/h.jsonl"
+check nonterminal-done false false missing "$work/h.jsonl"
 
 if [ "$failures" -ne 0 ]; then
     printf 'FAILED %s regression(s)\n' "$failures" >&2
