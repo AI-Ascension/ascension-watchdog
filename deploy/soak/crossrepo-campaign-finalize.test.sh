@@ -19,6 +19,34 @@ first=2026-09-12T00:00:00Z
 last=2026-09-13T00:00:00Z
 
 failures=0
+
+# Extract the completion value from finalizer output. Require exactly one
+# completion line and match it exactly, so a prefix value (for example
+# campaign_complete=trueINVALID) or contradictory duplicates are rejected.
+completion_value() {
+    text=$1
+    count=$(printf '%s\n' "$text" | grep -c '^campaign_complete=' || true)
+    [ "$count" -eq 1 ] || { printf 'invalid\n'; return 0; }
+    line=$(printf '%s\n' "$text" | grep '^campaign_complete=' | head -1 || true)
+    case "$line" in
+        'campaign_complete=true') printf 'true\n' ;;
+        'campaign_complete=false') printf 'false\n' ;;
+        'campaign_complete=false '*) printf 'false\n' ;;
+        *) printf 'invalid\n' ;;
+    esac
+}
+
+probe() {
+    name=$1 expected=$2 text=$3
+    got=$(completion_value "$text")
+    if [ "$got" = "$expected" ]; then
+        printf 'PASS %s\n' "$name"
+    else
+        printf 'FAIL %s (expected %s got %s)\n' "$name" "$expected" "$got"
+        failures=$((failures + 1))
+    fi
+}
+
 check() {
     name=$1 want_complete=$2 want_reconciled=$3 want_done=$4 file=$5
     status=0
@@ -31,7 +59,7 @@ check() {
     [ "$status" -eq 0 ] || ok=no
     case "$out" in *"done_iterations=$want_done "*) : ;; *) ok=no ;; esac
     case "$out" in *"records_reconciled=$want_reconciled "*) : ;; *) ok=no ;; esac
-    case "$out" in *"campaign_complete=$want_complete"*) : ;; *) ok=no ;; esac
+    [ "$(completion_value "$out")" = "$want_complete" ] || ok=no
     if [ "$ok" = yes ]; then
         printf 'PASS %s\n' "$name"
     else
@@ -92,6 +120,15 @@ cat > "$work/h.jsonl" <<EOF
 {"ts":"$last","iteration":2,"result":"pass"}
 EOF
 check nonterminal-done false false missing "$work/h.jsonl"
+
+# Matcher self-tests: exact values accepted; prefix, duplicate, and missing
+# completion evidence rejected.
+probe completion-exact-true true 'campaign_complete=true'
+probe completion-exact-false false 'campaign_complete=false required_seconds=86400'
+probe completion-prefix-rejected invalid 'campaign_complete=trueINVALID'
+probe completion-duplicate-rejected invalid 'campaign_complete=true
+campaign_complete=false required_seconds=1'
+probe completion-missing-rejected invalid 'samples=2 iterations=2'
 
 if [ "$failures" -ne 0 ]; then
     printf 'FAILED %s regression(s)\n' "$failures" >&2
