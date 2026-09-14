@@ -58,8 +58,13 @@ campaign from accumulating an unbounded per-episode database history.
 `crossrepo-campaign-finalize.sh --results PATH --duration-seconds N` summarizes a
 cross-repo campaign results file (iterations, pass/fail, downstream faults and
 recoveries, elapsed seconds) and prints `campaign_complete=true` only when the
-elapsed wall-clock reaches the duration, there are no failed iterations, and
-every downstream fault recovered.
+elapsed wall-clock reaches the duration, there are no failed iterations, every
+downstream fault recovered, a terminal `{"done":true,...}` record is present, and
+the recorded iteration and pass/fail counts reconcile with the `done` iteration
+count. A truncated or interrupted results file (lost iteration records or a
+missing `done` record) is reported `campaign_complete=false` with
+`records_reconciled=false`, so an incomplete campaign cannot be presented as a
+completed soak.
 
 `finalize` prints the sample count, first/last timestamp, elapsed seconds, and
 `soak_complete=true` only when elapsed wall-clock is at least the requested
