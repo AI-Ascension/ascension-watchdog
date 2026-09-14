@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "repository": "AI-Ascension/ascension-watchdog",
+  "tracking_issue": 1,
+  "evidence": "docs/evidence/crossrepo-soak-campaign-20260912.md",
+  "campaign": "persistent-downstream-cross-repo-soak",
+  "classification": "complete 24-hour repeated cross-repo composition with a persistent synthetic downstream; not a continuous single-deployment soak",
+  "host": "train.home.complete.tech",
+  "account": "completetech",
+  "container": "ascension-crossrepo-soak (rootless podman)",
+  "started_at": "2026-09-12T07:01:25Z",
+  "finished_at": "2026-09-13T07:01:28Z",
+  "duration_seconds": 86403,
+  "source_log_lines": 15731,
+  "iteration_records": 15634,
+  "iteration_pass": 15628,
+  "iteration_fail": 6,
+  "downstream_restart_events": 95,
+  "downstream_restart_recovered": 95,
+  "downstream_restart_failed": 0,
+  "unparseable_lines": 1,
+  "summary_line": {
+    "iterations": 15640,
+    "pass": 15629,
+    "fail": 11
+  },
+  "summary_reconciles_with_log": false,
+  "failure_records": [
+    { "ts": "2026-09-12T10:22:14Z", "iteration": 2094, "result": "fail" },
+    { "ts": "2026-09-12T10:22:21Z", "iteration": 2095, "result": "fail" },
+    { "ts": "2026-09-12T10:33:07Z", "iteration": 2207, "result": "fail" },
+    { "ts": "2026-09-12T10:33:12Z", "iteration": 2208, "result": "fail" },
+    { "ts": "2026-09-12T10:33:17Z", "iteration": 2209, "result": "fail" },
+    { "ts": "2026-09-12T10:33:22Z", "iteration": 2210, "result": "fail" }
+  ],
+  "soak_verified": "unverified",
+  "captured_at": "2026-09-14T08:11:00Z"
+}
