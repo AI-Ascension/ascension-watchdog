@@ -59,12 +59,14 @@ campaign from accumulating an unbounded per-episode database history.
 cross-repo campaign results file (iterations, pass/fail, downstream faults and
 recoveries, elapsed seconds) and prints `campaign_complete=true` only when the
 elapsed wall-clock reaches the duration, there are no failed iterations, every
-downstream fault recovered, a terminal `{"done":true,...}` record is present, and
-the recorded iteration and pass/fail counts reconcile with the `done` iteration
-count. A truncated or interrupted results file (lost iteration records or a
-missing `done` record) is reported `campaign_complete=false` with
-`records_reconciled=false`, so an incomplete campaign cannot be presented as a
-completed soak.
+downstream fault recovered, and the final non-empty line is a complete terminal
+`{"ts":"<iso8601>","done":true,"iterations":N}` record whose count reconciles with
+the recorded iteration and pass/fail records. A truncated or interrupted results
+file — lost iteration records, a torn or non-terminal `done` record, or a missing
+marker — is reported `campaign_complete=false` with `records_reconciled=false`, so
+an incomplete campaign cannot be presented as a completed soak.
+`deploy/soak/crossrepo-campaign-finalize.test.sh` runs the fail-closed regression
+matrix, including torn and non-terminal `done` records.
 
 `finalize` prints the sample count, first/last timestamp, elapsed seconds, and
 `soak_complete=true` only when elapsed wall-clock is at least the requested

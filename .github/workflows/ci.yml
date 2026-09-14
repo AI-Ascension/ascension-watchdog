@@ -31,6 +31,9 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt --no-self-update
       - name: Verify whitespace
         run: git diff --check
+      - name: Soak finalizer fail-closed regressions
+        if: runner.os == 'Linux'
+        run: sh deploy/soak/crossrepo-campaign-finalize.test.sh
       - name: Verify formatting
         run: cargo fmt --all --check
       - name: Lint all targets

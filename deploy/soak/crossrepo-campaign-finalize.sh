@@ -27,8 +27,13 @@ first=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" | head -1)
 last=$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$results" | tail -1)
 [ -n "$first" ] && [ -n "$last" ] || { printf '%s\n' 'results file has no timestamped samples' >&2; exit 65; }
 
-done_line=$(grep '"done":true' "$results" | tail -1 || true)
-done_iterations=$(printf '%s\n' "$done_line" | sed -n 's/.*"iterations":\([0-9][0-9]*\).*/\1/p')
+# The runner's terminal record has exactly this shape on the final non-empty
+# line: {"ts":"<iso8601>","done":true,"iterations":N}. Require a complete,
+# delimited record in terminal position: a torn or interleaved record, or a
+# completion marker that is not the last line, must not authorize completion.
+last_line=$(sed -n '/[^[:space:]]/p' "$results" | tail -1)
+terminal=$(printf '%s\n' "$last_line" | grep -E '^\{"ts":"[^"]*","done":true,"iterations":[0-9]+\}$' || true)
+done_iterations=$(printf '%s\n' "$terminal" | sed -n 's/.*"iterations":\([0-9][0-9]*\)}$/\1/p')
 [ -n "$done_iterations" ] || done_iterations=missing
 
 iterations=$(grep -c '"iteration"' "$results" || true)
