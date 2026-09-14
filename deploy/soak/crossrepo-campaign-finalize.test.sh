@@ -21,8 +21,10 @@ last=2026-09-13T00:00:00Z
 failures=0
 
 # Extract the completion value from finalizer output. Require exactly one
-# completion line and match it exactly, so a prefix value (for example
-# campaign_complete=trueINVALID) or contradictory duplicates are rejected.
+# completion line and match it exactly: `campaign_complete=true`, bare
+# `campaign_complete=false`, or `campaign_complete=false required_seconds=<digits>`.
+# A prefix value (for example campaign_complete=trueINVALID), a malformed suffix,
+# or contradictory duplicates are rejected.
 completion_value() {
     text=$1
     count=$(printf '%s\n' "$text" | grep -c '^campaign_complete=' || true)
@@ -31,8 +33,13 @@ completion_value() {
     case "$line" in
         'campaign_complete=true') printf 'true\n' ;;
         'campaign_complete=false') printf 'false\n' ;;
-        'campaign_complete=false '*) printf 'false\n' ;;
-        *) printf 'invalid\n' ;;
+        *)
+            if printf '%s\n' "$line" | grep -Eq '^campaign_complete=false required_seconds=[0-9]+$'; then
+                printf 'false\n'
+            else
+                printf 'invalid\n'
+            fi
+            ;;
     esac
 }
 
@@ -121,11 +128,14 @@ cat > "$work/h.jsonl" <<EOF
 EOF
 check nonterminal-done false false missing "$work/h.jsonl"
 
-# Matcher self-tests: exact values accepted; prefix, duplicate, and missing
-# completion evidence rejected.
+# Matcher self-tests: exact values accepted; prefix, duplicate, missing, and
+# malformed-suffix completion evidence rejected.
 probe completion-exact-true true 'campaign_complete=true'
+probe completion-bare-false false 'campaign_complete=false'
 probe completion-exact-false false 'campaign_complete=false required_seconds=86400'
 probe completion-prefix-rejected invalid 'campaign_complete=trueINVALID'
+probe completion-false-suffix-rejected invalid 'campaign_complete=false INVALID'
+probe completion-false-nonnumeric-rejected invalid 'campaign_complete=false required_seconds=abc'
 probe completion-duplicate-rejected invalid 'campaign_complete=true
 campaign_complete=false required_seconds=1'
 probe completion-missing-rejected invalid 'samples=2 iterations=2'
