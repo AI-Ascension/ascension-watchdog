@@ -1,0 +1,24 @@
+{
+  "evidence_kind": "supervisor-only native VM qualification packaging; not admitted six-role release",
+  "repository": "AI-Ascension/ascension-watchdog",
+  "source_revision": "d69a5087922374b492d311fab0b05866e6b99c63",
+  "toolchain": "1.97.1",
+  "build": "cargo build --release --locked -p ascension-watchdog --bin watchdog",
+  "files": {
+    "watchdog": "32452b39dbaee95636a501448fe349db0d305a58fe987b3196d8173673951610",
+    "install.sh": "ae6fe83865ee91d1be8e1f5c2295528321fda9c8c2784b882986d9810509b500",
+    "watchdog.json": "07cd94bab4b52af78fe263f632d3d55e95b68bc86fc7c68ffbc145d62b2cce14",
+    "ascension-watchdog.service": "396a1e6e901d63ac8f90b7520a85543819d61c9abe2913f188956099e84483a6"
+  },
+  "configurations": {
+    "quarantine": {
+      "sha256": "075a9f51645f5bdfddcf2cac404d3fe1d9b00b8583ea0404134e681a9838d27f",
+      "config_digest": "7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92"
+    },
+    "durable_stop": {
+      "sha256": "07cd94bab4b52af78fe263f632d3d55e95b68bc86fc7c68ffbc145d62b2cce14",
+      "config_digest": "bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9"
+    }
+  },
+  "active_configuration": "durable_stop"
+}

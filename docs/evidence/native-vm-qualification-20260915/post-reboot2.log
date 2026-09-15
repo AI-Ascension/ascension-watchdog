@@ -1,0 +1,17 @@
+2026-09-15T05:43:42+00:00
+451ea625-b4b4-4803-9ace-b069fc9497f9
+b7a57291-1d83-41b7-9a0f-485602b34e60
+MainPID=462
+NRestarts=0
+ActiveState=active
+SubState=running
+{"contract":"watchdog-admin-v1","request_id":"e0e2ba96-57ae-4a2f-b9ad-db0aab7ec904","idempotency_key":"67f37f44-d7ba-4d95-b8db-c1aa1cec34c2","status":"OK","result":{"kind":"Status","value":{"desired_mode":"stopped","health":{"phase":"stopped","ready":true,"heartbeat_seq":18,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null},"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"restart_generation":3,"config_digest":"bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9","approved_release_digest":null}},"health":{"phase":"stopped","ready":true,"heartbeat_seq":18,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null}}
+[{"id":"synthetic-sleep","state":"stopped","launch_nonce":null,"pid":null,"executable_digest":null,"started_at_ms":null,"restart_attempts":1,"last_restart_at_ms":1789450969971,"last_error":null}]
+synthetic_child_count=0
+[{"id":"synthetic-sleep","state":"quarantined","launch_nonce":"2b80d724-7c31-4e91-9321-cf13733b511d","pid":1799,"executable_digest":"8ac215ec4c1ce4a9c23a10cd3e5898d60419bdfab1ac7444d6bdd1690701de24","started_at_ms":1789450840964,"restart_attempts":1,"last_restart_at_ms":1789450840964,"last_error":"component is blocked or quarantined; autonomous relaunch is disabled"}]
+32452b39dbaee95636a501448fe349db0d305a58fe987b3196d8173673951610  /opt/ascension-watchdog/current/watchdog
+07cd94bab4b52af78fe263f632d3d55e95b68bc86fc7c68ffbc145d62b2cce14  /etc/ascension-watchdog/watchdog.json
+396a1e6e901d63ac8f90b7520a85543819d61c9abe2913f188956099e84483a6  /etc/systemd/system/ascension-watchdog.service
+600 ascension-watchdog /var/lib/ascension-watchdog/read.token
+600 ascension-watchdog /var/lib/ascension-watchdog/admin.token
+700 ascension-watchdog /var/lib/ascension-watchdog/admin

@@ -1,0 +1,8 @@
+b2ea24328ee1bf217df32fef10914a65cc8c13716ddac13b0b596fef8cbdbd4a  source-d69a508.tar
+3d062c2ac5fb49fc1fef819bca1df3fcb524ecf02e0df104c5b080657e15510a  Cargo.lock
+0d26637363ec4e95200bc19fdcc517aa63f631a5922123990596bf82901da48b  binutils-mingw-w64-x86-64_2.40-2+10.4_amd64.deb
+811339affa3a6cf974bcfe2c2be3ce2d8883a43f45934ea7349f1c26b932ee38  gcc-mingw-w64-base_12.2.0-14+deb12u1+25.2+b1_amd64.deb
+27ecea7578d44dc4fdd34765e0b61d3d4e299b367ff16d41ddfdbacd92fb3568  gcc-mingw-w64-x86-64-posix-runtime_12.2.0-14+deb12u1+25.2+b1_amd64.deb
+0c510d641cb9b56ceecba87f201b1796a34056f8ff63e53e3b3c42f52d3dcadd  gcc-mingw-w64-x86-64-posix_12.2.0-14+deb12u1+25.2+b1_amd64.deb
+1317a00bbbc3866a6d23ff177bc3f6c92ccbfc9489f8d5314bfac76cf60ffc19  mingw-w64-common_10.0.0-3_all.deb
+6dc1360a4e643670c59b6056647af4ff9a3c254def43fc80e7922a25297fe7a1  mingw-w64-x86-64-dev_10.0.0-3_all.deb

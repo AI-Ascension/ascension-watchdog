@@ -1,0 +1,10 @@
+2026-09-15T05:42:17+00:00
+eaed5e5e-7565-4a13-a6ff-446b570d8ce4
+b7a57291-1d83-41b7-9a0f-485602b34e60
+MainPID=463
+NRestarts=0
+ActiveState=active
+SubState=running
+{"contract":"watchdog-admin-v1","request_id":"65bb6b0e-6184-4c3b-9f75-56180f433b2e","idempotency_key":"804274f5-1e0a-4a11-a06d-1ed85857273b","status":"OK","result":{"kind":"Status","value":{"desired_mode":"running","health":{"phase":"blocked","ready":true,"heartbeat_seq":6,"progress_age_ms":1001,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null},"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"restart_generation":4,"config_digest":"7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92","approved_release_digest":null}},"health":{"phase":"blocked","ready":true,"heartbeat_seq":6,"progress_age_ms":1001,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null}}
+[{"id":"synthetic-sleep","state":"quarantined","launch_nonce":"2b80d724-7c31-4e91-9321-cf13733b511d","pid":1799,"executable_digest":"8ac215ec4c1ce4a9c23a10cd3e5898d60419bdfab1ac7444d6bdd1690701de24","started_at_ms":1789450840964,"restart_attempts":1,"last_restart_at_ms":1789450840964,"last_error":"component is blocked or quarantined; autonomous relaunch is disabled"}]
+synthetic_child_count=0

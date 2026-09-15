@@ -1,0 +1,17 @@
+2026-09-15T05:42:02+00:00
+7c504db1-a01b-457c-a406-55a735ff2f87
+enabled
+MainPID=1877
+NRestarts=1
+ActiveState=active
+SubState=running
+[{"id":"synthetic-sleep","state":"quarantined","launch_nonce":"2b80d724-7c31-4e91-9321-cf13733b511d","pid":1799,"executable_digest":"8ac215ec4c1ce4a9c23a10cd3e5898d60419bdfab1ac7444d6bdd1690701de24","started_at_ms":1789450840964,"restart_attempts":1,"last_restart_at_ms":1789450840964,"last_error":"component is blocked or quarantined; autonomous relaunch is disabled"}]
+synthetic_child_count=0
+Sep 15 05:40:40 ascension-watchdog-qualification systemd[1]: Starting ascension-watchdog.service - AI-Ascension deterministic deployment watchdog...
+Sep 15 05:40:41 ascension-watchdog-qualification systemd[1]: Started ascension-watchdog.service - AI-Ascension deterministic deployment watchdog.
+Sep 15 05:41:09 ascension-watchdog-qualification systemd[1]: ascension-watchdog.service: Sent signal SIGKILL to main process 1789 (watchdog) on client request.
+Sep 15 05:41:09 ascension-watchdog-qualification systemd[1]: ascension-watchdog.service: Main process exited, code=killed, status=9/KILL
+Sep 15 05:41:09 ascension-watchdog-qualification systemd[1]: ascension-watchdog.service: Failed with result 'signal'.
+Sep 15 05:41:14 ascension-watchdog-qualification systemd[1]: ascension-watchdog.service: Scheduled restart job, restart counter is at 1.
+Sep 15 05:41:14 ascension-watchdog-qualification systemd[1]: Starting ascension-watchdog.service - AI-Ascension deterministic deployment watchdog...
+Sep 15 05:41:14 ascension-watchdog-qualification systemd[1]: Started ascension-watchdog.service - AI-Ascension deterministic deployment watchdog.

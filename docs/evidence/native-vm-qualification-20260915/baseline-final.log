@@ -1,0 +1,13 @@
+{"config_digest":"7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92","database":"/var/lib/ascension-watchdog/watchdog.sqlite3","deployment_id":"vm-qualification-20260915","path":"/etc/ascension-watchdog/watchdog.json","valid":true}
+075a9f51645f5bdfddcf2cac404d3fe1d9b00b8583ea0404134e681a9838d27f  /etc/ascension-watchdog/watchdog.json
+{"database":"/var/lib/ascension-watchdog/watchdog.sqlite3","deployment_id":"vm-qualification-20260915","desired_mode":"running","schema_version":2,"restart_generation":1,"config_digest":"7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92","approved_release_digest":null,"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"durability":{"journal_mode":"wal","synchronous":2,"foreign_keys":1}}
+Type=notify
+WatchdogUSec=30s
+MainPID=1789
+NRestarts=0
+ExecMainStatus=0
+ActiveState=active
+SubState=running
+{"contract":"watchdog-admin-v1","request_id":"5f572de6-32af-4cac-8f4f-f02f6fea2db8","idempotency_key":"c288d24d-6974-4c95-ad7a-2f843a4711ed","status":"OK","result":{"kind":"Status","value":{"desired_mode":"running","health":{"phase":"reconciling","ready":true,"heartbeat_seq":1,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null},"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"restart_generation":2,"config_digest":"7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92","approved_release_digest":null}},"health":{"phase":"reconciling","ready":true,"heartbeat_seq":1,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null}}
+[{"id":"synthetic-sleep","state":"running","launch_nonce":"2b80d724-7c31-4e91-9321-cf13733b511d","pid":1799,"executable_digest":"8ac215ec4c1ce4a9c23a10cd3e5898d60419bdfab1ac7444d6bdd1690701de24","started_at_ms":1789450840964,"restart_attempts":1,"last_restart_at_ms":1789450840964,"last_error":null}]
+1799 /usr/bin/sleep 987661
