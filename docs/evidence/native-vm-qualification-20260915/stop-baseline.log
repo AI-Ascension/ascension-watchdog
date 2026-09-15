@@ -1,0 +1,10 @@
+07cd94bab4b52af78fe263f632d3d55e95b68bc86fc7c68ffbc145d62b2cce14  /etc/ascension-watchdog/watchdog.json
+{"config_digest":"bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9","database":"/var/lib/ascension-watchdog/durable-stop.sqlite3","deployment_id":"vm-durable-stop-20260915","path":"/etc/ascension-watchdog/watchdog.json","valid":true}
+{"database":"/var/lib/ascension-watchdog/durable-stop.sqlite3","deployment_id":"vm-durable-stop-20260915","desired_mode":"running","schema_version":2,"restart_generation":1,"config_digest":"bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9","approved_release_digest":null,"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"durability":{"journal_mode":"wal","synchronous":2,"foreign_keys":1}}
+MainPID=734
+NRestarts=0
+ActiveState=active
+SubState=running
+{"contract":"watchdog-admin-v1","request_id":"e5430342-4700-4c11-87f2-98c58632aced","idempotency_key":"8dea1b7a-4ab2-43c5-85b0-15a5c7d78770","status":"OK","result":{"kind":"Status","value":{"desired_mode":"running","health":{"phase":"reconciling","ready":true,"heartbeat_seq":1,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null},"jobs_queued":0,"jobs_running":0,"jobs_completed":0,"jobs_quarantined":0,"restart_generation":2,"config_digest":"bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9","approved_release_digest":null}},"health":{"phase":"reconciling","ready":true,"heartbeat_seq":1,"progress_age_ms":1000,"phase_deadline_at_ms":null,"queue_depth":0,"oldest_queue_age_ms":null,"pending_operations":0,"instance_incarnation":null,"lease_remaining_ms":null}}
+[{"id":"synthetic-sleep","state":"suspect","launch_nonce":"893b53e6-9b79-4c15-92e7-3130feb32286","pid":744,"executable_digest":"8ac215ec4c1ce4a9c23a10cd3e5898d60419bdfab1ac7444d6bdd1690701de24","started_at_ms":1789450969971,"restart_attempts":1,"last_restart_at_ms":1789450969971,"last_error":null}]
+synthetic_child_count=1

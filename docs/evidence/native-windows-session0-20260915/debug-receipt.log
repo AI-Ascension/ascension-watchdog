@@ -1,0 +1,24 @@
+
+running 1 test
+test runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child ... FAILED
+
+failures:
+
+failures:
+    runtime::runtime_worker_windows_tests::native_worker_runtime_delivers_controller_bound_bootstrap_and_stops_exact_child
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 81 filtered out; finished in 13.48s
+
+Error: IdentityMismatch("worker controller capture failed: Windows timeout: Windows image identity deadline elapsed")
+
+running 1 test
+test runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job ... FAILED
+
+failures:
+
+failures:
+    runtime::runtime_worker_windows_tests::native_worker_launch_rejects_durable_stop_before_resume_and_cleans_exact_job
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 81 filtered out; finished in 12.00s
+
+Error: IdentityMismatch("worker controller capture failed: Windows timeout: Windows image identity deadline elapsed")

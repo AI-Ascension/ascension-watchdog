@@ -1,0 +1,95 @@
+{
+  "evidence_kind": "native-linux-vm-supervisor-synthetic-child",
+  "source_revision": "d69a5087922374b492d311fab0b05866e6b99c63",
+  "source_provenance": "Coordinator executed pinned locked build in clean exact-source checkout; worker verified binary SHA before execution and after qualification.",
+  "binary_sha256": "32452b39dbaee95636a501448fe349db0d305a58fe987b3196d8173673951610",
+  "unit_sha256": "396a1e6e901d63ac8f90b7520a85543819d61c9abe2913f188956099e84483a6",
+  "vm": {
+    "name": "ascension-watchdog-qualification-20260915",
+    "uuid": "b7a57291-1d83-41b7-9a0f-485602b34e60",
+    "os": "Ubuntu Minimal 24.04.4 LTS",
+    "virtualization": "kvm",
+    "vcpus": 2,
+    "memory_mib": 2048,
+    "disk_gib": 12,
+    "allocated_artifacts_final": "1.3GiB",
+    "retained_running": true,
+    "hypervisor_autostart": false,
+    "service_enabled": true
+  },
+  "physical_host": {
+    "boot_id_before": "c7fd10ce-867d-4661-a51d-8a641c65637d",
+    "boot_id_after": "c7fd10ce-867d-4661-a51d-8a641c65637d",
+    "before_provenance": "initial authenticated SSH tool stdout transcribed by provisioning worker; not a separately saved raw log",
+    "after_receipt": "host-observation.log",
+    "rebooted": false
+  },
+  "guest_boot_ids": [
+    "7c504db1-a01b-457c-a406-55a735ff2f87",
+    "eaed5e5e-7565-4a13-a6ff-446b570d8ce4",
+    "451ea625-b4b4-4803-9ace-b069fc9497f9"
+  ],
+  "scenario_quarantine": {
+    "deployment_id": "vm-qualification-20260915",
+    "configuration_sha256": "075a9f51645f5bdfddcf2cac404d3fe1d9b00b8583ea0404134e681a9838d27f",
+    "configuration_digest": "7df8c1d069ee045aab13debd811cf6267eb059d6618885ce56c96eea63edec92",
+    "baseline_main_pid": 1789,
+    "recovered_main_pid": 1877,
+    "systemd_nrestarts_before": 0,
+    "systemd_nrestarts_after": 1,
+    "injection": "systemctl kill --kill-whom=main --signal=SIGKILL ascension-watchdog",
+    "baseline_child_pid": 1799,
+    "quarantined_launch_nonce": "2b80d724-7c31-4e91-9321-cf13733b511d",
+    "quarantine_retained_after_reboot": true,
+    "child_count_after_recovery_and_reboot": 0,
+    "supervisor_ready_after_recovery_and_reboot": true,
+    "desired_mode_after_reboot": "running",
+    "phase_after_reboot": "blocked",
+    "receipts": [
+      "baseline-final.log",
+      "crash-recovery.log",
+      "pre-reboot1.log",
+      "post-reboot1.log"
+    ]
+  },
+  "scenario_durable_stop": {
+    "deployment_id": "vm-durable-stop-20260915",
+    "configuration_sha256": "07cd94bab4b52af78fe263f632d3d55e95b68bc86fc7c68ffbc145d62b2cce14",
+    "configuration_digest": "bc39c6f980da23cc6baa09aaaaa453cd0a7d423c930ee7931fb89691c7fd59d9",
+    "separate_database": true,
+    "baseline_live_child_pid": 744,
+    "baseline_component_row_state": "suspect",
+    "baseline_child_count": 1,
+    "authenticated_stop_receipt": "ACCEPTED",
+    "stop_idempotency_key": "vm-stop-20260915",
+    "child_count_after_stop": 0,
+    "child_count_after_reboot": 0,
+    "desired_mode_after_reboot": "stopped",
+    "configured_desired_mode": "running",
+    "supervisor_ready_after_reboot": true,
+    "main_pid_after_reboot": 462,
+    "prior_quarantine_preserved": true,
+    "receipts": [
+      "stop-baseline.log",
+      "stop-before-reboot.log",
+      "post-reboot2.log"
+    ]
+  },
+  "setup_corrections_excluded_from_measurement": [
+    "SSH account corrected from nonexistent alias to explicit existing authenticated host account",
+    "download GPG signature passed; initial checksum pipeline lacked remote rg; corrected grep pipeline SHA256 passed in provision.log",
+    "cloud-init NoCloud media moved from SATA CDROM to readonly virtio disk vdb, then dedicated guest shutdown/start; guest access succeeded",
+    "packaged binary mode0700 became0500 after installer; corrected installed executable0555 and manifest0444 before successful baseline",
+    "database explicitly initialized; first initialized fixture DB preserved under setup-preserved after config correction",
+    "admin endpoint moved into dedicated service-owned0700 nested directory to preserve shipped systemd unit",
+    "initial preparation service failures and counters excluded from clean baseline",
+    "crash script exited1 solely because pgrep found no child; following explicit child-count receipt confirms0"
+  ],
+  "limits": [
+    "supervisor-only package; approved_release_digest is null, not an admitted six-role deployment",
+    "synthetic sleep processes only; no game, provider, gateway or live consumer qualification",
+    "VM-only real reboots, no physical-host reboot or Windows session-0 qualification",
+    "no extended soak or prolonged no-revival observation",
+    "readiness does not imply child health; durable-stop baseline component row was suspect but process count was1"
+  ]
+}

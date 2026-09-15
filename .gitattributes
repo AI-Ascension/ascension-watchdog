@@ -2,3 +2,9 @@
 *.png binary
 *.jpg binary
 *.ico binary
+# Receipt digests bind exact bytes, including native line endings.
+docs/evidence/native-vm-qualification-20260915/* -text
+docs/evidence/native-windows-session0-20260915/* -text
+# Preserve terminal blank lines emitted by the captured commands.
+docs/evidence/native-vm-qualification-20260915/host-observation.log whitespace=-blank-at-eof
+docs/evidence/native-windows-session0-20260915/watchdog-native-session-0-receipt.log whitespace=-blank-at-eof
