@@ -43,12 +43,13 @@ fn debug_redacts_the_serde_skipped_source_path() {
     config.source_path = Some(std::path::PathBuf::from(
         "/operator-secret-location-canary/watchdog.json",
     ));
-    let diagnostic = format!("{config:?}");
-    assert!(
-        !diagnostic.contains("operator-secret-location-canary"),
-        "the serde-skipped source path must not be printed: {diagnostic}"
-    );
-    assert!(diagnostic.contains("<redacted>"));
+    for diagnostic in [format!("{config:?}"), format!("{config:#?}")] {
+        assert!(
+            !diagnostic.contains("operator-secret-location-canary"),
+            "the serde-skipped source path must not be printed: {diagnostic}"
+        );
+        assert!(diagnostic.contains("<redacted>"));
+    }
 }
 
 #[test]
