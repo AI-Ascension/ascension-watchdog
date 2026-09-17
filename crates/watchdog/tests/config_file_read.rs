@@ -106,3 +106,25 @@ fn configuration_bounds_regular_files_and_normalizes_its_source() -> Result<(), 
     );
     Ok(())
 }
+
+#[test]
+fn a_configuration_loaded_from_disk_redacts_its_source_path() -> Result<(), Box<dyn Error>> {
+    // Issue #60 AC2: the value under test is the one `from_file` actually
+    // populates, so this drives the real producer rather than hand-setting the
+    // field. It lives here because `from_file` reads through a platform
+    // protected-file reader that only the Linux test harness can exercise.
+    let directory = tempfile::tempdir()?;
+    let marked = directory.path().join("operator-secret-location-canary");
+    let path = marked.join("watchdog.json");
+    ascension_watchdog::WatchdogConfig::default().to_file(&path)?;
+    let loaded = ascension_watchdog::WatchdogConfig::from_file(&path)?;
+    assert_eq!(loaded.source_path.as_ref(), Some(&path));
+    for diagnostic in [format!("{loaded:?}"), format!("{loaded:#?}")] {
+        assert!(
+            !diagnostic.contains("operator-secret-location-canary"),
+            "the serde-skipped source path must not be printed: {diagnostic}"
+        );
+        assert!(diagnostic.contains("<redacted>"));
+    }
+    Ok(())
+}
