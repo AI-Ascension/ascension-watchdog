@@ -56,8 +56,9 @@ probe() {
 
 check() {
     name=$1 want_complete=$2 want_reconciled=$3 want_done=$4 file=$5
+    shift 5
     status=0
-    if out=$("$finalize" --results "$file" --duration-seconds "$duration" 2>&1); then
+    if out=$("$finalize" --results "$file" --duration-seconds "$duration" "$@" 2>&1); then
         status=0
     else
         status=$?
@@ -127,6 +128,95 @@ cat > "$work/h.jsonl" <<EOF
 {"ts":"$last","iteration":2,"result":"pass"}
 EOF
 check nonterminal-done false false missing "$work/h.jsonl"
+
+# Single-deployment campaigns: one gateway for the window, every iteration on a
+# strictly higher lease epoch, and every required fault kind injected and
+# recovered. A regressed epoch, a missing mode record, an unrecovered fault of
+# any kind, and an unknown fault kind must each keep the campaign incomplete.
+single_faults() {
+    cat <<EOF2
+{"ts":"$first","fault":"restart","result":"recovered"}
+{"ts":"$first","fault":"archive","result":"recovered","detail":"archive/000001"}
+{"ts":"$first","fault":"budget","result":"recovered","detail":"restarts=3"}
+{"ts":"$first","fault":"telemetry_outage","result":"recovered","detail":"iteration=2"}
+EOF2
+}
+
+cat > "$work/s-ok.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+{"ts":"$first","iteration":2,"result":"pass","lease_epoch":2}
+$(single_faults)
+{"ts":"$last","iteration":3,"result":"pass","lease_epoch":3}
+{"ts":"$last","done":true,"iterations":3}
+EOF
+check single-deployment-complete true true 3 "$work/s-ok.jsonl" --single-deployment
+
+cat > "$work/s-regress.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+{"ts":"$first","iteration":2,"result":"pass","lease_epoch":2}
+$(single_faults)
+{"ts":"$last","iteration":3,"result":"pass","lease_epoch":2}
+{"ts":"$last","done":true,"iterations":3}
+EOF
+check single_deployment_mode_requires_monotonic_lease_epochs false true 3 "$work/s-regress.jsonl" --single-deployment
+
+cat > "$work/s-no-epoch.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+{"ts":"$first","iteration":2,"result":"pass"}
+$(single_faults)
+{"ts":"$last","iteration":3,"result":"pass","lease_epoch":3}
+{"ts":"$last","done":true,"iterations":3}
+EOF
+check single_deployment_mode_requires_monotonic_lease_epochs-missing-epoch false true 3 "$work/s-no-epoch.jsonl" --single-deployment
+
+# A fresh-gateway results file (no mode record) cannot be finalized as
+# single-deployment evidence, and a mode record is honoured without the flag.
+check single-deployment-flag-requires-mode-record false true 2 "$work/a.jsonl" --single-deployment
+check single-deployment-mode-record-without-flag false true 3 "$work/s-regress.jsonl"
+
+cat > "$work/s-fault-failed.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+{"ts":"$first","fault":"restart","result":"recovered"}
+{"ts":"$first","fault":"archive","result":"recovered"}
+{"ts":"$first","fault":"budget","result":"failed","detail":"restarts=2"}
+{"ts":"$first","fault":"telemetry_outage","result":"recovered"}
+{"ts":"$last","iteration":2,"result":"pass","lease_epoch":2}
+{"ts":"$last","done":true,"iterations":2}
+EOF
+check every_fault_kind_must_record_recovery false true 2 "$work/s-fault-failed.jsonl" --single-deployment
+
+cat > "$work/s-fault-missing.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+{"ts":"$first","fault":"restart","result":"recovered"}
+{"ts":"$first","fault":"archive","result":"recovered"}
+{"ts":"$first","fault":"telemetry_outage","result":"recovered"}
+{"ts":"$last","iteration":2,"result":"pass","lease_epoch":2}
+{"ts":"$last","done":true,"iterations":2}
+EOF
+check every_fault_kind_must_record_recovery-missing-kind false true 2 "$work/s-fault-missing.jsonl" --single-deployment
+
+cat > "$work/s-fault-unknown.jsonl" <<EOF
+{"ts":"$first","mode":"single-deployment","gateway_addr":"127.0.0.1:21000","episode_profile":"repeated-episode-lease-v1"}
+{"ts":"$first","iteration":1,"result":"pass","lease_epoch":1}
+$(single_faults)
+{"ts":"$first","fault":"power_loss","result":"recovered"}
+{"ts":"$last","iteration":2,"result":"pass","lease_epoch":2}
+{"ts":"$last","done":true,"iterations":2}
+EOF
+check unknown_fault_kind_fails_closed false true 2 "$work/s-fault-unknown.jsonl" --single-deployment
+
+cat > "$work/i.jsonl" <<EOF
+{"ts":"$first","iteration":1,"result":"pass"}
+{"ts":"$first","fault":"power_loss","result":"recovered"}
+{"ts":"$last","iteration":2,"result":"pass"}
+{"ts":"$last","done":true,"iterations":2}
+EOF
+check unknown_fault_kind_fails_closed-fresh-gateway false true 2 "$work/i.jsonl"
 
 # Matcher self-tests: exact values accepted; prefix, duplicate, missing, and
 # malformed-suffix completion evidence rejected.
