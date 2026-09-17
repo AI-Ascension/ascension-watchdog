@@ -239,7 +239,7 @@ impl ReleaseCatalogConfig {
 
 /// Top-level watchdog configuration.  Unknown fields are rejected so a typo
 /// cannot silently weaken an admission or process policy.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WatchdogConfig {
     /// Configuration schema revision.
@@ -328,6 +328,31 @@ pub struct WatchdogConfig {
     /// helper release and Windows worker pre-resume admission).
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for WatchdogConfig {
+    /// Hand-written so the `#[serde(skip)]` `source_path` is never printed.
+    ///
+    /// `#[serde(skip)]` only affects serde; a derived `Debug` would still
+    /// disclose the operator's normalized absolute configuration path, which
+    /// this type deliberately keeps out of the serialized form and digest.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WatchdogConfig")
+            .field("schema_version", &self.schema_version)
+            .field("deployment_id", &self.deployment_id)
+            .field("database", &self.database)
+            .field("desired_mode", &self.desired_mode)
+            .field("probe_interval_ms", &self.probe_interval_ms)
+            .field("component_count", &self.components.len())
+            .field("admin", &self.admin)
+            .field("worker", &self.worker)
+            .field("gateway_health", &self.gateway_health)
+            .field("release_catalog", &self.release_catalog)
+            .field("linux_broker", &self.linux_broker)
+            .field("source_path", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for WatchdogConfig {

@@ -38,6 +38,20 @@ fn debug_omits_argument_and_environment_contents() {
 }
 
 #[test]
+fn debug_redacts_the_serde_skipped_source_path() {
+    let mut config = configuration();
+    config.source_path = Some(std::path::PathBuf::from(
+        "/operator-secret-location-canary/watchdog.json",
+    ));
+    let diagnostic = format!("{config:?}");
+    assert!(
+        !diagnostic.contains("operator-secret-location-canary"),
+        "the serde-skipped source path must not be printed: {diagnostic}"
+    );
+    assert!(diagnostic.contains("<redacted>"));
+}
+
+#[test]
 fn aggregate_launch_data_is_bounded_for_programmatic_configuration() {
     let mut config = configuration();
     assert!(config.validate().is_ok(), "{:?}", config.validate());
