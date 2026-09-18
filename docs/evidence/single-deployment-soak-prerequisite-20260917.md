@@ -7,12 +7,17 @@ document pins what the continuous single-deployment soak
 must run against, and records the exact reason the campaign cannot start yet.
 It is not soak evidence; `SOAK_VERIFIED` stays `unverified`.
 
+Revision 2 (2026-09-17): the gateway pin moved to `2f7490d7` and the
+two-episode claim was corrected after [sts2-gateway#81](https://github.com/AI-Ascension/sts2-gateway/pull/81)
+proved that sequence at the gateway component level. The campaign blocker is
+narrower than first recorded, not lifted; see "Correction" below.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |
 |---|---|---|
-| Ownership-backed prerequisite | [sts2-gateway#67](https://github.com/AI-Ascension/sts2-gateway/issues/67), closed as completed 2026-09-17 | confirmed (API read) |
-| Gateway delivery | [sts2-gateway#78](https://github.com/AI-Ascension/sts2-gateway/pull/78) `173a7ed7`, [sts2-gateway#79](https://github.com/AI-Ascension/sts2-gateway/pull/79) `c9ccbea9` (stop-precedence correction) | confirmed |
+| Ownership-backed prerequisite | [sts2-gateway#67](https://github.com/AI-Ascension/sts2-gateway/issues/67), reopened 2026-09-17 pending review of the real-process evidence in [sts2-gateway#81](https://github.com/AI-Ascension/sts2-gateway/pull/81) | confirmed (API read: `state=OPEN`, `stateReason=REOPENED`) |
+| Gateway delivery | [sts2-gateway#78](https://github.com/AI-Ascension/sts2-gateway/pull/78) `173a7ed7`, [sts2-gateway#79](https://github.com/AI-Ascension/sts2-gateway/pull/79) `c9ccbea9` (stop-precedence correction), [sts2-gateway#81](https://github.com/AI-Ascension/sts2-gateway/pull/81) `2f7490d7` (spawned-process episode evidence) | confirmed |
 | Decision record | gateway `docs/decisions/0033-repeated-episode-lease-profile.md` | source-derived |
 | Profile / capability / header | `repeated-episode-lease-v1` / `sts2-gateway/repeated-episode-lease-v1` / `x-sts2-episode-profile` | source-derived |
 | Descriptor schema digest | `f3a04bab61ce4898eda0fa88cb546441493e49eef19b1e5e0841a3b4ef7c4331` | source-derived (harness `episode_profile.rs` carries the same constant) |
@@ -27,8 +32,8 @@ evidence.
 
 | component | revision | notes |
 |---|---|---|
-| sts2-gateway `main` | `804691c5e1b3121075d83b3e31b86606facb5e62` | includes #78, #79, #80 |
-| sts2-harness `main` | `f673658065d3f7ec5087afa221536799fe30aa13` | merge of #262 |
+| sts2-gateway `main` | `2f7490d72e262378d5a55c920b6ca6355e21ef68` | includes #78, #79, #80 and #81. The local smoke recorded below was run against `804691c5`, which does not contain #81; the smoke's findings are unchanged by #81 (see the component-evidence note) |
+| sts2-harness pinned revision | `f673658065d3f7ec5087afa221536799fe30aa13` | merge of #262, the campaign's harness pin; it is an ancestor of live `main` (`67de2007`, which adds #263/#264/#265/#266). Moving the pin is an owner decision, not a prerequisite for the correction above |
 | sts2-mcp-server `main` | `65cb405616ecddfb7bf7b76edf341be30a442ca2` | unchanged for this prerequisite |
 | ascension-watchdog | base `a50474dd5dbd63b9093af223bfe0348fddc27f05` plus the merge commit of the pull request that adds this document | the campaign scripts live at `deploy/soak/` |
 | Reviewed Exo source revision | `b06869ab789dee3f80ca474b5fa89dbe47ccb859` (harness `EXO_SOURCE_REVISION`, ADR 0017) | the campaign's previous pin `7801005e…` is the retired base revision and is refused by the pinned harness |
@@ -48,8 +53,10 @@ d1ba6f6dddf27cbd1fd53a34f377a7256edf740435686bb88bddb9202abb9063  bridge.sh
 ```
 
 These digests are `confirmed` for the local build only (Rust 1.97.1, Linux
-x86_64); they are not reproducible-build claims. The soak host must rebuild from
-the same revisions, record its own `SHA256SUMS` for the campaign `--bin-dir`,
+x86_64) and are **pinned to gateway `804691c5`**; they are not
+reproducible-build claims. A campaign run at the corrected gateway pin
+`2f7490d7` must rebuild and re-hash `sts2-gateway-runtime`. The soak host must
+rebuild from the same revisions, record its own `SHA256SUMS` for the campaign `--bin-dir`,
 and, for the supervisor-scope lane, the `release-manifest.json` of the watchdog
 release directory (`deploy/soak/supervisor-soak.sh --release-dir`), in the
 campaign evidence before the clock starts.
@@ -72,8 +79,9 @@ campaign evidence before the clock starts.
 - Runner: `deploy/soak/crossrepo-campaign.sh --single-deployment`; finalizer:
   `deploy/soak/crossrepo-campaign-finalize.sh --single-deployment`.
 
-Lease rule, as pinned by the runner (label `inferred` from source until a
-two-episode smoke confirms it end to end, see below): each episode is launched
+Lease rule, as pinned by the runner (label `inferred` for the soak topology: the
+two-episode sequence itself is now proven at the gateway component level, but
+never end to end through this runner, see below): each episode is launched
 with a fresh lease id and an epoch strictly above the previous completed one.
 On the gateway's durable recovery path the allocation response carries the
 gateway-issued `lease_id`/`lease_epoch` (`MAX(lease_epoch)+1`) and the harness
@@ -179,12 +187,30 @@ it with its in-crate signed host fake
 (`service_allocation_negative_test_support.rs::spawn_signed_ack_server`, test
 code, not a runnable target); the harness `synthetic_mod_server` — the only
 long-lived synthetic downstream any repository ships — implements the
-runtime-v3/v4 downstream API only and hard-codes `lease-1`/epoch `1`. No
-repository contains a process-level test that boots `sts2-gateway-runtime`
-with a recovery store. Until a host-lease-capable synthetic downstream (or an
-owner-approved equivalent) exists, the two-episode proof the issue body asks
-for before the campaign cannot be produced, and the topology rule above stays
-`inferred`.
+runtime-v3/v4 downstream API only and hard-codes `lease-1`/epoch `1`.
+
+Correction (2026-09-17, after this document's first merge): the earlier text
+here claimed that no repository contains a process-level test that boots
+`sts2-gateway-runtime` with a recovery store, and that the two-episode proof
+"cannot be produced". That absolute claim is now false. [sts2-gateway#81](https://github.com/AI-Ascension/sts2-gateway/pull/81)
+(merge `2f7490d72e262378d5a55c920b6ca6355e21ef68`) adds
+`crates/gateway/tests/gateway_real_process_episode.rs`, a cargo integration
+test that spawns the real `sts2-gateway-runtime` binary against a temporary
+recovery store over loopback TCP, drives a signed host fake that answers
+`host-lease-control-v1` frames, and asserts that consecutive episodes land on
+one boot authority with distinct lease ids and a strictly higher epoch, that a
+later episode cannot dispatch or resolve an earlier episode's receipt, and that
+a released lease's fence headers are refused. The two-episode sequence is
+therefore proven, on `main`, at the gateway component level.
+
+What #81 does **not** supply is a shippable runnable downstream: the signed
+host fake is test code compiled into that integration test, not an operator
+target, and it is not on any campaign `--bin-dir`. The narrower blocker
+therefore stands unchanged — until a host-lease-capable synthetic downstream
+(or an owner-approved equivalent) exists as a runnable artifact, the campaign
+below cannot start, and the soak topology rule above stays `inferred`. A
+passing cargo test is component evidence, not a substitute for the 24-hour
+window; `SOAK_VERIFIED` is unaffected.
 
 Handoff (proposed, owner decision required; this repository does not implement
 companion-owned protocol fakes): a gateway/harness-owned operator target that
