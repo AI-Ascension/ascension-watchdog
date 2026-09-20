@@ -156,17 +156,55 @@ trim_execution_stores() {
     done
 }
 
+# The downstream's host sideband is composed from the same environment
+# `--env-file` supplies to the gateway's durable recovery path: with
+# `STS2_SYNTHETIC_HOST_LEASE_KEY` set the downstream answers signed
+# host-lease-control frames and reports `host_lease=enabled`, and without it it
+# reports `host_lease=closed`. Both names are forwarded explicitly so this
+# launch, rather than whatever the caller happened to export, decides the
+# downstream's host state; an empty key is never invented because the pinned
+# profile decodes hex and refuses "".
+#
+# The reported state has to agree with the configuration. A campaign that needs
+# the durable recovery path must not start against a downstream that will
+# refuse every frame, and a sideband that was configured but not reported means
+# the operator binary predates the sideband. Only a downstream that reports no
+# state at all (an older operator binary) is tolerated, and only when no
+# sideband was configured.
+#
 # The downstream log is appended across restarts (so an archive can rotate it),
 # so readiness is judged only on lines written after this launch.
 start_mod() {
     [ -f "$mod_log" ] || : > "$mod_log"
     mod_log_offset=$(wc -l < "$mod_log")
+    if [ -n "${STS2_SYNTHETIC_HOST_LEASE_KEY:-}" ]; then
+        expected_host_lease=enabled
+        export STS2_SYNTHETIC_HOST_LEASE_KEY
+        if [ -n "${STS2_SYNTHETIC_HOST_PRINCIPAL_ID:-}" ]; then
+            export STS2_SYNTHETIC_HOST_PRINCIPAL_ID
+        fi
+    else
+        expected_host_lease=closed
+    fi
     STS2_SYNTHETIC_MOD_ADDR=$mod_addr "$bin_dir/synthetic_mod_server" \
         --ignored --exact run_synthetic_downstream_until_terminated --nocapture >> "$mod_log" 2>&1 &
     mod_pid=$!
     tries=0
     while [ "$tries" -lt 50 ]; do
-        if tail -n +"$((mod_log_offset + 1))" "$mod_log" 2>/dev/null | grep -q synthetic_mod_listening; then return 0; fi
+        readiness=$(tail -n +"$((mod_log_offset + 1))" "$mod_log" 2>/dev/null |
+            grep synthetic_mod_listening | tail -n 1)
+        if [ -n "$readiness" ]; then
+            case "$readiness" in
+                *"host_lease=$expected_host_lease"*) return 0 ;;
+            esac
+            if [ "$expected_host_lease" = closed ] &&
+                [ "${readiness#*host_lease=}" = "$readiness" ]; then
+                return 0
+            fi
+            printf '%s\n' \
+                "the synthetic downstream readiness disagrees with the campaign environment (want host_lease=$expected_host_lease): $readiness" >&2
+            return 1
+        fi
         sleep 0.2
         tries=$((tries + 1))
     done

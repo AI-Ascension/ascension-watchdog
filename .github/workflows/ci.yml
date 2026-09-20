@@ -34,6 +34,9 @@ jobs:
       - name: Soak finalizer fail-closed regressions
         if: runner.os == 'Linux'
         run: sh deploy/soak/crossrepo-campaign-finalize.test.sh
+      - name: Soak campaign sideband fail-closed regressions
+        if: runner.os == 'Linux'
+        run: sh deploy/soak/crossrepo-campaign-sideband.test.sh
       - name: Verify formatting
         run: cargo fmt --all --check
       - name: Lint all targets

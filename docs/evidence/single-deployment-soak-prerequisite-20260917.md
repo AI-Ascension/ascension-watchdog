@@ -12,6 +12,17 @@ two-episode claim was corrected after [sts2-gateway#81](https://github.com/AI-As
 proved that sequence at the gateway component level. The campaign blocker is
 narrower than first recorded, not lifted; see "Correction" below.
 
+Revision 3 (2026-09-20): the narrower blocker is delivered in
+[sts2-harness#362](https://github.com/AI-Ascension/sts2-harness/pull/362).
+`synthetic_mod_server` — the same operator target the campaign already launches
+from `--bin-dir` — now serves signed `host-lease-control-v1` frames when
+`STS2_SYNTHETIC_HOST_LEASE_KEY` is set, and reports `host_lease=enabled` (or
+`host_lease=closed`) on its readiness line.
+`deploy/soak/crossrepo-campaign.sh` forwards that sideband to the downstream
+launch and refuses to start when the reported state disagrees with the
+configuration. The campaign therefore moves from "cannot start" to "can start
+once the window is authorized"; AC3–AC5 and `SOAK_VERIFIED` are unaffected.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |
@@ -216,6 +227,8 @@ Handoff (proposed, owner decision required; this repository does not implement
 companion-owned protocol fakes): a gateway/harness-owned operator target that
 answers `host-lease-control-v1` frames for a synthetic deployment, or a
 gateway-owned decision that the attached adapter may negotiate the profile.
+(Delivered as the first of those two in sts2-harness#362, 2026-09-20; see
+Revision 3.)
 
 ## What remains external (issue AC3–AC5)
 
