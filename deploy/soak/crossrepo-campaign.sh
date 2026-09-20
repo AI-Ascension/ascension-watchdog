@@ -31,6 +31,14 @@
 #     [--fault-interval-seconds N] [--max-failure-diagnostics N] \
 #     [--max-execution-stores N] \
 #     [--mod-addr ADDR] [--gateway-port-base N] [--exo-revision SHA]
+#
+# --env-file also supplies the gateway's durable recovery environment. When the
+# host lease key is configured the campaign drives the durable bring-up the
+# repeated-episode profile requires (boot authority, then host fence) before the
+# window starts, because the gateway refuses every allocate with
+# recovery_host_fence_required until it holds an accepted fence. A refused
+# bring-up ends the campaign before the clock starts rather than recording a
+# whole window of iterations that could only fail.
 set -eu
 
 usage() {
@@ -54,6 +62,15 @@ budget_burst=3
 # `EXO_SOURCE_REVISION` at the pinned harness); the bounded synthetic bridge is
 # a raw-wire probe, acknowledged explicitly with STS2_EXO_ADMISSION=legacy.
 exo_revision=b06869ab789dee3f80ca474b5fa89dbe47ccb859
+
+# Durable recovery constants, pinned to the gateway's recovery contract
+# (`watchdog-recovery-v1`). They are the same values
+# `deploy/soak/host-sideband-gateway-probe.sh` drives by hand, kept here so the
+# campaign can perform the same bring-up without an operator.
+recovery_contract=watchdog-recovery-v1
+recovery_schema_digest=fb934d3157485aaf6e13e6ebbb213ec8a14c7fc6f5eeebc06b7a22c1f0009217
+runtime_v3_schema_digest=8e99cea36b7ede97532348fd8efe302ca79260895265a7bf14ddf7e006d8ff63
+zero_digest=0000000000000000000000000000000000000000000000000000000000000000
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --bin-dir) [ "$#" -ge 2 ] || usage; bin_dir=$2; shift 2 ;;
@@ -133,6 +150,123 @@ mkdir -p "$diagnostics_dir" "$archive_dir"
 : > "$results_file"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# One recovery frame per call, with fresh message and correlation identities.
+# The gateway authenticates the call with the control-scope bearer token plus
+# the capability header, so the frame proof stays null exactly as the shipped
+# operator probe sends it.
+recovery_frame() {
+    kind=$1 capability=$2 payload=$3
+    jq -cn \
+        --arg contract "$recovery_contract" \
+        --arg schema "$recovery_schema_digest" \
+        --arg message "$(cat /proc/sys/kernel/random/uuid)" \
+        --arg correlation "$(cat /proc/sys/kernel/random/uuid)" \
+        --arg sent_at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+        --arg principal "${STS2_CALLER_ID:-harness}" \
+        --arg capability "$capability" \
+        --arg kind "$kind" \
+        --argjson payload "$payload" \
+        '{contract:$contract, schema_digest:$schema, message_id:$message,
+          correlation_id:$correlation, sent_at:$sent_at,
+          actor:{principal_id:$principal, role:"harness"},
+          auth:{principal_id:$principal, capability:$capability, proof:null},
+          kind:$kind, payload:$payload}'
+}
+
+# The served gateway enforces a closed header allowlist, so the request must not
+# carry curl's default User-Agent or Accept headers.
+recovery_post() {
+    path=$1 capability=$2 frame=$3
+    status=$(curl -sS -o "$bringup_body" -w '%{http_code}' \
+        -H "Authorization: Bearer $recovery_token" \
+        -H 'Content-Type: application/json' \
+        -H "x-sts2-recovery-capability: $capability" \
+        -H 'User-Agent:' -H 'Accept:' \
+        --data-binary "$frame" \
+        "http://$gateway_addr$path" 2>/dev/null) || status=000
+    printf '%s' "$status"
+}
+
+# The repeated-episode lease profile is gateway-process-local state reachable
+# only through the durable recovery path (sts2-gateway ADR 0033): until the
+# deployment holds a boot authority *and* an accepted host fence, every
+# `POST /v1/sessions/allocate` answers `503 recovery_host_fence_required`, so a
+# window that skips this bring-up can only ever record failed iterations.
+#
+# Fail closed at every step. A refused bootstrap, a refused fence, a fence that
+# is not bound to the served boot, or a missing prerequisite ends the campaign
+# before the clock starts; the window is never opened against a gateway that
+# cannot allocate.
+bringup_durable_recovery() {
+    command -v jq >/dev/null 2>&1 || {
+        printf '%s\n' 'the configured durable recovery environment needs jq to build its frames' >&2
+        exit 66
+    }
+    command -v curl >/dev/null 2>&1 || {
+        printf '%s\n' 'the configured durable recovery environment needs curl to drive the bring-up' >&2
+        exit 66
+    }
+    recovery_token=${STS2_RECOVERY_TOKEN:-}
+    deployment_id=${STS2_DEPLOYMENT_ID:-}
+    instance_id=${STS2_INSTANCE_ID:-}
+    missing=
+    [ -n "$recovery_token" ] || missing="$missing STS2_RECOVERY_TOKEN"
+    [ -n "$deployment_id" ] || missing="$missing STS2_DEPLOYMENT_ID"
+    [ -n "$instance_id" ] || missing="$missing STS2_INSTANCE_ID"
+    [ -n "${STS2_RECOVERY_STORE:-}" ] || missing="$missing STS2_RECOVERY_STORE"
+    if [ -n "$missing" ]; then
+        printf '%s\n' "STS2_RUNTIME_HOST_LEASE_KEY is set, so the durable recovery environment must also supply:$missing" >&2
+        exit 66
+    fi
+    bringup_dir=$results/.bringup
+    mkdir -p "$bringup_dir"
+    bringup_body=$bringup_dir/body.json
+    incarnation=$(cat /proc/sys/kernel/random/uuid)
+
+    boot_payload=$(jq -cn \
+        --arg deployment "$deployment_id" --arg instance "$instance_id" --arg incarnation "$incarnation" \
+        --arg zero "$zero_digest" --arg schema "$runtime_v3_schema_digest" \
+        '{deployment_id:$deployment, instance_id:$instance, instance_incarnation:$incarnation,
+          release:{release_digest:$zero, config_digest:$zero,
+                   profile_digest:$zero, runtime_v3_schema_digest:$schema},
+          lease_policy:{ttl_seconds:30, renewal_interval_seconds:10}}')
+    status=$(recovery_post /v1/recovery/bootstrap bootstrap "$(recovery_frame bootstrap_request bootstrap "$boot_payload")")
+    boot_status=$(jq -r '.payload.result.status // .error_code // "?"' "$bringup_body" 2>/dev/null) || boot_status=?
+    boot=$(jq -c '.payload.boot // empty' "$bringup_body" 2>/dev/null) || boot=
+    if [ "$status" != 200 ] || [ "$boot_status" != BOOT_AUTHORITY_CREATED ] || [ -z "$boot" ]; then
+        printf '%s\n' "the durable bootstrap was refused: status=$status result=$boot_status" >&2
+        tail -n 20 "$gateway_log" >&2
+        exit 69
+    fi
+
+    status=$(recovery_post /v1/recovery/host-fence host_fence "$(recovery_frame host_fence_request host_fence "$(jq -cn --argjson boot "$boot" '{boot:$boot}')")")
+    fence_status=$(jq -r '.payload.result.status // .error_code // "?"' "$bringup_body" 2>/dev/null) || fence_status=?
+    fence=$(jq -c '.payload.fence // empty' "$bringup_body" 2>/dev/null) || fence=
+    if [ "$status" != 200 ] || [ "$fence_status" != FENCE_ACCEPTED ] || [ -z "$fence" ]; then
+        printf '%s\n' "the host fence was refused: status=$status result=$fence_status" >&2
+        tail -n 20 "$gateway_log" >&2
+        exit 69
+    fi
+
+    # The acknowledgment must be bound to the boot the served gateway presented;
+    # a fence for a different identity would authorize a different deployment.
+    mismatch=$(jq -rn --argjson fence "$fence" --argjson boot "$boot" \
+        '["deployment_id","instance_id","instance_incarnation","boot_id","authority_generation"]
+         | map(select(($fence[.]|tostring) != ($boot[.]|tostring)))
+         | join(",")')
+    if [ -n "$mismatch" ]; then
+        printf '%s\n' "the host fence is not bound to the served boot: $mismatch" >&2
+        exit 69
+    fi
+
+    boot_id=$(printf '%s' "$boot" | jq -r '.boot_id')
+    authority_generation=$(printf '%s' "$boot" | jq -r '.authority_generation')
+    fence_generation=$(printf '%s' "$fence" | jq -r '.fence_generation')
+    printf '{"ts":"%s","bringup":"durable-recovery","bootstrap":"%s","fence":"%s","boot_id":"%s","instance_incarnation":"%s","authority_generation":%s,"fence_generation":%s}\n' \
+        "$(now_iso)" "$boot_status" "$fence_status" "$boot_id" "$incarnation" \
+        "$authority_generation" "$fence_generation" >> "$results_file"
+}
 
 trim_failure_diagnostics() {
     retained=$(find "$diagnostics_dir" -maxdepth 1 -type f -name 'failure-*.runtime.log' | wc -l)
@@ -336,6 +470,12 @@ if [ "$single_deployment" -eq 1 ]; then
     gateway_alive || { printf '%s\n' 'single-deployment gateway failed to start' >&2; exit 69; }
     printf '{"ts":"%s","mode":"single-deployment","gateway_addr":"%s","episode_profile":"repeated-episode-lease-v1"}\n' \
         "$(now_iso)" "$gateway_addr" >> "$results_file"
+    # A configured host lease key means the window runs on the durable recovery
+    # path, which the repeated-episode profile negotiates and which refuses
+    # every allocate until the deployment holds an accepted host fence.
+    if [ -n "${STS2_RUNTIME_HOST_LEASE_KEY:-}" ]; then
+        bringup_durable_recovery
+    fi
 fi
 end=$(( $(date +%s) + duration ))
 next_fault=$(( $(date +%s) + fault_interval ))
