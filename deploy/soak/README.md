@@ -9,6 +9,20 @@ backoff, bounded memory, no duplicate launches). It is not the cross-repository
 gameplay soak, which needs the companion gateway/MCP/harness topology with a
 synthetic game downstream.
 
+The container is booted before it is used. `podman run -d --systemd=always`
+returns when the container exists, not when the systemd manager inside it can
+answer, so bring-up waits for `systemctl is-system-running` to report `running`
+or `degraded` — `STS2_SUPERVISOR_SOAK_SYSTEMD_READY_TRIES` polls of 100 ms,
+default 300 — instead of for a fixed sleep: the setup exec is the first thing
+that calls `systemctl`, and it fails with "Failed to connect to bus" while PID 1
+is still coming up. A container that never answers, or that exits during the
+wait, ends bring-up with exit 69 naming the container and printing its own log
+tail. Bring-up also owns what it created: a failure before the window is open
+removes the privileged container and the staging copy it was fed, while the
+container whose window did open is left running for `finalize`.
+`deploy/soak/supervisor-soak-lifecycle.test.sh` runs the fail-closed regression
+matrix for both against a stub runtime and is a Linux step in CI.
+
 ## Usage
 
 ```text
@@ -135,7 +149,9 @@ single-deployment evidence.
 `deploy/soak/crossrepo-campaign-finalize.test.sh` runs the fail-closed regression
 matrix, including torn and non-terminal `done` records.
 
-`finalize` prints the sample count, first/last timestamp, elapsed seconds, and
-`soak_complete=true` only when elapsed wall-clock is at least the requested
-duration. A shorter run is reported `soak_complete=false`, so an accelerated
-observation cannot be presented as a 24-hour soak.
+`finalize` prints the sample count, first/last timestamp, elapsed seconds,
+`active_samples`, and `soak_complete=true` only when the elapsed wall-clock
+reaches the requested duration *and* at least one sample saw the supervisor
+active. Each gate that refuses is printed with the value that refused it, so an
+accelerated observation cannot be presented as a 24-hour soak, and a window
+whose service never came up cannot be presented as a supervised one.

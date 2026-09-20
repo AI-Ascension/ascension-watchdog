@@ -40,6 +40,9 @@ jobs:
       - name: Soak campaign lifecycle fail-closed regressions
         if: runner.os == 'Linux'
         run: sh deploy/soak/crossrepo-campaign-lifecycle.test.sh
+      - name: Supervisor soak bring-up fail-closed regressions
+        if: runner.os == 'Linux'
+        run: sh deploy/soak/supervisor-soak-lifecycle.test.sh
       - name: Verify formatting
         run: cargo fmt --all --check
       - name: Lint all targets

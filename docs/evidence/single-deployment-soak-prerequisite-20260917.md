@@ -84,6 +84,47 @@ does not complete
 [ascension-watchdog#58](https://github.com/AI-Ascension/ascension-watchdog/issues/58);
 AC3–AC5 and `SOAK_VERIFIED=unverified` are unchanged.
 
+Revision 7 (2026-09-20): the same lifecycle defect shape was closed in the
+supervisor-scope lane, `deploy/soak/supervisor-soak.sh`, which is the tool the
+24-hour window is meant to be collected with. **Boot gate.** `podman run -d
+--systemd=always` returns when the container exists, not when the systemd
+manager inside it can answer, and bring-up stood on a fixed `sleep 8` before
+the `podman exec` that runs `systemctl daemon-reload` and `systemctl start`.
+The wait is now a bounded poll for `systemctl is-system-running` reporting
+`running` or `degraded` (`STS2_SUPERVISOR_SOAK_SYSTEMD_READY_TRIES`, default
+300 polls of 100 ms) that fails closed with exit 69 naming the container and
+printing its own log tail, and that fails immediately when the container exited
+instead of booting. **Bring-up ownership.** The `EXIT` trap was installed after
+the sleep, and it released only the staging copy: a failed bring-up left a
+privileged systemd container holding the name the next run needs, and the
+staging copy it was fed is reachable only through that container. Bring-up now
+creates its staging copy before the container, installs the trap before
+anything can fail, and takes the container back on every path where the window
+did not open, while deliberately leaving it running once `soak_started` is
+printed. **Completion gate.** `finalize` printed `soak_complete=true` on
+elapsed wall-clock alone, so a window whose samples all read
+`"active":"inactive"` — a supervisor that never came up — finalized as a soak.
+It now also requires at least one sample that saw the supervisor active and
+prints the refusing value.
+`deploy/soak/supervisor-soak-lifecycle.test.sh` drives all three against a stub
+runtime and a uid-0 `id` shim (the pattern
+`deploy/linux/test-install-uninstall.sh` already uses) and is a Linux step in
+this repository's CI: 33 assertions pass at this revision, the unmodified
+campaign fails 17 of them, a variant with only bring-up ownership removed fails
+the 4 container-reaping assertions, and a variant with only the boot gate
+replaced by the fixed sleep fails the 6 readiness assertions, so none of them
+is vacuous. The stub's manager answers on its own schedule, so the slow-boot
+case (a 10-second boot, longer than the removed sleep) passes on the ordering
+and not on the delay. No container was run for this revision: this host has no
+`podman` and no root session, and the hosted runner has no podman either, so
+this revision is stub-driven regression coverage plus the shipped change; a
+real 24-hour supervisor window still requires the authorized host tracked by
+[ascension-watchdog#56](https://github.com/AI-Ascension/ascension-watchdog/issues/56)
+and [#57](https://github.com/AI-Ascension/ascension-watchdog/issues/57). This
+revision does not complete
+[ascension-watchdog#58](https://github.com/AI-Ascension/ascension-watchdog/issues/58);
+AC3–AC5 and `SOAK_VERIFIED=unverified` are unchanged.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |
