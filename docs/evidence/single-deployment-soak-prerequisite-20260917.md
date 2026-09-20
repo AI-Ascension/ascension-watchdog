@@ -34,6 +34,18 @@ results are in
 This narrows what a soak window would be the first to exercise; it is not a soak
 window and does not lift the authorization requirement.
 
+Revision 5 (2026-09-20): the sideband check's restart path — the one a
+`--single-deployment` window actually depends on, because `restart` re-runs
+`start_mod` through `restart_mod` — now has a fail-closed regression in
+`deploy/soak/crossrepo-campaign-sideband.test.sh`. A window whose downstream
+comes back *with* the sideband records `restart=recovered`; one whose downstream
+comes back *without* it records `restart=failed` and the campaign names the
+disagreement, instead of recording a recovered restart on a durable path that
+is dead for the rest of the window. The change is coverage only: the campaign
+already refused to start on a disagreement, and
+`crossrepo-campaign-finalize.sh` already refuses `campaign_complete=true` while
+any fault is `failed`.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |
@@ -144,7 +156,7 @@ kind fails the campaign closed.
 
 | kind | injection | recovery evidence required for `recovered` |
 |---|---|---|
-| `restart` | the supervised synthetic downstream is killed and restarted on the same address | the restarted downstream logs `synthetic_mod_listening` within 10 s; the gateway process is still alive; the next iteration passes on a higher epoch |
+| `restart` | the supervised synthetic downstream is killed and restarted on the same address | the restarted downstream logs `synthetic_mod_listening` within 10 s *and* still reports the configured `host_lease` state (`start_mod` re-runs on every restart, so a downstream that comes back without the sideband records `failed`); the gateway process is still alive; the next iteration passes on a higher epoch |
 | `archive` | copy-truncate rotation of the long-lived `gateway.log` and `synthetic-mod.log` into `archive/<seq>/`, and completed `execution-*.sqlite3` stores moved there, while the gateway keeps running | both logs archived (`detail` names the directory); the gateway process is still alive; subsequent iterations pass and keep logging |
 | `budget` | a burst of three consecutive downstream restarts inside one interval, exceeding a one-restart-per-interval budget | every restart in the burst comes back (`detail` = `restarts=3`); the gateway process is still alive; the next iteration passes |
 | `telemetry_outage` | no collector listens on the harness's fixed loopback OTLP endpoint `127.0.0.1:14318` during the next episode | that episode passes and its runtime log carries `telemetry export status=partial` (the outage was observed, not masked); the gateway process is still alive; recorded after the episode with `detail` = `iteration=<n>` |
