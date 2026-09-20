@@ -66,6 +66,20 @@ fault matrix, and the revision that supplied
 the host-lease-capable downstream are in
 [`docs/evidence/single-deployment-soak-prerequisite-20260917.md`](../../docs/evidence/single-deployment-soak-prerequisite-20260917.md).
 
+Every gateway launch is followed by a bounded wait for the runtime's own
+`listening on <addr>` report — `STS2_CAMPAIGN_GATEWAY_READY_TRIES` polls of
+100 ms, default 300 — rather than a fixed sleep: a launched process is not a
+listening one, and a campaign that posts its durable bring-up or opens its
+window first can only fail. A gateway that never reports, or that exits during
+the wait, ends the campaign with exit 69 naming the address and the gateway log
+tail. The campaign also kills the downstream and the gateway it launched on
+every exit path, not only the normal one: a fail-closed exit used to leave the
+downstream holding the address the next run needs, which turned a restart into a
+campaign that could only report that readiness never arrived.
+`deploy/soak/crossrepo-campaign-lifecycle.test.sh` runs the fail-closed
+regression matrix for both — readiness ordering and component reaping — against
+stub binaries and is a Linux step in CI.
+
 The failure this sideband prevents is not hypothetical. A served gateway and a
 served downstream were run against each other over loopback, with the
 downstream's sideband configured, mismatched, and absent; only the configured

@@ -37,7 +37,16 @@ printf 'stub_host_principal=%s\n' "${STS2_SYNTHETIC_HOST_PRINCIPAL_ID:-unset}"
 sleep 5
 STUB
 chmod +x "$bins/synthetic_mod_server"
-for name in sts2-gateway-runtime sts2-harness-runtime sts2-mcp-server bridge.sh; do
+# A launched gateway is not a listening gateway: the campaign waits for the
+# pinned binary's listening report before it opens the window, so the stub has
+# to emit it too or every case here would fail closed at the readiness gate.
+cat > "$bins/sts2-gateway-runtime" <<'STUB'
+#!/bin/sh
+printf 'sts2-gateway runtime listening on %s for instance stub\n' "${STS2_GATEWAY_ADDR:-unset}"
+sleep 60
+STUB
+chmod +x "$bins/sts2-gateway-runtime"
+for name in sts2-harness-runtime sts2-mcp-server bridge.sh; do
     printf '#!/bin/sh\nexit 0\n' > "$bins/$name"
     chmod +x "$bins/$name"
 done
@@ -219,8 +228,13 @@ sleep 5
 STUB
 chmod +x "$sb_bins/synthetic_mod_server"
 # A single-deployment campaign never restarts the gateway, so its stub has to
-# outlive the window instead of exiting like the per-episode stub does.
-printf '#!/bin/sh\nsleep 60\n' > "$sb_bins/sts2-gateway-runtime"
+# outlive the window instead of exiting like the per-episode stub does. It still
+# has to report that it is listening, for the same reason as the stub above.
+cat > "$sb_bins/sts2-gateway-runtime" <<'STUB'
+#!/bin/sh
+printf 'sts2-gateway runtime listening on %s for instance stub\n' "${STS2_GATEWAY_ADDR:-unset}"
+sleep 60
+STUB
 chmod +x "$sb_bins/sts2-gateway-runtime"
 for name in sts2-harness-runtime sts2-mcp-server bridge.sh; do
     printf '#!/bin/sh\nexit 0\n' > "$sb_bins/$name"
