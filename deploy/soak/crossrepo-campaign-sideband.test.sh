@@ -159,6 +159,42 @@ fi
 # The env file stays closed to non-STS2 names.
 run_case env_file_rejects_non_sts2 '' 64 'CAMPAIGN_MODE=host-lease'
 
+# The cross-process probe needs both pinned binaries, so it cannot run here, but
+# its contract can be guarded: it must stay a parseable script, must document
+# every mode it accepts, and must reject an unknown mode and a missing binary
+# instead of silently running something else.
+probe=$dir/host-sideband-gateway-probe.sh
+if [ -s "$probe" ] && sh -n "$probe" 2>/dev/null; then
+    record 'probe parses' 1 ""
+else
+    record 'probe parses' 0 "missing or unparseable: $probe"
+fi
+
+probe_help=$(sh "$probe" --help 2>&1 || true)
+for mode in configured wrong-key closed; do
+    if printf '%s' "$probe_help" | grep -q "$mode"; then
+        record "probe documents $mode" 1 ""
+    else
+        record "probe documents $mode" 0 "usage does not name $mode"
+    fi
+done
+
+probe_status=0
+sh "$probe" --gateway-bin /bin/true --mod-bin /bin/true --mode bogus >/dev/null 2>&1 || probe_status=$?
+if [ "$probe_status" -eq 2 ]; then
+    record 'probe rejects an unknown mode' 1 ""
+else
+    record 'probe rejects an unknown mode' 0 "expected 2 got $probe_status"
+fi
+
+probe_status=0
+sh "$probe" --gateway-bin "$work/absent-gateway" --mod-bin /bin/true --mode closed >/dev/null 2>&1 || probe_status=$?
+if [ "$probe_status" -eq 2 ]; then
+    record 'probe rejects a missing binary' 1 ""
+else
+    record 'probe rejects a missing binary' 0 "expected 2 got $probe_status"
+fi
+
 if [ "$failures" -ne 0 ]; then
     printf 'FAILED %s regression(s)\n' "$failures" >&2
     exit 1

@@ -23,6 +23,17 @@ launch and refuses to start when the reported state disagrees with the
 configuration. The campaign therefore moves from "cannot start" to "can start
 once the window is authorized"; AC3–AC5 and `SOAK_VERIFIED` are unaffected.
 
+Revision 4 (2026-09-20): the composed connection itself is now exercised across
+two served processes rather than in-process. A real `sts2-gateway-runtime`
+(gateway `fb7e57c3`) was pointed at a real `synthetic_mod_server` (harness
+`b2376778`) over loopback and drove bootstrap, host-fence and lease-acquire; the
+fence and the install succeed only when the downstream's key matches the
+gateway's, and the fence is refused when the key is absent. The probe and its
+results are in
+[`host-sideband-cross-process-20260920.md`](host-sideband-cross-process-20260920.md).
+This narrows what a soak window would be the first to exercise; it is not a soak
+window and does not lift the authorization requirement.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |
