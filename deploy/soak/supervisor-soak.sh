@@ -11,6 +11,9 @@
 #   supervisor-soak.sh start --release-dir DIR --duration-seconds N \
 #       [--container NAME] [--image IMAGE] [--out-dir DIR]
 #   supervisor-soak.sh finalize --out-dir DIR --duration-seconds N
+#
+# Exit codes: 64 usage, 66 missing release artifact or soak log, 69 the
+# container bring-up did not become ready, 77 not root.
 set -eu
 
 usage() {
@@ -42,6 +45,11 @@ done
 [ -n "$duration" ] || usage
 [ "$(id -u)" -eq 0 ] || { printf '%s\n' 'supervisor-soak.sh must run as root' >&2; exit 77; }
 
+# The samples are the whole record of the window: a run whose samples are all
+# `inactive` observed a supervisor that was never up, so elapsed wall-clock
+# alone must not qualify it as a soak. Each refusing gate is printed with the
+# value that refused it, because this output is what a 24-hour campaign's
+# evidence quotes.
 finalize() {
     [ -f "$out_dir/soak.jsonl" ] || { printf '%s\n' 'soak log is missing' >&2; exit 66; }
     first=$(head -1 "$out_dir/soak.jsonl" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
@@ -50,13 +58,15 @@ finalize() {
     first_epoch=$(date -u -d "$first" +%s)
     last_epoch=$(date -u -d "$last" +%s)
     elapsed=$((last_epoch - first_epoch))
-    inactive=$(grep -c '"active":"active"' "$out_dir/soak.jsonl" || true)
+    active_samples=$(grep -c '"active":"active"' "$out_dir/soak.jsonl" || true)
     printf 'samples=%s first=%s last=%s elapsed_seconds=%s active_samples=%s\n' \
-        "$samples" "$first" "$last" "$elapsed" "$inactive"
-    if [ "$elapsed" -ge "$duration" ]; then
-        printf '%s\n' 'soak_complete=true'
+        "$samples" "$first" "$last" "$elapsed" "$active_samples"
+    if [ "$elapsed" -lt "$duration" ]; then
+        printf 'soak_complete=false required_seconds=%s observed_seconds=%s\n' "$duration" "$elapsed"
+    elif [ "$active_samples" -eq 0 ]; then
+        printf '%s\n' 'soak_complete=false required_active_samples=1 observed_active_samples=0'
     else
-        printf 'soak_complete=false required_seconds=%s\n' "$duration"
+        printf '%s\n' 'soak_complete=true'
     fi
 }
 
@@ -76,14 +86,80 @@ unit_file=$script_dir/../linux/ascension-watchdog.service
 [ -f "$install_script" ] || { printf '%s\n' "install script is missing: $install_script" >&2; exit 66; }
 [ -f "$unit_file" ] || { printf '%s\n' "unit file is missing: $unit_file" >&2; exit 66; }
 
-mkdir -p "$out_dir"
-podman rm -f "$container" >/dev/null 2>&1 || true
-podman run -d --name "$container" --privileged --systemd=always \
-    -v "$out_dir":/var/log/soak "$image" >/dev/null
-sleep 8
+# `podman run -d --systemd=always` returns when the container is created, not
+# when the systemd manager inside it can answer: the next `podman exec` runs
+# `systemctl daemon-reload` and `systemctl start`, which fail with "Failed to
+# connect to bus" while PID 1 is still coming up. That is the same defect shape
+# as a launched gateway that has not reported that it is listening, and a fixed
+# sleep cannot express the ordering at any delay. Poll for a manager that
+# answers, and fail closed on the container's own log instead of opening a soak
+# window whose setup never ran. Tests may shorten the budget with
+# `STS2_SUPERVISOR_SOAK_SYSTEMD_READY_TRIES`; the default is 300 polls (30
+# seconds of sleep between polls).
+systemd_ready_tries=${STS2_SUPERVISOR_SOAK_SYSTEMD_READY_TRIES:-300}
 
+container_running() {
+    [ "$(podman inspect -f '{{.State.Running}}' "$container" 2>/dev/null || printf '%s' false)" = true ]
+}
+
+wait_for_systemd() {
+    tries=0
+    while [ "$tries" -lt "$systemd_ready_tries" ]; do
+        # `degraded` is a reachable manager with a failed unit, an ordinary
+        # first-boot state inside a disposable container; `starting` and an
+        # unreachable bus both mean `systemctl start` cannot work yet.
+        case "$(podman exec "$container" systemctl is-system-running 2>/dev/null || true)" in
+            running|degraded) return 0 ;;
+        esac
+        container_running || return 1
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
+# Bring-up owns the container and the staging copy until the window is open.
+# Without this, a failed bring-up leaves a privileged systemd container holding
+# the name the next run needs, and the staging copy it was fed is reachable only
+# through that container. Once `soak_started` is printed the container is the
+# window, so it is deliberately left running for `finalize`.
+staging=
+container_owned=0
+cleanup_bringup() {
+    status=$?
+    if [ "$container_owned" -eq 1 ]; then
+        podman rm -f "$container" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$staging" ]; then
+        find "$staging" -depth -mindepth 1 -delete 2>/dev/null || true
+        rmdir "$staging" 2>/dev/null || true
+    fi
+    exit "$status"
+}
+trap cleanup_bringup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -p "$out_dir"
 staging=$(mktemp -d)
-trap 'find "$staging" -type f -delete 2>/dev/null || true; rmdir "$staging" 2>/dev/null || true' EXIT
+podman rm -f "$container" >/dev/null 2>&1 || true
+if ! podman run -d --name "$container" --privileged --systemd=always \
+    -v "$out_dir":/var/log/soak "$image" >/dev/null; then
+    printf '%s\n' "the supervisor soak container $container could not be launched" >&2
+    exit 69
+fi
+container_owned=1
+
+if ! wait_for_systemd; then
+    if container_running; then
+        printf '%s\n' "the supervisor soak container $container never reported a running systemd manager" >&2
+    else
+        printf '%s\n' "the supervisor soak container $container exited before its systemd manager reported ready" >&2
+    fi
+    podman logs --tail 20 "$container" 2>&1 | sed 's/^/  /' >&2 || true
+    exit 69
+fi
+
 cp "$release_dir/watchdog" "$staging/watchdog"
 cp "$release_dir/release-manifest.json" "$staging/release-manifest.json"
 cp "$install_script" "$staging/install.sh"
@@ -143,9 +219,17 @@ sleep 3
 /usr/local/bin/soak-collect.sh
 SETUP
 
-podman cp "$staging" "$container":/root/staging
-podman exec "$container" sh /root/staging/soak-setup.sh
+if ! podman cp "$staging" "$container":/root/staging; then
+    printf '%s\n' "the staging copy could not be delivered to $container" >&2
+    exit 69
+fi
+if ! podman exec "$container" sh /root/staging/soak-setup.sh; then
+    printf '%s\n' "the supervisor soak setup failed inside $container" >&2
+    podman logs --tail 20 "$container" 2>&1 | sed 's/^/  /' >&2 || true
+    exit 69
+fi
 
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+container_owned=0
 printf 'soak_started=%s container=%s out_dir=%s duration_seconds=%s\n' "$started" "$container" "$out_dir" "$duration"
 printf '%s\n' "finalize with: supervisor-soak.sh finalize --out-dir $out_dir --duration-seconds $duration"
