@@ -208,6 +208,10 @@ start_mod() {
         sleep 0.2
         tries=$((tries + 1))
     done
+    if [ "$expected_host_lease" = enabled ]; then
+        printf '%s\n' \
+            "the synthetic downstream never reported readiness; when STS2_SYNTHETIC_HOST_LEASE_KEY is set it must be 64 hex characters, because the pinned host terminal refuses every other encoding" >&2
+    fi
     return 1
 }
 

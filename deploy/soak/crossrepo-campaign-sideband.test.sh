@@ -28,6 +28,9 @@ principal=11111111-2222-4333-8444-555555555555
 # the names instead of relying on whatever the caller had exported.
 cat > "$bins/synthetic_mod_server" <<'STUB'
 #!/bin/sh
+# `@silent` mimics the pinned binary refusing its configuration: it exits
+# before printing any readiness line.
+[ "${STUB_READINESS:-}" = '@silent' ] && exit 0
 printf 'synthetic_mod_listening=127.0.0.1:1 mode=Success%s\n' "${STUB_READINESS:-}"
 printf 'stub_host_lease_key=%s\n' "${STS2_SYNTHETIC_HOST_LEASE_KEY:-unset}"
 printf 'stub_host_principal=%s\n' "${STS2_SYNTHETIC_HOST_PRINCIPAL_ID:-unset}"
@@ -142,6 +145,16 @@ assert_disagreement_refused sideband_not_reported_refused
 run_case principal_without_key ' host_lease=closed' 0 \
     "STS2_SYNTHETIC_HOST_PRINCIPAL_ID=$principal"
 assert_inherited stub_host_principal "$principal"
+
+# A configured sideband whose key the pinned terminal refuses never reaches
+# readiness. The campaign has to name the encoding rather than only timing out,
+# so an operator is not left reading a bare "failed to start".
+run_case sideband_key_refused '@silent' 69 "STS2_SYNTHETIC_HOST_LEASE_KEY=$key"
+if grep -q 'must be 64 hex characters' "$out_file"; then
+    record 'sideband_key_refused names the encoding' 1 ""
+else
+    record 'sideband_key_refused names the encoding' 0 'no encoding message in campaign output'
+fi
 
 # The env file stays closed to non-STS2 names.
 run_case env_file_rejects_non_sts2 '' 64 'CAMPAIGN_MODE=host-lease'

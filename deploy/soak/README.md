@@ -59,7 +59,10 @@ on its readiness line, and without the key it reports `host_lease=closed`.
 `crossrepo-campaign.sh` forwards both names to the downstream launch and refuses
 to start when the reported state disagrees with the configuration, so a
 durable-recovery campaign cannot begin against a downstream that would refuse
-every frame. Pins, topology, the fault matrix, and the revision that supplied
+every frame. Supply the key as 64 hex characters: the pinned host terminal
+decodes hex only, and the gateway accepts either hex or base64, so hex is the
+one encoding that satisfies both sides of the connection. Pins, topology, the
+fault matrix, and the revision that supplied
 the host-lease-capable downstream are in
 [`docs/evidence/single-deployment-soak-prerequisite-20260917.md`](../../docs/evidence/single-deployment-soak-prerequisite-20260917.md).
 
