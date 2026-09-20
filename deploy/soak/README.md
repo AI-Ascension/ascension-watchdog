@@ -51,8 +51,16 @@ records carry `"lease_epoch"`, the first record is
 `{"ts","mode":"single-deployment",...}`, and a gateway that exits ends the
 campaign as a failed iteration. The profile negotiates only on the gateway's
 durable recovery path, whose environment is supplied with `--env-file`
-(STS2_* `KEY=VALUE` lines). Pins, topology, the fault matrix, and the current
-blocker (a host-lease-capable synthetic downstream does not exist yet) are in
+(STS2_* `KEY=VALUE` lines). That same file also supplies the synthetic
+downstream's host sideband: with `STS2_SYNTHETIC_HOST_LEASE_KEY` (and
+optionally `STS2_SYNTHETIC_HOST_PRINCIPAL_ID`) set, `synthetic_mod_server`
+answers signed `host-lease-control-v1` frames and reports `host_lease=enabled`
+on its readiness line, and without the key it reports `host_lease=closed`.
+`crossrepo-campaign.sh` forwards both names to the downstream launch and refuses
+to start when the reported state disagrees with the configuration, so a
+durable-recovery campaign cannot begin against a downstream that would refuse
+every frame. Pins, topology, the fault matrix, and the revision that supplied
+the host-lease-capable downstream are in
 [`docs/evidence/single-deployment-soak-prerequisite-20260917.md`](../../docs/evidence/single-deployment-soak-prerequisite-20260917.md).
 
 Fault kinds (`--fault-kinds`, round-robin; default `downstream_restart` in
