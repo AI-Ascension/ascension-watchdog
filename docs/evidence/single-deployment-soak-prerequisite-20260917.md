@@ -46,6 +46,44 @@ already refused to start on a disagreement, and
 `crossrepo-campaign-finalize.sh` already refuses `campaign_complete=true` while
 any fault is `failed`.
 
+Revision 6 (2026-09-20): two component-lifecycle defects in
+`deploy/soak/crossrepo-campaign.sh` are fixed. **Readiness gate.** A launched
+gateway is not a listening gateway, and `start_gateway` waited with a fixed
+`sleep 1`. The wait is now a bounded poll for the runtime's own
+`listening on <addr>` report (`STS2_CAMPAIGN_GATEWAY_READY_TRIES`, default 30 s)
+that fails closed with the address and the gateway log tail when the report
+never arrives. This is the ordering a fixed sleep cannot express at any delay,
+and the campaign was recorded aborting a window on it: the durable bring-up
+posted after a launch was refused with the transport's opaque
+`status=000` while the gateway was alive and its log showed the listening
+report. The launch-to-listening delay itself is 24–47 ms on this host, idle and
+under a six-spinner load, so the earlier abort is not reproducible on demand —
+which is the reason the gate must not rest on a sleep being long enough.
+**Component ownership.** The campaign now kills its own downstream and gateway
+on every exit path through an `EXIT`/`INT`/`TERM` trap, not only on the normal
+completion path. This is reproducible in both directions with the pinned
+binaries: with the gateway address occupied by another listener, the unmodified
+campaign exits 69 with `single-deployment gateway failed to start` and leaves
+`synthetic_mod_server` running, while the fixed campaign exits 69 naming the
+readiness that never arrived and leaves nothing behind. The recorded consequence
+of the leak on this host was the next run refusing to start with
+`AddrInUse` (`results-campaign-2/synthetic-mod.log`).
+`deploy/soak/crossrepo-campaign-lifecycle.test.sh` drives both fixes against stub
+binaries and is a Linux step in this repository's CI: 24 assertions pass at this
+revision, the unmodified campaign fails 10 of them, and a variant with only the
+trap removed fails the 4 component-reaping assertions, so none of them is
+vacuous. With the pinned binaries the fixed campaign then drove a 105-second
+`--single-deployment` window on the durable lane: the bring-up was accepted
+(`BOOT_AUTHORITY_CREATED`, `FENCE_ACCEPTED`), 21/21 episodes passed, and every
+required fault kind recovered (`restart`, `archive`, `budget`,
+`telemetry_outage`), with `crossrepo-campaign-finalize.sh --single-deployment`
+reporting `campaign_complete=true`, `records_reconciled=true`,
+`lease_epochs_monotonic=true` and `required_fault_kinds_present=true`. That is a
+local prerequisite exercise on one host, not the supervised soak. This revision
+does not complete
+[ascension-watchdog#58](https://github.com/AI-Ascension/ascension-watchdog/issues/58);
+AC3–AC5 and `SOAK_VERIFIED=unverified` are unchanged.
+
 ## Accepted companion prerequisite (issue AC1)
 
 | item | value | label |

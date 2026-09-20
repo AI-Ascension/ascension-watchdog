@@ -58,6 +58,11 @@ max_execution_stores=64
 mod_addr=127.0.0.1:20001
 gateway_port_base=21000
 budget_burst=3
+# How long the campaign waits for a launched gateway to report that it is
+# listening, in 100 ms polls. The wait is a readiness check, not a fixed sleep:
+# see `wait_for_gateway`. Tests may shorten it with
+# `STS2_CAMPAIGN_GATEWAY_READY_TRIES`; the default is 30 seconds.
+gateway_ready_tries=${STS2_CAMPAIGN_GATEWAY_READY_TRIES:-300}
 # The reviewed Exo source revision the harness admits (sts2-harness ADR 0017,
 # `EXO_SOURCE_REVISION` at the pinned harness); the bounded synthetic bridge is
 # a raw-wire probe, acknowledged explicitly with STS2_EXO_ADMISSION=legacy.
@@ -359,6 +364,34 @@ gateway_alive() {
     [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null
 }
 
+# A launched gateway is not yet a listening gateway, and a fixed sleep cannot
+# express that difference at any delay. The runtime prints its listening line
+# once the listener is bound -- measured at 24-47 ms on this host across idle and
+# six-spinner loads -- so the sleep usually happens to be long enough, which is
+# not the same as being correct. The campaign has been observed aborting a whole
+# window there: `--single-deployment` posts its durable bring-up immediately
+# after the launch, and a bring-up posted before the listener was bound was
+# refused with the opaque transport status=000 while the gateway was alive and
+# its own log showed the listening report. That failure is not reproducible on
+# demand, which is the point: the window must not open on a sleep being long
+# enough on the day.
+#
+# Wait for the line, in bounded polls, and report failure rather than starting a
+# window against a port nothing is listening on. A gateway that has already
+# exited fails the wait immediately instead of burning the whole budget.
+wait_for_gateway() {
+    tries=0
+    while [ "$tries" -lt "$gateway_ready_tries" ]; do
+        if grep -qF "listening on $gateway_addr" "$gateway_log" 2>/dev/null; then
+            return 0
+        fi
+        gateway_alive || return 1
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
 # The single deployment is the invariant of --single-deployment: a fault that
 # leaves the gateway process dead is not recovered, whatever else happened.
 deployment_intact() {
@@ -373,7 +406,7 @@ start_gateway() {
         STS2_LEASE_ID=lease-1 STS2_LEASE_EPOCH=1 \
         "$bin_dir/sts2-gateway-runtime" >> "$gateway_log" 2>&1 &
     gateway_pid=$!
-    sleep 1
+    wait_for_gateway
 }
 
 record_fault() {
@@ -459,6 +492,23 @@ fault_kind_at() {
     printf '%s' "$1"
 }
 
+# The campaign owns the components it launched. Without this, the downstream
+# outlives every exit path — including the fail-closed one — and the next run on
+# the same host cannot bind its address at all: `synthetic_mod_server` dies with
+# AddrInUse, and the campaign can only report that readiness never arrived. On a
+# supervised 24-hour host that turns a restart into a campaign that cannot start.
+cleanup_components() {
+    if [ -n "${gateway_pid:-}" ]; then
+        kill "$gateway_pid" 2>/dev/null || true
+        wait "$gateway_pid" 2>/dev/null || true
+    fi
+    if [ -n "${mod_pid:-}" ]; then
+        kill "$mod_pid" 2>/dev/null || true
+        wait "$mod_pid" 2>/dev/null || true
+    fi
+    return 0
+}
+trap cleanup_components EXIT INT TERM
 start_mod || { printf '%s\n' 'synthetic downstream failed to start' >&2; exit 69; }
 gateway_pid=
 gateway_log=
@@ -466,8 +516,11 @@ if [ "$single_deployment" -eq 1 ]; then
     gateway_addr="127.0.0.1:$gateway_port_base"
     gateway_log=$results/gateway.log
     : > "$gateway_log"
-    start_gateway
-    gateway_alive || { printf '%s\n' 'single-deployment gateway failed to start' >&2; exit 69; }
+    if ! start_gateway; then
+        printf '%s\n' "the single-deployment gateway never reported listening on $gateway_addr" >&2
+        tail -n 20 "$gateway_log" >&2
+        exit 69
+    fi
     printf '{"ts":"%s","mode":"single-deployment","gateway_addr":"%s","episode_profile":"repeated-episode-lease-v1"}\n' \
         "$(now_iso)" "$gateway_addr" >> "$results_file"
     # A configured host lease key means the window runs on the durable recovery
@@ -505,7 +558,11 @@ while [ "$(date +%s)" -lt "$end" ]; do
         gateway_addr="127.0.0.1:$((gateway_port_base + (iterations % 400)))"
         gateway_log=$results/.gateway-$iterations.log
         : > "$gateway_log"
-        start_gateway
+        if ! start_gateway; then
+            printf '%s\n' "the gateway for iteration $iterations never reported listening on $gateway_addr" >&2
+            tail -n 20 "$gateway_log" >&2
+            exit 69
+        fi
         lease_id=lease-1
         lease_epoch=1
         episode_profile=false

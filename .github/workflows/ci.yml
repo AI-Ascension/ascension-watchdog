@@ -37,6 +37,9 @@ jobs:
       - name: Soak campaign sideband fail-closed regressions
         if: runner.os == 'Linux'
         run: sh deploy/soak/crossrepo-campaign-sideband.test.sh
+      - name: Soak campaign lifecycle fail-closed regressions
+        if: runner.os == 'Linux'
+        run: sh deploy/soak/crossrepo-campaign-lifecycle.test.sh
       - name: Verify formatting
         run: cargo fmt --all --check
       - name: Lint all targets
