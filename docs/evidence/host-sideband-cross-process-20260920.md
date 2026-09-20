@@ -95,11 +95,14 @@ boot the gateway itself presented, so the fence is bound to the served
 identity and not merely well-formed.
 
 `wrong-key` is the proof-carrying negative. The mux is open and the fence still
-succeeds — the fence hop validates the fence body rather than an HMAC — but the
-lease install is **refused** with `503 recovery_host_lease_outcome_unknown`
-because the downstream signed its acknowledgment with a key the gateway does not
-hold. A key that only *exists* is therefore not enough; the shared secret is
-load-bearing.
+succeeds — that hop validates the fence body rather than an HMAC — but the lease
+install fails with `503 recovery_host_lease_outcome_unknown`. The gateway signs
+the install request with the host lease key; the downstream verifies the
+inbound proof with *its* key, cannot reproduce it, and refuses the frame
+(`host_lease_control_canonical.rs::verify_frame_proof`). The gateway never
+receives an acknowledgment, so it reports the install as unconfirmed rather than
+inventing a result. A key that only *exists* is therefore not enough: the shared
+secret is load-bearing in both directions.
 
 `closed` is the connection-removal control. The downstream answers the recovery
 mux with the harness fixture's refusal, which the gateway relays verbatim as
