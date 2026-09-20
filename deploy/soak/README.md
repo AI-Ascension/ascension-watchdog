@@ -66,6 +66,14 @@ fault matrix, and the revision that supplied
 the host-lease-capable downstream are in
 [`docs/evidence/single-deployment-soak-prerequisite-20260917.md`](../../docs/evidence/single-deployment-soak-prerequisite-20260917.md).
 
+The failure this sideband prevents is not hypothetical. A served gateway and a
+served downstream were run against each other over loopback, with the
+downstream's sideband configured, mismatched, and absent; only the configured
+run completed the fence and the lease install. The operator-only probe is
+`deploy/soak/host-sideband-gateway-probe.sh` (it needs both pinned binaries, so
+it cannot run in CI), and the results are recorded in
+[`docs/evidence/host-sideband-cross-process-20260920.md`](../../docs/evidence/host-sideband-cross-process-20260920.md).
+
 Fault kinds (`--fault-kinds`, round-robin; default `downstream_restart` in
 legacy mode and `restart,archive,budget,telemetry_outage` in single-deployment
 mode; any other kind is a usage error): `restart` (alias `downstream_restart`)
