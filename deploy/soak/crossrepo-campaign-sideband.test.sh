@@ -195,6 +195,109 @@ else
     record 'probe rejects a missing binary' 0 "expected 2 got $probe_status"
 fi
 
+# The start-time check is fail-closed, but the restart path re-runs it through
+# restart_mod, and that is the case a durable-recovery window actually depends
+# on: the sideband has to survive the downstream restart that --single-deployment
+# injects, and a downstream that comes back *without* it is a permanent loss of
+# the durable path for the rest of the window rather than a recovered restart.
+sb_bins=$work/sideband-bin
+mkdir -p "$sb_bins"
+cat > "$sb_bins/synthetic_mod_server" <<'STUB'
+#!/bin/sh
+# The sideband the downstream reports depends on which launch this is, so a
+# restart can change it. The counter lives outside the log the campaign reads.
+launches=$(cat "$STUB_LAUNCH_COUNTER" 2>/dev/null || printf 0)
+launches=$((launches + 1))
+printf '%s' "$launches" > "$STUB_LAUNCH_COUNTER"
+suffix=${STUB_READINESS:-}
+# `-` rather than `:-`: the lost-sideband case passes an *empty* restart
+# readiness on purpose, and `:-` would silently substitute the first launch's
+# value and hide the very regression this case exists to catch.
+if [ "$launches" -ge 2 ]; then suffix=${STUB_RESTART_READINESS-$suffix}; fi
+printf 'synthetic_mod_listening=127.0.0.1:1 mode=Success%s\n' "$suffix"
+sleep 5
+STUB
+chmod +x "$sb_bins/synthetic_mod_server"
+# A single-deployment campaign never restarts the gateway, so its stub has to
+# outlive the window instead of exiting like the per-episode stub does.
+printf '#!/bin/sh\nsleep 60\n' > "$sb_bins/sts2-gateway-runtime"
+chmod +x "$sb_bins/sts2-gateway-runtime"
+for name in sts2-harness-runtime sts2-mcp-server bridge.sh; do
+    printf '#!/bin/sh\nexit 0\n' > "$sb_bins/$name"
+    chmod +x "$sb_bins/$name"
+done
+
+# run_restart_case NAME RESTART_READINESS
+#
+# Runs a ten-second single-deployment window whose only fault is `restart`, and
+# leaves the results file in `sb_results`, the combined output in `sb_output`,
+# and the downstream log in `sb_mod_log`.
+#
+# The window has to span more than one loop pass: the loop sleeps four seconds
+# after every episode, so a window shorter than that exits before the fault
+# check is ever reached and the case would pass vacuously with no fault record.
+# Ten seconds leaves room for the first pass (no fault) plus two faulted passes.
+run_restart_case() {
+    sb_name=$1 restart_readiness=$2
+    sb_case=$work/restart-$sb_name
+    mkdir -p "$sb_case/results"
+    sb_env=$sb_case/campaign.env
+    printf 'STS2_SYNTHETIC_HOST_LEASE_KEY=%s\n' "$key" > "$sb_env"
+    sb_counter=$sb_case/launches
+    : > "$sb_counter"
+    sb_results=$sb_case/results/iterations.jsonl
+    sb_output=$sb_case/output
+    sb_mod_log=$sb_case/results/synthetic-mod.log
+    STUB_LAUNCH_COUNTER=$sb_counter STUB_READINESS=' host_lease=enabled' \
+        STUB_RESTART_READINESS=$restart_readiness \
+        sh "$campaign" --bin-dir "$sb_bins" --results "$sb_case/results" \
+        --duration-seconds 10 --fault-interval-seconds 1 --single-deployment \
+        --fault-kinds restart --env-file "$sb_env" \
+        --mod-addr 127.0.0.1:20011 --gateway-port-base 21200 > "$sb_output" 2>&1 || true
+}
+
+# assert_fault NAME KIND RESULT
+assert_fault() {
+    if grep -q "\"fault\":\"$2\",\"result\":\"$3\"" "$sb_results" 2>/dev/null; then
+        record "$1 records $2=$3" 1 ""
+    else
+        record "$1 records $2=$3" 0 "no such fault record in $(basename "$sb_results")"
+    fi
+}
+
+run_restart_case kept ' host_lease=enabled'
+assert_fault restart_kept_sideband restart recovered
+# The restart really happened, so the case is not vacuous: the downstream was
+# launched at least twice and every launch reported the sideband.
+sb_launches=$(cat "$work/restart-kept/launches" 2>/dev/null || printf 0)
+if [ "${sb_launches:-0}" -ge 2 ]; then
+    record 'restart_kept_sideband restarted the downstream' 1 ""
+else
+    record 'restart_kept_sideband restarted the downstream' 0 "launches=$sb_launches"
+fi
+sb_enabled=$(grep -c 'host_lease=enabled' "$sb_mod_log" 2>/dev/null || true)
+if [ "${sb_enabled:-0}" -ge 2 ]; then
+    record 'restart_kept_sideband kept the sideband across the restart' 1 ""
+else
+    record 'restart_kept_sideband kept the sideband across the restart' 0 "enabled_readiness_lines=$sb_enabled"
+fi
+
+run_restart_case lost ''
+assert_fault restart_lost_sideband restart failed
+# The drop has to be real, otherwise the failing case would be failing for some
+# other reason and the assertion above would be vacuous.
+sb_dropped=$(tail -n +2 "$sb_mod_log" 2>/dev/null | grep -c 'host_lease=' || true)
+if [ "${sb_dropped:-0}" -eq 0 ]; then
+    record 'restart_lost_sideband really dropped the sideband' 1 ""
+else
+    record 'restart_lost_sideband really dropped the sideband' 0 "still reported: $sb_dropped"
+fi
+if grep -q 'readiness disagrees with the campaign environment' "$sb_output"; then
+    record 'restart_lost_sideband names the disagreement' 1 ""
+else
+    record 'restart_lost_sideband names the disagreement' 0 "no disagreement message in campaign output"
+fi
+
 if [ "$failures" -ne 0 ]; then
     printf 'FAILED %s regression(s)\n' "$failures" >&2
     exit 1
