@@ -34,6 +34,21 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime process ownership is coordinated by `runtime_process.rs`. The
+supervision facade is delegated to one cohesive child,
+`runtime_process/facade.rs`, which owns the `RuntimeProcessManager` entrypoint,
+the `RuntimeChild` handle and its synthetic/native variants, the
+`RuntimeObservation`, `RuntimeStopOutcome` and `RuntimeLaunchError` vocabulary
+and the cleanup-uncertain classification applied when a native launch cannot
+prove its identity. The coordinator re-exports `RuntimeChild`,
+`RuntimeLaunchError`, `RuntimeObservation`, `RuntimeProcessManager` and
+`RuntimeStopOutcome` so `runtime.rs`, the sibling runtime modules and the
+existing regression tests are unchanged, and it names the child file with an
+explicit `#[path]` attribute because `runtime` is itself a `#[path]` module.
+The facade owns no platform authority: every native effect goes through the
+coordinator's `NativeBackend` dispatch, which stays in the entry file together
+with the shared proof-size bound and native timeouts.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
