@@ -13,7 +13,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -172,7 +172,7 @@ impl RestoreStagingFile {
         if let Some(parent) = destination.parent()
             && !parent.as_os_str().is_empty()
         {
-            File::open(parent)?.sync_all()?;
+            std::fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
     }
@@ -887,7 +887,7 @@ impl Store {
         file.sync_all()?;
         #[cfg(unix)]
         if let Some(parent) = destination.parent() {
-            File::open(parent)?.sync_all()?;
+            std::fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
     }
