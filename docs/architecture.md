@@ -34,6 +34,16 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The Windows administration transport is split across `admin_pipe.rs` and its
+child modules, and the coordinator keeps every existing entrance so
+`crate::admin_pipe::...` callers and tests are unchanged. This change moves the
+protected credential, payload and service-config readers, the local-path and
+no-reparse ancestor traversal with its retained handles, and the
+`ProtectedFileAcl` policy enforcement into `admin_pipe/protected.rs`. The
+protected-file entrypoints are re-exported from the coordinator, so the
+owner/DACL requirements, bounded reads, distinct packaged service-config ACL
+policy and no-reparse traversal are preserved.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
