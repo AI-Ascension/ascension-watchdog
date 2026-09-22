@@ -45,6 +45,18 @@ arithmetic), `validators.rs` (grant and acknowledgment shape/semantic rules),
 (duplicate-member rejection). `support` is the only owner of the artifact root,
 digest, UUID and canonical-JSON helpers; no child re-implements them.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Win32 resource ownership and identity
+primitives are coordinated by `native.rs`, which re-exports them from the
+cohesive child `native_resource_ownership.rs`: the RAII wrappers
+(`OwnedHandle`, `ProtectedDirectoryHandle`, `SecurityDescriptor`) that close
+kernel objects exactly once, the process creation-time and image-path identity
+reads, and the UTF-16/Win32 error helpers. The public entrypoints
+(`open_protected_directory`, `ProtectedDirectoryHandle`) and the shared
+`pub(crate)` helpers keep their existing names, so callers in `native.rs`,
+`native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
+explicit `#[path]` attributes to remain flat siblings of `native.rs`.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
