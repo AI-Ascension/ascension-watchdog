@@ -34,6 +34,15 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime construction and reconciliation coordination is extracted into
+`runtime/coordinator.rs`: runtime construction and `from_store`, the
+owner-local singleton `acquire_lock`, the ordered `reconcile_once` pass
+(persisted launch intents and identities before any new effect, the worker
+binding before scheduling, durable stop/pause admission before cleanup), the
+`run_until_stopped` loop and the read-only status/job facade. `runtime.rs`
+keeps the `Supervisor` type and re-exports the same public entry points, so
+callers, tests and the `lib.rs` re-exports are unchanged.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
