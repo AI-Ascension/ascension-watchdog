@@ -34,6 +34,19 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Job containment and process lifecycle are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_job.rs`: the `JobOwnedProcess` owner, `create_job` with an owner-only
+security descriptor, the exact process/job limit queries and verification,
+prepared-job recovery (`open_planned_job`), the bounded
+`terminate_job_and_wait` stop path and its `StopOutcome`, and the nonce-bound
+`job_name`/`planned_job_nonce` helpers with their `JOB_NAME_PREFIX`/
+`PLANNED_JOB_PREFIX` constants. The public `JobOwnedProcess`/`StopOutcome`
+entrypoints and the shared `pub(crate)` helpers keep their existing names, so
+callers in `native.rs` and the `watchdog` runtime are unchanged. Child files
+use explicit `#[path]` attributes to remain flat siblings of `native.rs`.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
