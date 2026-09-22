@@ -34,6 +34,22 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Cross-repository release admission lives in `source_set.rs`. The read-only
+verifier is coordinated by `source_set.rs`, which keeps the existing entrypoint
+(`verify_document`, `SourceSetReport`, `RepositoryReport`, `ArtifactReport`,
+`ContractComparisonReport`, `digest_hex`) and delegates to five cohesive
+children: `source_set/validation.rs` owns manifest schema admission plus the
+shared revision, remote and digest primitives; `source_set/io.rs` owns the
+bounded file reads and the Git process probe; `source_set/repository.rs` owns
+repository pin and clean-worktree identity verification, including the
+source-revision/artifact-only ancestry check; `source_set/artifact.rs` owns the
+artifact checksum, required-file and golden-contract verification; and
+`source_set/conformance.rs` owns consumer-conformance parsing and the
+cross-artifact contract comparison. The coordinator keeps `verify_document` and
+the shared manifest/report vocabulary, and the unit tests stay a direct
+`tests` child of it so discovery names are unchanged. Fail-closed admission,
+byte bounds, ancestry and remote checks exist only in these children; the
+coordinator never re-implements them.
 The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
 being split along the same seams. Win32 resource ownership and identity
 primitives are coordinated by `native.rs`, which re-exports them from the
