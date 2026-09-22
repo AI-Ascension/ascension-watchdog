@@ -34,6 +34,15 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Persisted launch and identity recovery is extracted into
+`runtime/recovery.rs`: `reconcile_persisted_launch_intents` reconstructs an
+owned handle only from a proof-recorded native intent whose persisted binding
+still validates, and `reconcile_persisted_identities` fences orphans left by an
+earlier controller generation. Both keep the unknown-outcome handling: a legacy
+or unbound intent, an uncertain containment cleanup, a failed proof binding or
+an ambiguous platform authority quarantines instead of guessing, and no live
+orphan is adopted into a new `Child` handle.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
