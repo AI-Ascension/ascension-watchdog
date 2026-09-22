@@ -16,6 +16,24 @@ WAL with synchronous FULL stores watchdog state on a local filesystem. A separat
 singleton lock owns reconciliation; administrative commands transact desired mode
 before process effects. Read-only status must never initialize missing state.
 
+Owner-local storage lives in `storage.rs` and its flat sibling modules. Durable
+release selection is coordinated by `storage_release.rs`, which re-exports the
+selector values and delegates to three cohesive children:
+`storage_release/identity.rs` owns the selector metadata key namespace, the
+selector value types and the strict parsing of durable release identities;
+`storage_release/transactions.rs` owns activation and rollback preparation and
+completion, including the retained `prepared` recovery marker, the validated
+activation receipt and the restore/rekey clearing transaction;
+`storage_release/queries.rs` owns the read-only projection that status,
+recovery and owner opens consume. The coordinator keeps the existing entrypoint
+(`ReleaseSelection`, `ReleaseIdentity`, `PendingReleaseActivation`,
+`ReleaseSelectionState`, `Store::release_selection`,
+`Store::prepare_release_activation`, `Store::complete_release_activation`) so
+callers, tests and the `storage.rs` re-exports are unchanged, and it names the
+child files with explicit `#[path]` attributes because `storage` is itself a
+`#[path]` module. Selector metadata keys and their parse rules exist only in
+`identity`; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action

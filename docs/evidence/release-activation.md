@@ -65,6 +65,23 @@ worktree:
 - `cargo clippy --locked --offline -p ascension-watchdog --all-targets
   --all-features -- -D warnings`: pass.
 
+### Module split addendum — branch `refactor/151-storage-release-modules-20260922`
+
+The durable selector source was reorganized into a coordinator plus three child
+modules for issue #151: `storage_release/identity.rs` (key namespace, selector
+value types, strict identity parsing), `storage_release/transactions.rs`
+(prepared marker, activation/rollback completion, receipt contract, restore/
+rekey clearing) and `storage_release/queries.rs` (read-only projection). The
+`storage_release` coordinator re-exports the same public values and still owns
+the five functional selector tests, which continue to drive preparation,
+completion, replay, rollback binding, changed-active rejection and reopen
+recovery through the coordinator rather than through a single child module.
+Test discovery is unchanged (`storage::storage_release::tests::*`, 5 tests).
+Error semantics, bounded inputs, owner/authorization checks and the durable
+`prepared`/active transitions are preserved; this addendum records source-level
+evidence only, and native service, live-host, reboot and soak activation remain
+unverified.
+
 This is not yet a complete immutable executable handoff. The protected
 catalog inspector retains no-follow handles only for each inspection call, and
 the selector transaction stores identity rather than transferring sealed
