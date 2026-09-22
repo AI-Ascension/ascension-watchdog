@@ -62,6 +62,23 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+Worker handoff authentication is coordinated by `worker_client_auth.rs`, kept
+as the `worker_client::auth` coordinator so the existing entrypoint
+(`WorkerPeerIdentity`, `capture_linux_controller`,
+`validate_credential_reference`, `read_credential`, `authenticate_linux_peer`
+and `LinuxPeerSession`) is unchanged. It delegates to cohesive children, named
+with explicit `#[path]` attributes because the parent `worker_client` declares
+the module with `#[path]`: `worker_client_auth/models.rs` owns
+`WorkerPeerIdentity` and the Linux file and sealed-image identity records it
+retains; `worker_client_auth/credential.rs` owns credential-reference
+validation and protected credential loading, including the held-descriptor
+Linux open/validate walk and the bounded read;
+`worker_client_auth/bootstrap.rs` owns capture of the controller's own
+immutable image identity; `worker_client_auth/peer.rs` owns Linux peer identity
+validation, the retained peer session, image hashing and process-start tokens.
+Credential bytes still leave only through `ProtectedCredential::bytes`, and no
+child adds a new path that exposes them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
