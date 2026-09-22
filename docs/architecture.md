@@ -34,6 +34,24 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The authenticated worker client is coordinated by `worker_client.rs`, which keeps
+the existing entrypoint (`WorkerClient`, `WorkerClientConfig`,
+`WorkerDispatchResult`, `WorkerReconcileResult`, `WorkerPhaseError`,
+`WorkerPeerIdentity`) and declares cohesive `#[path]` children:
+`worker_client_config.rs` owns the immutable binding, credential references and
+protected-endpoint validation; `worker_client_session.rs` owns the session
+lifecycle, the phase deadline and request header construction;
+`worker_client_exchange.rs` owns the bounded authenticated probe, control,
+dispatch, lookup and acknowledge exchanges; `worker_client_orchestration.rs`
+owns the store-backed claim/dispatch and handoff reconciliation paths and their
+result types; `worker_client_validation.rs` owns response, handoff and witness
+validation plus the protocol/storage tuple conversions. The existing
+`worker_client_auth.rs`, `worker_client_transport.rs` and
+`worker_client_sealed_tests.rs` children are unchanged. Bounded transport,
+worker identity binding and the persist-before-send / persist-after-terminal
+`Store` updates stay in their owning module; no child re-implements a validator
+or reorders persistence relative to an exchange.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
