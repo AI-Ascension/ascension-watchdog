@@ -3,6 +3,17 @@
 //! Synthetic children are retained only for explicitly opted-in fixtures.
 //! Production children are launched through the platform containment
 //! authority and carry a bounded, versioned proof in the launch-intent row.
+//!
+//! This file stays the `runtime_process` coordinator so every existing
+//! `crate::runtime::runtime_process::*` path keeps working.  The launch
+//! ownership proof now lives in the cohesive `ownership` child module:
+//! `runtime_process/ownership.rs` owns the closed `OwnershipProof` shape,
+//! its bounded serialized size, construction from native/broker/synthetic
+//! identities, the stable runtime incarnation and the strict recovery
+//! validation applied before a persisted proof is adopted.  The coordinator
+//! keeps `MAX_NATIVE_PROOF_BYTES` because it also enforces that bound when it
+//! re-serializes a live child proof, and re-exports the moved items so
+//! callers and the in-module regression tests are unchanged.
 
 #[cfg(target_os = "linux")]
 use crate::config::DesiredMode;
@@ -23,7 +34,6 @@ use crate::process::{OutputSnapshot, OwnedChild, ProcessIdentity, ProcessSpawnEr
 #[cfg(target_os = "linux")]
 use crate::storage::Store;
 use crate::storage::{LaunchIntent, LaunchIntentState};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(target_os = "linux")]
 use sha2::Digest;
@@ -37,12 +47,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+// `runtime` is declared with `#[path]`, so this coordinator must name the
+// child file explicitly instead of relying on directory derivation.
+#[path = "runtime_process/ownership.rs"]
+mod ownership;
+
+pub(crate) use ownership::runtime_incarnation;
+use ownership::{OwnershipProof, preflight_synthetic_proof_budget, validate_proof};
+
 const MAX_NATIVE_PROOF_BYTES: usize = 8 * 1024;
 const NATIVE_MAX_PROCESSES: u32 = 64;
 const NATIVE_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const NATIVE_FORCE_TIMEOUT: Duration = Duration::from_secs(10);
-const INCARNATION_PREFIX: &str = "watchdog-generation-";
 
 /// A child together with the durable intent which admitted it.
 pub(crate) struct RuntimeChild {
@@ -96,27 +113,6 @@ enum NativeChild {
 #[derive(Clone, Debug)]
 struct BrokerOwnedProcess {
     receipt: crate::platform::LaunchReceipt,
-}
-
-/// Closed proof tying a platform process authority to a launch intent.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct OwnershipProof {
-    version: u32,
-    backend: String,
-    intent_id: String,
-    deployment_id: String,
-    instance_id: String,
-    component: String,
-    incarnation: String,
-    launch_nonce: String,
-    containment_id: String,
-    pid: u32,
-    creation_token: String,
-    executable: PathBuf,
-    executable_sha256: String,
-    session_id: Option<u32>,
-    started_at_ms: u64,
 }
 
 #[allow(dead_code)]
@@ -1155,156 +1151,6 @@ impl NativeChild {
     }
 }
 
-impl OwnershipProof {
-    #[cfg(target_os = "linux")]
-    fn from_platform(
-        backend: &str,
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        identity: &PlatformProcessIdentity,
-        now_ms: u64,
-    ) -> Result<Self> {
-        let proof = Self {
-            version: 1,
-            backend: backend.to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: identity.deployment_id.clone(),
-            instance_id: identity.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: identity.incarnation.clone(),
-            launch_nonce: identity.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: identity.creation.pid,
-            creation_token: identity.creation.token.clone(),
-            executable: identity.executable.clone(),
-            executable_sha256: identity.executable_sha256.clone(),
-            session_id: identity.session,
-            started_at_ms: now_ms,
-        };
-        if proof.deployment_id != specification.deployment_id
-            || proof.instance_id != specification.instance_id
-            || proof.launch_nonce != specification.launch_nonce
-            || proof.containment_id != identity.containment.as_str()
-        {
-            return Err(WatchdogError::IdentityMismatch(
-                "platform returned an identity different from the launch request".to_owned(),
-            ));
-        }
-        bound_proof(proof)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn from_broker_receipt(
-        backend: &str,
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        receipt: &crate::platform::LaunchReceipt,
-        now_ms: u64,
-    ) -> Result<Self> {
-        verify_broker_receipt(specification, planned_containment, receipt)?;
-        let proof = Self {
-            version: 1,
-            backend: backend.to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: specification.deployment_id.clone(),
-            instance_id: specification.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: specification.incarnation.clone(),
-            launch_nonce: specification.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: receipt.pid,
-            creation_token: receipt.creation_token.clone(),
-            executable: receipt.executable.clone(),
-            executable_sha256: receipt.executable_sha256.clone(),
-            session_id: None,
-            started_at_ms: now_ms,
-        };
-        bound_proof(proof)
-    }
-
-    fn synthetic(
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        portable: &ProcessIdentity,
-    ) -> Result<Self> {
-        bound_proof(Self {
-            version: 1,
-            backend: "synthetic".to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: specification.deployment_id.clone(),
-            instance_id: specification.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: specification.incarnation.clone(),
-            launch_nonce: specification.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: portable.pid,
-            creation_token: portable
-                .creation_fingerprint
-                .clone()
-                .unwrap_or_else(|| format!("synthetic:{}", portable.pid)),
-            executable: portable.executable.clone(),
-            executable_sha256: portable.executable_digest.clone(),
-            session_id: None,
-            started_at_ms: portable.started_at_ms,
-        })
-    }
-
-    fn portable_identity(&self) -> ProcessIdentity {
-        ProcessIdentity {
-            pid: self.pid,
-            launch_nonce: self.launch_nonce.clone(),
-            executable: self.executable.clone(),
-            executable_digest: self.executable_sha256.clone(),
-            started_at_ms: self.started_at_ms,
-            creation_fingerprint: Some(self.creation_token.clone()),
-        }
-    }
-}
-
-fn bound_proof(proof: OwnershipProof) -> Result<OwnershipProof> {
-    if serde_json::to_vec(&proof)?.len() > MAX_NATIVE_PROOF_BYTES {
-        return Err(WatchdogError::InvalidInput(
-            "launch ownership proof exceeds runtime bound".to_owned(),
-        ));
-    }
-    Ok(proof)
-}
-
-/// Check the synthetic proof envelope before creating a child.  The runtime
-/// still repeats the real check after spawn because the child identity is part
-/// of the persisted proof; that second failure is classified as cleanup
-/// uncertainty by the caller.
-fn preflight_synthetic_proof_budget(
-    intent_id: &str,
-    specification: &LaunchSpec,
-    planned_containment: &str,
-) -> Result<()> {
-    // The real synthetic identity is produced only after the child exists.
-    // Use the largest scalar identity values here so a proof that can pass
-    // this preflight cannot become oversized merely because the OS selected a
-    // larger PID, creation token, or timestamp.  The executable is resolved
-    // with the same canonicalization used by the child launcher when possible;
-    // retaining the requested path on lookup failure still lets this check
-    // reject an oversized request before process creation.
-    let executable = std::fs::canonicalize(&specification.executable)
-        .unwrap_or_else(|_| specification.executable.clone());
-    let portable = ProcessIdentity {
-        pid: u32::MAX,
-        launch_nonce: specification.launch_nonce.clone(),
-        executable,
-        executable_digest: specification.executable_sha256.clone(),
-        started_at_ms: u64::MAX,
-        // Linux's /proc start time is an unsigned 64-bit decimal value; the
-        // non-Linux fallback is shorter. Twenty decimal digits therefore
-        // conservatively cover either identity source.
-        creation_fingerprint: Some("9".repeat(20)),
-    };
-    OwnershipProof::synthetic(intent_id, specification, planned_containment, &portable).map(|_| ())
-}
-
 #[cfg(target_os = "linux")]
 fn map_platform_observation(observation: &PlatformObservation) -> RuntimeObservation {
     match observation {
@@ -1616,104 +1462,6 @@ fn verify_broker_receipt_binding(
     Ok(())
 }
 
-fn validate_proof(
-    config: &WatchdogConfig,
-    intent: &LaunchIntent,
-    proof: &OwnershipProof,
-) -> Result<()> {
-    if proof.version != 1
-        || proof.intent_id != intent.id
-        || proof.deployment_id != intent.deployment_id
-        || proof.component != intent.component_id
-        || proof.launch_nonce != intent.launch_nonce
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof is not bound to its durable intent".to_owned(),
-        ));
-    }
-    let planned = intent.planned_containment_id.as_deref().ok_or_else(|| {
-        WatchdogError::Conflict(
-            "launch intent has no planned containment for proof recovery".to_owned(),
-        )
-    })?;
-    if planned != proof.containment_id
-        && !(proof.backend == "windows" && planned == format!("windows-job:{}", proof.launch_nonce))
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof containment differs from durable intent".to_owned(),
-        ));
-    }
-    if proof.pid == 0
-        || proof.creation_token.is_empty()
-        || !proof.executable.is_absolute()
-        || validate_digest(&proof.executable_sha256).is_err()
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof identity is incomplete".to_owned(),
-        ));
-    }
-    if proof.backend != "synthetic" && !matches!(proof.backend.as_str(), "linux" | "windows") {
-        return Err(WatchdogError::Unsupported(
-            "launch ownership proof backend is unsupported".to_owned(),
-        ));
-    }
-    let component = config
-        .components
-        .iter()
-        .find(|component| component.id == proof.component)
-        .ok_or_else(|| WatchdogError::Conflict("proof component is not configured".to_owned()))?;
-    let expected_path = std::fs::canonicalize(&component.executable).map_err(|error| {
-        WatchdogError::IdentityMismatch(format!(
-            "approved executable cannot be resolved during proof recovery: {error}"
-        ))
-    })?;
-    let expected_digest = component.executable_sha256.as_deref().ok_or_else(|| {
-        WatchdogError::Unsupported("proof component has no approved executable digest".to_owned())
-    })?;
-    if proof.instance_id != component.id
-        || proof.executable != expected_path
-        || expected_digest != proof.executable_sha256
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof differs from approved component bytes".to_owned(),
-        ));
-    }
-    if proof.incarnation.is_empty() {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof has no incarnation".to_owned(),
-        ));
-    }
-    // The incarnation is part of the platform containment derivation.  A
-    // proof that merely has a plausible-looking generation string is not
-    // enough: rebuild the complete launch request and require the persisted
-    // containment identity to be the one derived from that request.  This
-    // prevents a proof from being rebound to another generation or nonce.
-    let specification = super::launch_spec_for(
-        config,
-        component,
-        intent.launch_nonce.clone(),
-        proof.incarnation.clone(),
-    )?;
-    let expected_containment = expected_containment_for(config, &specification)?;
-    if expected_containment != proof.containment_id {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof containment is not derived from its incarnation and request"
-                .to_owned(),
-        ));
-    }
-    if proof.backend == "linux" && proof.session_id.is_some() {
-        return Err(WatchdogError::IdentityMismatch(
-            "Linux launch proof unexpectedly contains a session identity".to_owned(),
-        ));
-    }
-    if proof.backend == "windows" && proof.session_id != Some(0) {
-        return Err(WatchdogError::IdentityMismatch(
-            "Windows service launch proof is not bound to session zero".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
 fn expected_containment_for(config: &WatchdogConfig, specification: &LaunchSpec) -> Result<String> {
     if config.linux_broker.is_some() {
@@ -1788,16 +1536,6 @@ fn native_allowlist(
         ));
     }
     Ok(allowlist)
-}
-
-/// Stable incarnation shared by launch construction and helper authorization.
-pub(crate) fn runtime_incarnation(restart_generation: i64) -> Result<String> {
-    if restart_generation <= 0 {
-        return Err(WatchdogError::Conflict(
-            "restart generation must be positive before native launch".to_owned(),
-        ));
-    }
-    Ok(format!("{INCARNATION_PREFIX}{restart_generation}"))
 }
 
 #[cfg(windows)]
