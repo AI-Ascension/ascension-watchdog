@@ -34,6 +34,22 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The opt-in real-harness scope ownership test support lives in
+`tests/support/real_harness_worker_scope.rs` and its cohesive children. The
+coordinator keeps the shared bound constants and re-exports every value the test
+crate consumes, so the entrypoint and its `real_harness_worker_scope_tests.rs`
+child are unchanged: `real_harness_worker_scope/properties.rs` owns the pure
+systemd property parsing and proof validation; `.../paths.rs` owns canonical
+file identity and digests; `.../commands.rs` owns bounded helper execution and
+the retained launcher child handles; `.../cgroup.rs` owns the retained
+cgroup-v2 directory/events handles and device/inode identity checks;
+`.../evidence.rs` owns the durable proof writer; and `.../owner.rs` owns scope
+admission, live-property verification and durable stop ownership. Because this
+file is itself included through a `#[path]` module declaration, the children are
+named with explicit `#[path]` attributes so nested-module lookup stays relative
+to this file's directory. No proof semantic, identity/authorization check,
+bound or caller changes.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
