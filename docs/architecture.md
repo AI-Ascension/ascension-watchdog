@@ -57,6 +57,50 @@ names the child files with explicit `#[path]` attributes because `storage` is
 itself a `#[path]` module. Durable stop reserve, lifecycle reserve and the
 replayable-receipt capacity rule live only in the type constants and the
 receipt capacity check; no child re-implements them.
+Cross-repository release admission lives in `source_set.rs`. The read-only
+verifier is coordinated by `source_set.rs`, which keeps the existing entrypoint
+(`verify_document`, `SourceSetReport`, `RepositoryReport`, `ArtifactReport`,
+`ContractComparisonReport`, `digest_hex`) and delegates to five cohesive
+children: `source_set/validation.rs` owns manifest schema admission plus the
+shared revision, remote and digest primitives; `source_set/io.rs` owns the
+bounded file reads and the Git process probe; `source_set/repository.rs` owns
+repository pin and clean-worktree identity verification, including the
+source-revision/artifact-only ancestry check; `source_set/artifact.rs` owns the
+artifact checksum, required-file and golden-contract verification; and
+`source_set/conformance.rs` owns consumer-conformance parsing and the
+cross-artifact contract comparison. The coordinator keeps `verify_document` and
+the shared manifest/report vocabulary, and the unit tests stay a direct
+`tests` child of it so discovery names are unchanged. Fail-closed admission,
+byte bounds, ancestry and remote checks exist only in these children; the
+coordinator never re-implements them.
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Win32 resource ownership and identity
+primitives are coordinated by `native.rs`, which re-exports them from the
+cohesive child `native_resource_ownership.rs`: the RAII wrappers
+(`OwnedHandle`, `ProtectedDirectoryHandle`, `SecurityDescriptor`) that close
+kernel objects exactly once, the process creation-time and image-path identity
+reads, and the UTF-16/Win32 error helpers. The public entrypoints
+(`open_protected_directory`, `ProtectedDirectoryHandle`) and the shared
+`pub(crate)` helpers keep their existing names, so callers in `native.rs`,
+`native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
+explicit `#[path]` attributes to remain flat siblings of `native.rs`.
+
+Worker handoff authentication is coordinated by `worker_client_auth.rs`, kept
+as the `worker_client::auth` coordinator so the existing entrypoint
+(`WorkerPeerIdentity`, `capture_linux_controller`,
+`validate_credential_reference`, `read_credential`, `authenticate_linux_peer`
+and `LinuxPeerSession`) is unchanged. It delegates to cohesive children, named
+with explicit `#[path]` attributes because the parent `worker_client` declares
+the module with `#[path]`: `worker_client_auth/models.rs` owns
+`WorkerPeerIdentity` and the Linux file and sealed-image identity records it
+retains; `worker_client_auth/credential.rs` owns credential-reference
+validation and protected credential loading, including the held-descriptor
+Linux open/validate walk and the bounded read;
+`worker_client_auth/bootstrap.rs` owns capture of the controller's own
+immutable image identity; `worker_client_auth/peer.rs` owns Linux peer identity
+validation, the retained peer session, image hashing and process-start tokens.
+Credential bytes still leave only through `ProtectedCredential::bytes`, and no
+child adds a new path that exposes them.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
