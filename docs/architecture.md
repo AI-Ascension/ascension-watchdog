@@ -34,6 +34,13 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Start, abort and stop lifecycle is extracted into `runtime/lifecycle.rs`:
+`release_start_gate`, `start_component`, `abort_launched_child` and
+`stop_component`. The persisted intent and its binding still commit before any
+process effect, activation is verified before a spawn is admitted, an
+unverifiable launch is aborted instead of adopted, and an unconfirmed stop
+leaves cleanup uncertain rather than reporting success.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
