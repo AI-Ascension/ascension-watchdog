@@ -34,6 +34,14 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Component health, policy and quarantine bookkeeping is extracted into
+`runtime/health.rs`: `reconcile_component`, the authenticated
+`worker_heartbeat_age_ms` witness that feeds it, and the `quarantine_component`
+/ `retain_quarantined_child` bookkeeping. Health and retry decisions, retained
+child ownership and quarantine semantics are unchanged; missing or
+unauthenticated telemetry still quarantines rather than granting restart
+authority.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
