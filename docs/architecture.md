@@ -46,6 +46,20 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Peer authentication and the protected-filesystem helpers now live in
+`platform/linux_broker/peer.rs`: the kernel-derived `PeerCredentials` captured
+with `SO_PEERCRED`, the executable-identity check that pins the peer with a
+`pidfd` and compares the resolved `/proc/<pid>/exe` digest against the
+root-owned allowlist, and the protected path, bounded-read and
+executable-hashing helpers. The coordinator re-exports `PeerCredentials` and
+`peer_credentials` and keeps `pub(crate)` re-exports of the helpers that
+sibling modules (`native`, `ledger`, `descriptor_store`, `bootstrap_transport`)
+and the broker tests already import, so their existing import paths are
+unchanged. The generic `hex_digest`/`io_error` utilities and every identity,
+deadline and ownership bound stay with the coordinator; no child re-implements
+them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
