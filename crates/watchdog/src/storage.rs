@@ -8,16 +8,13 @@ use crate::config::{DesiredMode, WatchdogConfig, hex_digest, validate_digest};
 use crate::error::{Result, WatchdogError};
 use crate::policy::ComponentState;
 use crate::process::ProcessIdentity;
-use fs2::FileExt;
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -25,6 +22,8 @@ use uuid::Uuid;
 mod storage_admin;
 #[path = "storage_gateway_health.rs"]
 mod storage_gateway_health;
+#[path = "storage_ownership.rs"]
+mod storage_ownership;
 #[path = "storage_quarantine_admin.rs"]
 mod storage_quarantine_admin;
 #[path = "storage_queries.rs"]
@@ -33,6 +32,8 @@ mod storage_queries;
 mod storage_release;
 #[path = "storage_retry_admin.rs"]
 mod storage_retry_admin;
+#[path = "storage_schema.rs"]
+mod storage_schema;
 #[path = "storage_worker_bootstrap.rs"]
 mod storage_worker_bootstrap;
 #[path = "storage_worker_handoff.rs"]
@@ -44,9 +45,17 @@ pub use storage_admin::{
     RESERVED_STOP_COMMANDS, migrate_operator_ledger_for_owner,
 };
 pub use storage_gateway_health::GatewayHealthBootstrapBinding;
+pub use storage_ownership::SingletonLock;
+use storage_ownership::{canonical_owner_path, ensure_owner_lock, reject_link_or_reparse};
 pub use storage_queries::{AttemptSummary, JobSummary, JobSummaryPage};
 pub use storage_release::{
     PendingReleaseActivation, ReleaseIdentity, ReleaseSelection, ReleaseSelectionState,
+};
+pub use storage_schema::DurabilityPragmas;
+pub(crate) use storage_schema::table_exists;
+use storage_schema::{
+    config_compatibility_digest, connection_pragmas, open_connection, open_connection_with_flags,
+    validate_local_storage_path,
 };
 pub use storage_worker_bootstrap::WorkerBootstrapBinding;
 pub use storage_worker_handoff::{
@@ -86,138 +95,6 @@ pub fn now_unix_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-
-/// Acquire the single mutating controller lock for one owner-local store.
-/// The advisory lock is held by an open file descriptor and never relies on a
-/// stale PID or executable name for ownership.
-#[derive(Debug)]
-pub struct SingletonLock {
-    inner: Arc<LockInner>,
-}
-
-#[derive(Debug)]
-struct LockInner {
-    path: PathBuf,
-    file: File,
-    // On Windows this handle is opened with directory backup semantics and
-    // without delete sharing.  Holding it keeps the owner directory from
-    // being replaced while the lock file is authoritative.  The standard
-    // library does not expose a stable Windows file-id accessor on the pinned
-    // toolchain, so this protected-directory/handle boundary is the identity
-    // check rather than an unstable MetadataExt method.
-    #[cfg(windows)]
-    #[allow(dead_code)]
-    protected_parent: ascension_platform_windows::ProtectedDirectoryHandle,
-}
-
-impl Drop for LockInner {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
-}
-
-impl SingletonLock {
-    /// Acquire `<database>.lock` without deleting another owner's lock file.
-    #[allow(clippy::suspicious_open_options)]
-    pub fn acquire(database: impl AsRef<Path>) -> Result<Self> {
-        let database = canonical_owner_path(database.as_ref(), "database")?;
-        let path = lock_path(&database);
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        // Parent creation is itself a filesystem boundary.  Re-resolve the
-        // path after it exists and reject any link/reparse substitution before
-        // opening the lock file.  The owner directory must still be protected
-        // from untrusted writers; path checks alone cannot close a TOCTOU race.
-        let stable_database = canonical_owner_path(&database, "database")?;
-        if stable_database != database {
-            return Err(WatchdogError::Conflict(
-                "database path changed while preparing owner lock".to_string(),
-            ));
-        }
-        let stable_lock = canonical_owner_path(&path, "lock")?;
-        if stable_lock != path {
-            return Err(WatchdogError::Conflict(
-                "lock path changed while preparing owner lock".to_string(),
-            ));
-        }
-        #[cfg(windows)]
-        let protected_parent = open_protected_owner_directory(database.parent())?;
-        let file = open_lock_file(&path)?;
-        validate_opened_lock_handle(&path, &file)?;
-        file.try_lock_exclusive().map_err(|error| {
-            if is_lock_contention(&error) {
-                WatchdogError::Busy(path.clone())
-            } else {
-                WatchdogError::Io(error)
-            }
-        })?;
-        let inner = Arc::new(LockInner {
-            path: path.clone(),
-            file,
-            #[cfg(windows)]
-            protected_parent,
-        });
-        if let Ok(mut registry) = lock_registry().lock() {
-            registry.retain(|_, weak| weak.strong_count() > 0);
-            registry.insert(path, Arc::downgrade(&inner));
-        }
-        Ok(Self { inner })
-    }
-
-    /// Path of the lock file for diagnostics.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.inner.path
-    }
-
-    /// Write non-authoritative diagnostic metadata.  It is never used to
-    /// decide whether a process may be terminated.
-    pub fn write_owner_hint(&self, hint: &str) -> Result<()> {
-        use std::io::{Seek, SeekFrom, Write};
-        if hint.len() > 512 || hint.as_bytes().contains(&0) {
-            return Err(WatchdogError::InvalidInput(
-                "owner hint is oversized".to_string(),
-            ));
-        }
-        let mut file = &self.inner.file;
-        file.seek(SeekFrom::Start(0))?;
-        file.set_len(0)?;
-        file.write_all(hint.as_bytes())?;
-        file.sync_data()?;
-        Ok(())
-    }
-
-    /// Reuse an already held same-process lock for a nested store bootstrap.
-    /// This is private to the storage owner path; public `acquire` remains
-    /// non-reentrant so a second controller still receives `Busy`.
-    fn current_for_path(database: &Path) -> Option<Self> {
-        let database = canonical_owner_path(database, "database").ok()?;
-        let path = lock_path(&database);
-        let registry = lock_registry().lock().ok()?;
-        let inner = registry.get(&path)?.upgrade()?;
-        Some(Self { inner })
-    }
-}
-
-fn lock_registry() -> &'static Mutex<HashMap<PathBuf, Weak<LockInner>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<LockInner>>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn is_lock_contention(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::WouldBlock
-        || (error.raw_os_error().is_some()
-            && error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
-}
-
-fn lock_path(database: &Path) -> PathBuf {
-    let mut value = database.as_os_str().to_os_string();
-    value.push(".lock");
-    PathBuf::from(value)
 }
 
 /// A newly-created restore target that is published only after all
@@ -303,7 +180,7 @@ impl RestoreStagingFile {
         if let Some(parent) = destination.parent()
             && !parent.as_os_str().is_empty()
         {
-            File::open(parent)?.sync_all()?;
+            std::fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
     }
@@ -415,211 +292,6 @@ impl Drop for RestoreStagingFile {
     }
 }
 
-/// Open the lock file with no delete sharing on Windows.  This is the stable
-/// standard-library equivalent of the native platform wrapper's protected
-/// file boundary: another process may still open the file and receive normal
-/// fs2 lock contention, but it cannot unlink, rename, or replace the file
-/// underneath the authoritative handle.
-#[allow(clippy::suspicious_open_options)]
-fn open_lock_file(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_SHARE_READ: u32 = 0x0000_0001;
-        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-    }
-    Ok(options.open(path)?)
-}
-
-#[cfg(windows)]
-fn open_protected_owner_directory(
-    path: Option<&Path>,
-) -> Result<ascension_platform_windows::ProtectedDirectoryHandle> {
-    let path = path.ok_or_else(|| {
-        WatchdogError::InvalidInput("database path has no owner-local parent".to_string())
-    })?;
-    ascension_platform_windows::open_protected_directory(path)
-        .map_err(|error| WatchdogError::Io(std::io::Error::other(error)))
-}
-
-fn ensure_owner_lock(database: &Path, owner: &SingletonLock) -> Result<()> {
-    let database = canonical_owner_path(database, "database")?;
-    if owner.path() != lock_path(&database) {
-        return Err(WatchdogError::Unauthorized(
-            "singleton lock does not match the requested database".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Resolve an owner-local database path without following a link/reparse
-/// component.  The final database may be absent during initialization; all
-/// existing ancestors and the existing leaf are still inspected.  A missing
-/// suffix is joined to the canonical nearest existing parent so equivalent
-/// relative/absolute spellings use one lock identity.
-fn canonical_owner_path(path: &Path, name: &str) -> Result<PathBuf> {
-    validate_local_storage_path(path, name)?;
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let Some(file_name) = absolute.file_name() else {
-        return Err(WatchdogError::InvalidInput(format!(
-            "{name} path must name a file"
-        )));
-    };
-    reject_existing_link_components(&absolute, name)?;
-
-    let parent = absolute.parent().ok_or_else(|| {
-        WatchdogError::InvalidInput(format!("{name} path has no owner-local parent"))
-    })?;
-    let mut existing = parent.to_path_buf();
-    let mut missing = Vec::new();
-    while !existing.exists() {
-        let Some(component) = existing.file_name() else {
-            return Err(WatchdogError::InvalidInput(format!(
-                "{name} path has no existing owner-local ancestor"
-            )));
-        };
-        missing.push(component.to_os_string());
-        if !existing.pop() {
-            return Err(WatchdogError::InvalidInput(format!(
-                "{name} path has no existing owner-local ancestor"
-            )));
-        }
-    }
-    let metadata = fs::symlink_metadata(&existing)?;
-    reject_link_or_reparse(&metadata, name)?;
-    if !metadata.is_dir() {
-        return Err(WatchdogError::InvalidInput(format!(
-            "{name} owner-local parent is not a directory"
-        )));
-    }
-    let mut canonical = fs::canonicalize(&existing)?;
-    for component in missing.iter().rev() {
-        canonical.push(component);
-    }
-    canonical.push(file_name);
-    // If the leaf appeared between the first inspection and canonical path
-    // construction, inspect it too.  An absent leaf remains valid for init.
-    if let Ok(metadata) = fs::symlink_metadata(&canonical) {
-        reject_link_or_reparse(&metadata, name)?;
-    }
-    Ok(canonical)
-}
-
-fn reject_existing_link_components(path: &Path, name: &str) -> Result<()> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        // A Windows verbatim path reports its prefix (`\\?\C:`) and root as
-        // separate components.  Querying metadata for the prefix alone is an
-        // invalid Win32 operation; defer the first filesystem check until a
-        // complete root/normal path has been assembled.
-        if matches!(
-            component,
-            std::path::Component::Prefix(_) | std::path::Component::RootDir
-        ) {
-            current.push(component.as_os_str());
-            continue;
-        }
-        current.push(component.as_os_str());
-        // A Windows drive/verbatim prefix alone is not a rooted directory.
-        // Inspect it only after RootDir has completed the volume root.
-        if matches!(component, std::path::Component::Prefix(_)) {
-            continue;
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) => reject_link_or_reparse(&metadata, name)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => return Err(WatchdogError::Io(error)),
-        }
-    }
-    Ok(())
-}
-
-fn reject_link_or_reparse(metadata: &fs::Metadata, name: &str) -> Result<()> {
-    if metadata.file_type().is_symlink() || is_reparse_point(metadata) {
-        return Err(WatchdogError::InvalidInput(format!(
-            "{name} path contains a symbolic link or reparse point"
-        )));
-    }
-    Ok(())
-}
-
-/// Validate the path again after opening the lock and compare its stable file
-/// identity with the opened handle where the platform exposes one.  This does
-/// not replace protected owner-directory permissions, but it prevents a
-/// path-swap from silently turning the descriptor into a different regular
-/// file between validation and lock acquisition.
-fn validate_opened_lock_handle(path: &Path, file: &File) -> Result<()> {
-    let path_metadata = fs::symlink_metadata(path)?;
-    reject_link_or_reparse(&path_metadata, "lock")?;
-    if !path_metadata.is_file() {
-        return Err(WatchdogError::InvalidInput(
-            "lock path is not a regular file".to_string(),
-        ));
-    }
-    let opened_metadata = file.metadata()?;
-    if !opened_metadata.is_file() {
-        return Err(WatchdogError::Conflict(
-            "opened lock handle is no longer a regular file".to_string(),
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if path_metadata.dev() != opened_metadata.dev()
-            || path_metadata.ino() != opened_metadata.ino()
-        {
-            return Err(WatchdogError::Conflict(
-                "lock path changed after its handle was opened".to_string(),
-            ));
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        // `file_index`/volume identity is still unstable in Rust 1.97.1.
-        // Compare the stable metadata exposed by the pinned toolchain as a
-        // post-open sanity check; the no-delete sharing on both the lock file
-        // and its protected parent is the stronger anti-replacement guard.
-        let path_fingerprint = (
-            path_metadata.file_size(),
-            path_metadata.creation_time(),
-            path_metadata.last_write_time(),
-            path_metadata.file_attributes(),
-        );
-        let opened_fingerprint = (
-            opened_metadata.file_size(),
-            opened_metadata.creation_time(),
-            opened_metadata.last_write_time(),
-            opened_metadata.file_attributes(),
-        );
-        if path_fingerprint != opened_fingerprint {
-            return Err(WatchdogError::Conflict(
-                "lock path changed after its handle was opened".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn is_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
-}
-
 /// Durable deployment and job store.
 pub struct Store {
     conn: Connection,
@@ -637,24 +309,6 @@ impl std::fmt::Debug for Store {
             .field("max_jobs", &self.max_jobs)
             .field("max_payload_bytes", &self.max_payload_bytes)
             .finish_non_exhaustive()
-    }
-}
-
-/// SQLite durability settings observed from a live connection.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DurabilityPragmas {
-    pub journal_mode: String,
-    pub synchronous: i64,
-    pub foreign_keys: i64,
-}
-
-impl DurabilityPragmas {
-    /// FULL is SQLite's numeric synchronous value 2.
-    #[must_use]
-    pub fn is_wal_full(&self) -> bool {
-        self.journal_mode.eq_ignore_ascii_case("wal")
-            && self.synchronous == 2
-            && self.foreign_keys == 1
     }
 }
 
@@ -844,327 +498,10 @@ impl LaunchIntentState {
 }
 
 impl Store {
-    /// Initialize a new database and its schema.  Existing initialized state is
-    /// never overwritten.  The compatibility entrypoint acquires the
-    /// owner-local lock for the full bootstrap; production code that already
-    /// owns the controller lock should use [`Self::initialize_for_owner`] to
-    /// make that admission explicit without a second OS lock attempt.
-    pub fn initialize(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
-        config.validate()?;
-        let path = canonical_owner_path(path.as_ref(), "database")?;
-        let _admission = match SingletonLock::current_for_path(&path) {
-            Some(lock) => lock,
-            None => SingletonLock::acquire(&path)?,
-        };
-        Self::initialize_impl(path, config)
-    }
-
-    /// Initialize a new store under an already-held singleton admission.
-    /// The lock path must match the database exactly; this method never
-    /// acquires a second OS lock and keeps the caller's lock authoritative.
-    pub fn initialize_for_owner(
-        path: impl AsRef<Path>,
-        config: &WatchdogConfig,
-        owner: &SingletonLock,
-    ) -> Result<Self> {
-        config.validate()?;
-        let path = canonical_owner_path(path.as_ref(), "database")?;
-        ensure_owner_lock(&path, owner)?;
-        Self::initialize_impl(path, config)
-    }
-
-    fn initialize_impl(path: PathBuf, config: &WatchdogConfig) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let stable_path = canonical_owner_path(&path, "database")?;
-        if stable_path != path {
-            return Err(WatchdogError::Conflict(
-                "database path changed while preparing initialization".to_string(),
-            ));
-        }
-        let existed = path.exists();
-        let mut conn = open_connection(&path)?;
-        if existed {
-            let marker: Option<String> = if table_exists(&conn, "metadata")? {
-                conn.query_row(
-                    "SELECT value FROM metadata WHERE key = 'schema_version'",
-                    [],
-                    |row| row.get(0),
-                )
-                .optional()?
-            } else {
-                None
-            };
-            if marker.is_some() {
-                return Err(WatchdogError::Conflict(format!(
-                    "store is already initialized: {}",
-                    path.display()
-                )));
-            }
-            if has_any_user_tables(&conn)? {
-                return Err(WatchdogError::Conflict(format!(
-                    "existing database is not a recognized watchdog store: {}",
-                    path.display()
-                )));
-            }
-        }
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
-        if !connection_pragmas(&conn)?.is_wal_full() {
-            return Err(WatchdogError::Conflict(
-                "required SQLite durability was not established".to_string(),
-            ));
-        }
-        create_schema(&mut conn)?;
-        let config_digest = config.digest()?;
-        let config_compat_digest = config_compatibility_digest(config)?;
-        let now = now_unix_ms();
-        let tx = conn.transaction()?;
-        insert_metadata(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
-        insert_metadata(&tx, "deployment_id", &config.deployment_id)?;
-        insert_metadata(&tx, "desired_mode", mode_as_str(config.desired_mode))?;
-        insert_metadata(&tx, "restart_generation", "1")?;
-        insert_metadata(&tx, "config_digest", &config_digest)?;
-        insert_metadata(&tx, "config_compat_digest", &config_compat_digest)?;
-        insert_metadata(
-            &tx,
-            "operator_ledger_schema_version",
-            &OPERATOR_LEDGER_SCHEMA_VERSION.to_string(),
-        )?;
-        storage_worker_handoff::insert_worker_handoff_metadata(&tx)?;
-        insert_metadata(&tx, "initialized_at_ms", &now.to_string())?;
-        insert_metadata(&tx, "updated_at_ms", &now.to_string())?;
-        insert_audit_tx(
-            &tx,
-            "store_initialized",
-            &format!("schema={SCHEMA_VERSION};config_digest={config_digest}"),
-            now,
-        )?;
-        tx.commit()?;
-        let store = Self {
-            conn,
-            path,
-            max_jobs: config.max_jobs,
-            max_payload_bytes: config.max_payload_bytes,
-            restart_clock_epoch: Uuid::new_v4().to_string(),
-            restart_clock_started: Instant::now(),
-        };
-        store.validate_release_selection_metadata()?;
-        Ok(store)
-    }
-
-    /// Open an existing initialized store without creating or migrating it.
-    /// Schema upgrades are owner-authorized state transitions and must go
-    /// through [`Self::open_for_owner`].
-    pub fn open(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
-        config.validate()?;
-        let path = canonical_owner_path(path.as_ref(), "database")?;
-        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_WRITE, false)
-    }
-
-    /// Open existing state through a true SQLite read-only, non-creating
-    /// connection.  Status, doctor, and inspection paths should use this
-    /// method so an unlink/create race cannot bootstrap or mutate state.
-    pub fn open_read_only(path: impl AsRef<Path>, config: &WatchdogConfig) -> Result<Self> {
-        config.validate()?;
-        let path = canonical_owner_path(path.as_ref(), "database")?;
-        Self::open_impl(path, config, OpenFlags::SQLITE_OPEN_READ_ONLY, false)
-    }
-
-    /// Hold SQLite's writer reservation while a native child is authorized
-    /// and resumed/executed. No rows are changed. Dropping this connection
-    /// rolls back the transaction and releases the reservation, so an operator
-    /// Stop either commits before admission is checked or after resumption.
-    pub(crate) fn reserve_launch_admission(self) -> Result<Self> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        Ok(self)
-    }
-
-    /// Compatibility alias retained for the worker-specific admission tests.
-    /// Both worker and gateway-health launchers use the same owner-local
-    /// reservation and therefore share the exact transaction boundary.
-    #[allow(dead_code)]
-    #[cfg(any(windows, test))]
-    pub(crate) fn reserve_worker_admission(self) -> Result<Self> {
-        self.reserve_launch_admission()
-    }
-
-    /// Admission needs at most two rows: one exact intent, or evidence of a
-    /// conflicting unsettled launch. Never collect an unbounded history here.
-    pub(crate) fn launch_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, deployment_id, component_id, launch_nonce, expected_incarnation, expected_launch_spec_digest, planned_containment_id, state, ownership_proof_json, created_at_ms, updated_at_ms FROM launch_intents WHERE component_id=? AND state <> 'cleaned' LIMIT 2",
-        )?;
-        let rows = statement.query_map([component], launch_intent_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<LaunchIntent>>>()
-            .map_err(Into::into)
-    }
-
-    /// Compatibility alias retained for the worker-specific admission tests.
-    #[allow(dead_code)]
-    #[cfg(any(windows, test))]
-    pub(crate) fn worker_admission_intents(&self, component: &str) -> Result<Vec<LaunchIntent>> {
-        self.launch_admission_intents(component)
-    }
-
-    /// Open existing state for a controller that already holds the matching
-    /// singleton lock.  No migration, schema creation, or second lock attempt
-    /// occurs in this method.
-    pub fn open_for_owner(
-        path: impl AsRef<Path>,
-        config: &WatchdogConfig,
-        owner: &SingletonLock,
-    ) -> Result<Self> {
-        config.validate()?;
-        let path = canonical_owner_path(path.as_ref(), "database")?;
-        ensure_owner_lock(&path, owner)?;
-        let mut store = Self::open_impl(
-            path.clone(),
-            config,
-            OpenFlags::SQLITE_OPEN_READ_WRITE,
-            true,
-        )?;
-        storage_admin::migrate_operator_ledger_for_owner(&path, owner)?;
-        storage_worker_handoff::migrate_worker_handoff_for_owner(&mut store.conn)?;
-        Ok(store)
-    }
-
-    fn open_impl(
-        path: PathBuf,
-        config: &WatchdogConfig,
-        flags: OpenFlags,
-        allow_core_migration: bool,
-    ) -> Result<Self> {
-        if !path.is_file() {
-            return Err(WatchdogError::MissingState(path));
-        }
-        let mut conn = open_connection_with_flags(&path, flags)?;
-        let version: Option<String> = conn
-            .query_row(
-                "SELECT value FROM metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let schema_version = version
-            .as_deref()
-            .map(|value| parse_metadata_i64("schema_version", value))
-            .transpose()?;
-        let needs_core_migration = match schema_version {
-            Some(SCHEMA_VERSION) => {
-                validate_launch_intent_schema(&conn)?;
-                false
-            }
-            Some(PREVIOUS_SCHEMA_VERSION) if allow_core_migration => {
-                validate_legacy_launch_intent_schema(&conn)?;
-                true
-            }
-            Some(PREVIOUS_SCHEMA_VERSION) => {
-                return Err(WatchdogError::Unsupported(
-                    "store schema 1 requires an owner-authorized explicit migration".to_string(),
-                ));
-            }
-            Some(other) => {
-                return Err(WatchdogError::Unsupported(format!(
-                    "store schema {other} requires an explicit migration"
-                )));
-            }
-            None => {
-                return Err(WatchdogError::Conflict(format!(
-                    "database is not an initialized watchdog store: {}",
-                    path.display()
-                )));
-            }
-        };
-        let pragmas = connection_pragmas(&conn)?;
-        if !pragmas.is_wal_full() {
-            return Err(WatchdogError::Conflict(format!(
-                "required SQLite durability is not active: {pragmas:?}"
-            )));
-        }
-        let stored_deployment_id: Option<String> = conn
-            .query_row(
-                "SELECT value FROM metadata WHERE key='deployment_id'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(stored_deployment_id) = stored_deployment_id else {
-            return Err(WatchdogError::Conflict(
-                "deployment_id metadata is missing".to_string(),
-            ));
-        };
-        validate_metadata_identifier("deployment_id", &stored_deployment_id)?;
-        if stored_deployment_id != config.deployment_id {
-            return Err(WatchdogError::Conflict(
-                "deployment identity differs from initialized owner-local state; explicit restore is required"
-                    .to_string(),
-            ));
-        }
-        let stored_config_digest: Option<String> = conn
-            .query_row(
-                "SELECT value FROM metadata WHERE key='config_digest'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(stored_config_digest) = stored_config_digest else {
-            return Err(WatchdogError::Conflict(
-                "config_digest metadata is missing".to_string(),
-            ));
-        };
-        crate::config::validate_digest(&stored_config_digest).map_err(|message| {
-            WatchdogError::Conflict(format!("config_digest metadata is invalid: {message}"))
-        })?;
-        let expected_config_digest = config.digest()?;
-        if stored_config_digest != expected_config_digest {
-            return Err(WatchdogError::Conflict(
-                "configuration digest differs from initialized owner-local state; explicit migration is required"
-                    .to_string(),
-            ));
-        }
-        let stored_config_compat_digest = metadata_from_conn(&conn, "config_compat_digest")?
-            .ok_or_else(|| {
-                WatchdogError::Conflict("config_compat_digest metadata is missing".to_string())
-            })?;
-        crate::config::validate_digest(&stored_config_compat_digest).map_err(|message| {
-            WatchdogError::Conflict(format!(
-                "config_compat_digest metadata is invalid: {message}"
-            ))
-        })?;
-        let expected_config_compat_digest = config_compatibility_digest(config)?;
-        if stored_config_compat_digest != expected_config_compat_digest {
-            return Err(WatchdogError::Conflict(
-                "configuration compatibility identity differs from initialized owner-local state; explicit restore is required"
-                    .to_string(),
-            ));
-        }
-        if needs_core_migration {
-            migrate_launch_intent_schema(&mut conn)?;
-        }
-        let store = Self {
-            conn,
-            path,
-            max_jobs: config.max_jobs,
-            max_payload_bytes: config.max_payload_bytes,
-            restart_clock_epoch: Uuid::new_v4().to_string(),
-            restart_clock_started: Instant::now(),
-        };
-        store.validate_release_selection_metadata()?;
-        Ok(store)
-    }
-
     /// Open the store's SQLite connection without changing its state.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Verify WAL/FULL/foreign-key settings on this connection.
-    pub fn durability(&self) -> Result<DurabilityPragmas> {
-        connection_pragmas(&self.conn)
     }
 
     /// Run SQLite's integrity check without attempting repair.
@@ -1223,7 +560,7 @@ impl Store {
         file.sync_all()?;
         #[cfg(unix)]
         if let Some(parent) = destination.parent() {
-            File::open(parent)?.sync_all()?;
+            std::fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
     }
@@ -2560,71 +1897,6 @@ fn insert_job_tx(
     insert_audit_tx(tx, "job_submitted", id, now_ms)
 }
 
-fn open_connection(path: &Path) -> Result<Connection> {
-    open_connection_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
-    )
-}
-
-fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> Result<Connection> {
-    let conn = Connection::open_with_flags(path, flags)?;
-    conn.busy_timeout(Duration::from_millis(750))?;
-    // Foreign-key and temp-store settings are connection-local.  Opening a
-    // store for `status` does not switch journal mode or create state.
-    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;")?;
-    Ok(conn)
-}
-
-fn connection_pragmas(conn: &Connection) -> Result<DurabilityPragmas> {
-    let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-    let synchronous: i64 = conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
-    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
-    Ok(DurabilityPragmas {
-        journal_mode,
-        synchronous,
-        foreign_keys,
-    })
-}
-
-pub(crate) fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
-    let value: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            params![name],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(value.is_some())
-}
-
-fn validate_local_storage_path(path: &Path, name: &str) -> Result<()> {
-    if path.as_os_str().is_empty() || path.to_string_lossy().contains('\0') {
-        return Err(WatchdogError::InvalidInput(format!(
-            "{name} path is empty or contains NUL"
-        )));
-    }
-    let normalized = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    if normalized.starts_with("/mnt/") || normalized.starts_with("//wsl") {
-        return Err(WatchdogError::InvalidInput(format!(
-            "{name} must remain on an owner-local filesystem"
-        )));
-    }
-    Ok(())
-}
-
-fn has_any_user_tables(conn: &Connection) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
-}
-
 pub(crate) fn validate_claim_payload(
     text: &str,
     expected_digest: &str,
@@ -2650,223 +1922,6 @@ fn require_running_launch_intent(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-fn create_schema(conn: &mut Connection) -> Result<()> {
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS metadata (
-            key TEXT PRIMARY KEY NOT NULL,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS audit (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action TEXT NOT NULL,
-            detail TEXT NOT NULL,
-            occurred_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY NOT NULL,
-            kind TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            payload_digest TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','quarantined')),
-            created_at_ms INTEGER NOT NULL,
-            claimed_at_ms INTEGER,
-            completed_at_ms INTEGER,
-            attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
-            next_retry_at_ms INTEGER,
-            last_error TEXT,
-            result TEXT,
-            completion_digest TEXT,
-            worker_id TEXT
-        );
-        CREATE INDEX IF NOT EXISTS jobs_ready_idx ON jobs(status, next_retry_at_ms, created_at_ms, id);
-        CREATE TABLE IF NOT EXISTS operator_commands (
-            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id TEXT NOT NULL UNIQUE,
-            idempotency_key TEXT NOT NULL UNIQUE,
-            principal TEXT NOT NULL,
-            capability TEXT NOT NULL CHECK(capability IN ('read','admin')),
-            command TEXT NOT NULL CHECK(command IN (
-                'status','jobs','attempt','release_inspect','start','pause',
-                'resume','drain','stop','quarantine','retry','reconcile',
-                'backup','restore','release_activate','job_submit'
-            )),
-            command_fingerprint TEXT NOT NULL,
-            desired_mode TEXT CHECK(desired_mode IS NULL OR desired_mode IN ('stopped','paused','running','draining')),
-            response_json TEXT NOT NULL,
-            recorded_at_ms INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS operator_commands_order_idx ON operator_commands(sequence);
-        CREATE INDEX IF NOT EXISTS operator_commands_principal_idx ON operator_commands(principal, sequence);
-        CREATE TABLE IF NOT EXISTS launch_intents (
-            id TEXT PRIMARY KEY NOT NULL,
-            deployment_id TEXT NOT NULL,
-            component_id TEXT NOT NULL,
-            launch_nonce TEXT NOT NULL,
-            expected_incarnation TEXT NOT NULL,
-            expected_launch_spec_digest TEXT NOT NULL,
-            planned_containment_id TEXT,
-            state TEXT NOT NULL CHECK(state IN ('prepared','proof_recorded','active','cleaned')),
-            ownership_proof_json TEXT,
-            created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS launch_intents_one_unsettled_component_idx ON launch_intents(component_id) WHERE state <> 'cleaned';
-        CREATE INDEX IF NOT EXISTS launch_intents_component_idx ON launch_intents(component_id, state, created_at_ms);
-        CREATE TABLE IF NOT EXISTS attempts (
-            id TEXT PRIMARY KEY NOT NULL,
-            job_id TEXT NOT NULL REFERENCES jobs(id),
-            sequence INTEGER NOT NULL CHECK(sequence > 0),
-            lineage TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('running','completed','failed','unknown')),
-            started_at_ms INTEGER NOT NULL,
-            finished_at_ms INTEGER,
-            worker_id TEXT,
-            outcome TEXT,
-            UNIQUE(job_id, sequence)
-        );
-        CREATE TABLE IF NOT EXISTS restart_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            component_id TEXT NOT NULL,
-            occurred_at_ms INTEGER NOT NULL,
-            clock_epoch TEXT NOT NULL,
-            clock_elapsed_ms INTEGER NOT NULL CHECK(clock_elapsed_ms >= 0)
-        );
-        CREATE INDEX IF NOT EXISTS restart_events_component_idx ON restart_events(component_id, clock_epoch, clock_elapsed_ms);
-        CREATE TABLE IF NOT EXISTS components (
-            id TEXT PRIMARY KEY NOT NULL,
-            state TEXT NOT NULL,
-            launch_nonce TEXT,
-            pid INTEGER,
-            executable_digest TEXT,
-            started_at_ms INTEGER,
-            restart_attempts INTEGER NOT NULL CHECK(restart_attempts >= 0),
-            last_restart_at_ms INTEGER,
-            last_error TEXT,
-            identity_json TEXT,
-            updated_at_ms INTEGER NOT NULL
-        );
-        ",
-    )?;
-    storage_worker_handoff::create_worker_handoff_schema(conn)?;
-    storage_worker_bootstrap::create_schema(conn)?;
-    storage_gateway_health::create_schema(conn)?;
-    Ok(())
-}
-
-fn insert_metadata(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
-    tx.execute(
-        "INSERT INTO metadata (key, value) VALUES (?, ?)",
-        params![key, value],
-    )?;
-    Ok(())
-}
-
-fn validate_legacy_launch_intent_schema(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "launch_intents")? {
-        return Err(WatchdogError::Conflict(
-            "launch_intents table is missing from the initialized store".to_owned(),
-        ));
-    }
-    let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for required in [
-        "id",
-        "deployment_id",
-        "component_id",
-        "launch_nonce",
-        "planned_containment_id",
-        "state",
-        "ownership_proof_json",
-        "created_at_ms",
-        "updated_at_ms",
-    ] {
-        if !columns.iter().any(|column| column == required) {
-            return Err(WatchdogError::Conflict(format!(
-                "launch_intents table is missing {required}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_launch_intent_schema(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "launch_intents")? {
-        return Err(WatchdogError::Conflict(
-            "launch_intents table is missing from the initialized store".to_owned(),
-        ));
-    }
-    let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for required in ["expected_incarnation", "expected_launch_spec_digest"] {
-        if !columns.iter().any(|column| column == required) {
-            return Err(WatchdogError::Conflict(format!(
-                "launch_intents table is missing {required}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Add the immutable launch binding columns without manufacturing values for
-/// old rows.  A null binding is deliberate legacy evidence; runtime recovery
-/// quarantines such an intent instead of deriving an expected value from its
-/// proof or from the current restart generation.
-fn migrate_launch_intent_schema(conn: &mut Connection) -> Result<()> {
-    if !table_exists(conn, "metadata")? || !table_exists(conn, "launch_intents")? {
-        return Err(WatchdogError::Conflict(
-            "schema 1 store lacks the launch-intent migration boundary".to_owned(),
-        ));
-    }
-    let columns = {
-        let mut statement = conn.prepare("PRAGMA table_info(launch_intents)")?;
-        statement
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    let has_incarnation = columns
-        .iter()
-        .any(|column| column == "expected_incarnation");
-    let has_digest = columns
-        .iter()
-        .any(|column| column == "expected_launch_spec_digest");
-    if has_incarnation != has_digest {
-        return Err(WatchdogError::Conflict(
-            "launch-intent binding columns are only partially present".to_owned(),
-        ));
-    }
-    if has_incarnation {
-        validate_launch_intent_schema(conn)?;
-        return Err(WatchdogError::Conflict(
-            "schema 1 marker has already applied its launch-intent migration".to_owned(),
-        ));
-    }
-
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute(
-        "ALTER TABLE launch_intents ADD COLUMN expected_incarnation TEXT",
-        [],
-    )?;
-    tx.execute(
-        "ALTER TABLE launch_intents ADD COLUMN expected_launch_spec_digest TEXT",
-        [],
-    )?;
-    update_metadata_tx(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
-    let now = now_unix_ms();
-    insert_audit_tx(
-        &tx,
-        "store_schema_migrated",
-        "schema=1->2;legacy_launch_intents_unbound",
-        now,
-    )?;
-    tx.commit()?;
-    validate_launch_intent_schema(conn)
-}
-
 pub(crate) fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT value FROM metadata WHERE key=?",
@@ -2875,28 +1930,6 @@ pub(crate) fn metadata_from_conn(conn: &Connection, key: &str) -> Result<Option<
     )
     .optional()
     .map_err(Into::into)
-}
-
-fn config_compatibility_digest(config: &WatchdogConfig) -> Result<String> {
-    config.validate()?;
-    let mut normalized = config.clone();
-    normalized.deployment_id = "watchdog-compatibility-identity".to_string();
-    normalized.database = PathBuf::from("/owner-local/watchdog.sqlite3");
-    normalized.desired_mode = DesiredMode::Stopped;
-    if let Some(health) = &normalized.gateway_health {
-        for component in &mut normalized.components {
-            if component.id == health.component_id {
-                component.environment.insert(
-                    "STS2_DEPLOYMENT_ID".to_owned(),
-                    normalized.deployment_id.clone(),
-                );
-            }
-        }
-    }
-    // This is a fingerprint projection, not an executable configuration. Its
-    // fixed namespace/path placeholders intentionally are not platform-valid
-    // launch identities. Validate the real input above, never the projection.
-    Ok(crate::config::hex_digest(&serde_json::to_vec(&normalized)?))
 }
 
 fn update_metadata_tx(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
