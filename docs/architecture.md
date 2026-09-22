@@ -34,6 +34,17 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The Windows administration transport is split across `admin_pipe.rs` and its
+child modules, and the coordinator keeps every existing entrance so
+`crate::admin_pipe::...` callers and tests are unchanged. This change moves the
+administrative pipe server into `admin_pipe/server.rs`: the fixed admin pipe
+instance, creation with the local-only owner/SID ACL mode, accept and peer
+authentication, bounded frame reads and writes, the outbound-drain proof, and
+cancel/disconnect of the exact server handle. `AdminPipeServer` and
+`AdminPipePeer` are re-exported from the coordinator, so peer identity checks,
+the single-instance local-only endpoint restriction, bounded frames and
+cancellation semantics are preserved for every caller.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
