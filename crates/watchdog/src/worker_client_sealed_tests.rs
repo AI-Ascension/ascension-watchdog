@@ -1,10 +1,17 @@
 //! Real sealed-image child regression; no service or cgroup changes.
-use super::*;
+use super::models::{
+    WorkerPeerIdentity, hash_file_until, linux_file_identity, process_start_token,
+};
+use super::peer::authenticate_linux_peer;
+use crate::error::WatchdogError;
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {

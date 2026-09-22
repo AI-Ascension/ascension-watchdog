@@ -34,6 +34,25 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Worker transport authentication lives in `worker_client.rs::worker_client_auth.rs`,
+a sibling module that re-exports the authenticated client surface and delegates
+to three cohesive children. `worker_client_auth/models.rs` owns
+`WorkerPeerIdentity`, its construction and validation, the Linux image file
+identity and sealed-image proofs and the bounded process-start-token and
+image-digest helpers. `worker_client_auth/credential.rs` owns the credential
+reference checks, the protected credential object and the deadline-bounded
+held-descriptor read path (including the local-filesystem allowlist and the
+Windows protected-payload adapter). `worker_client_auth/peer.rs` owns controller
+image capture, live peer authentication and the retained `LinuxPeerSession`
+re-verification. The coordinator keeps the existing entrypoints
+(`WorkerPeerIdentity`, `read_credential`, `validate_credential_reference`,
+`capture_linux_controller`, `authenticate_linux_peer`, `LinuxPeerSession`) so
+callers, tests and the `worker_client.rs`/`worker_client_transport.rs` imports
+are unchanged, and it names the child files with explicit `#[path]` attributes
+because `worker_client` is itself a `#[path]` module. The credential, image and
+process-identity checks exist only in their owning child; no child
+re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
