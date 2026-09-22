@@ -34,6 +34,22 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The restricted process adapter is coordinated by `process.rs`, which keeps the
+existing entrypoints (`ProcessIdentity`, `OwnedChild`, `OutputSnapshot`,
+`ProcessSpawnError`, `ensure_identity`) and delegates to cohesive children:
+`process/validation.rs` owns the fail-closed pre-spawn validation of one
+approved component specification; `process/spawn_error.rs` owns the
+spawn-failure classification, including the retained `CleanupUncertain`
+outcome; `process/identity.rs` owns the launch identity, its validation and the
+executable-digest and creation-fingerprint helpers; `process/observation.rs`
+owns non-reaping child observation, the exact group signal and the bounded
+process-group membership proof; `process/output.rs` owns bounded diagnostic
+output capture; and `process/child.rs` owns `OwnedChild`, its process-group
+authority, the spawn path and the stop/reap/`Drop` cleanup paths. Every module
+is below the 1,000-line target, so no exception has to be documented. The
+functional acceptance tests remain at `process::tests` so test discovery and
+test names are unchanged.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
