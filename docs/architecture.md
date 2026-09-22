@@ -34,6 +34,15 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Launch binding and adapter validation is extracted into
+`runtime/launch_binding.rs`: `launch_spec_for`, `launch_spec_binding_digest`,
+the persisted-proof decoder and validator, and the `RuntimeAdapter` boundary.
+Backend, session, component and configuration binding stay checked against
+trusted runtime configuration rather than a persisted proof, synthetic launches
+still require an explicit opt-in, and `runtime.rs` re-exports the same public
+adapter values so `lib.rs` and every `super::launch_spec_*` caller are
+unchanged.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
