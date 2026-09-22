@@ -46,6 +46,21 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The linux broker unit tests in
+`crates/watchdog/src/platform/linux_broker/tests.rs` keep the same shape. The
+coordinator retains every `#[test]` so discovery names stay
+`platform::linux_broker::tests::*`, and it delegates the fixture scaffolding to
+two cohesive children: `linux_broker/fake_backend.rs` owns the in-memory
+`FakeBackend` and its `SystemdBackend`/`QueuedJobBackend` implementations, and
+`linux_broker/fixtures.rs` owns the policy, request, credential, observation and
+protected-temporary-directory builders. The coordinator re-exports those
+fixtures (and the `retirement`, `failed_launch_cleanup` and `orphan_cleanup`
+test modules) so the sibling test modules and
+`bootstrap_transport_tests.rs` keep their existing imports; the extracted items
+carry the same effective linux-broker visibility as before. Lifecycle,
+refusal/uncertainty and conformance assertions exist only in the test modules;
+no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
