@@ -34,6 +34,19 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Executable integrity and bounded hashing are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_integrity.rs`: the retained immutable-image guard (`IntegrityGuards`),
+the kernel file identity captured from the hashed handle (`FileIdentity`), the
+no-write/no-delete reopen path used by the launch barrier, the bounded
+immutable-file SHA-256 (`hash_immutable_file`, `Sha256`, `MAX_HASH_BYTES`,
+`HASH_READ_BYTES`) and `check_image_deadline`. The public `executable_sha256`
+entrypoint and the shared `pub(crate)` helpers keep their existing names, so
+callers in `native.rs`, `native_current_process.rs` and `admin_pipe.rs` are
+unchanged. Child files use explicit `#[path]` attributes to remain flat
+siblings of `native.rs`.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
