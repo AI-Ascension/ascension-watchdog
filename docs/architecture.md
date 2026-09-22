@@ -34,6 +34,19 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime process ownership is coordinated by `runtime_process.rs`. The Linux
+broker protocol seam is delegated to one cohesive child,
+`runtime_process/broker.rs`, which owns broker request identity validation and
+construction, the versioned planned-containment encoding and its two decoders,
+unit-name derivation, the broker error mapping and the receipt correlation and
+binding verification (`verify_broker_receipt`, `verify_broker_receipt_request`,
+`verify_broker_receipt_against_proof`, `verify_broker_receipt_binding`). The
+coordinator re-exports every helper its dispatch, recovery and regression tests
+still call so callers, tests and the `runtime.rs` imports are unchanged, and it
+names the child file with an explicit `#[path]` attribute because `runtime` is
+itself a `#[path]` module. There is exactly one request encoder/decoder pair and
+one receipt verifier; the coordinator never re-implements either.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
