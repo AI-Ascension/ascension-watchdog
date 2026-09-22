@@ -34,6 +34,17 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The host lease-control conformance target is coordinated the same way.
+`crates/fault-fixture/tests/host_lease_schema/main.rs` keeps the eight
+root-level `#[test]` functions so discovery is unchanged, and delegates to
+`support.rs` (bounded artifact loading, closed-object accessors, canonical
+encoding), `time.rs` (strict UTC parsing and wall/monotonic deadline
+arithmetic), `validators.rs` (grant and acknowledgment shape/semantic rules),
+`frame.rs` (frame validation and the canonical grant-digest rule),
+`reference_host.rs` (the stateful lifecycle reference host) and `strict.rs`
+(duplicate-member rejection). `support` is the only owner of the artifact root,
+digest, UUID and canonical-JSON helpers; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
