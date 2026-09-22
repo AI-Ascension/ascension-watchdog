@@ -46,6 +46,25 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The owner-local worker handoff transport keeps its authentication helpers in
+`worker_client_auth.rs`. That coordinator re-exports `WorkerPeerIdentity`,
+`LinuxPeerSession`, `authenticate_linux_peer`, `capture_linux_controller`,
+`read_credential` and `validate_credential_reference`, and delegates to three
+cohesive children named with explicit `#[path]` attributes because
+`worker_client.rs` declares the coordinator with `#[path]`:
+`worker_client_auth/identity.rs` owns the immutable `WorkerPeerIdentity` model,
+its trusted constructors and validation, and the Linux file/seal identity proof
+(`LinuxFileIdentity`, `LinuxSealedImage`, `require_full_image_seals`, digest
+priming); `worker_client_auth/credential.rs` owns the credential reference
+check, the held-descriptor owner-only directory walk and read, the protected
+filesystem allowlist and the bounded zeroizing payload;
+`worker_client_auth/peer.rs` owns live Linux peer validation: controller image
+capture, `pidfd`/`/proc/<pid>/exe` inspection, process birth-token probing and
+bounded image hashing. Credential exposure and authority boundaries are
+unchanged: the credential stays out of protocol frames and durable records and
+is presented only after the peer process has been checked by the operating
+system.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
