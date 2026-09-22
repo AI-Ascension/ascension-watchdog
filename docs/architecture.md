@@ -34,6 +34,25 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Suspended launch and bootstrap handoff are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_launch.rs`: the `WindowsProcessLauncher` facade, the suspended
+`CreateProcess` path (`spawn_suspended_with_job`) that assigns the exact named
+Job Object through `PROC_THREAD_ATTRIBUTE_JOB_LIST` before `ResumeThread`, the
+inheritable-handle list and bootstrap pipe handoff (`LaunchBootstrap`,
+`BootstrapPipe`, `write_bootstrap`), the post-creation cleanup classification
+(`WindowsLaunchError`, `SpawnFailure`, `classify_spawn_cleanup`) that keeps a
+possibly-owned Job authoritative, the session/token selection
+(`select_active_session`, `ActiveSession`, `query_user_token`,
+`current_process_session`) and the process-creation material (`command_line`,
+`environment_block`) plus the shared Win32 wait-bound helpers
+(`duration_to_millis`, `validate_stop_timeouts`). The public
+`WindowsProcessLauncher`/`WindowsLaunchError`/`ActiveSession` entrypoints and
+the shared `pub(crate)` helpers keep their existing names, so callers in
+`native.rs` and the `watchdog` runtime are unchanged. Child files use explicit
+`#[path]` attributes to remain flat siblings of `native.rs`.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
