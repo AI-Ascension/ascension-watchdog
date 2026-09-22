@@ -34,6 +34,29 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
+module that re-exports the ledger values and delegates to four cohesive
+children. `storage_admin/types.rs` owns the closed capability/command
+vocabulary, the token-free authenticated command context, the retained
+receipt/outcome types, the retention-bound constants and the bounded field
+validators. `storage_admin/admission.rs` owns read-only, mutation and
+job-submission admission plus the bounded read projections.
+`storage_admin/receipt.rs` owns idempotency-key/request-id lookup, ledger
+capacity enforcement, response validation and strict receipt-row decoding.
+`storage_admin/migrations.rs` owns the owner-locked additive ledger upgrade,
+the v1-to-v2 command-constraint rebuild and the strict table-shape validation.
+The coordinator keeps the existing entrypoints (`OperatorCapability`,
+`OperatorCommand`, `OperatorCommandContext`, `OperatorCommandReceipt`,
+`OperatorCommandOutcome`, `Store::admit_operator_read`,
+`Store::admit_operator_command`, `Store::admit_operator_job_submission`,
+`Store::admit_operator_job_submit`, `Store::operator_command`,
+`Store::list_operator_commands`, `Store::operator_command_count`,
+`migrate_operator_ledger_for_owner` and the `MAX_*`/`RESERVED_*` retention
+bounds) so callers, tests and the `storage.rs` re-exports are unchanged, and it
+names the child files with explicit `#[path]` attributes because `storage` is
+itself a `#[path]` module. Durable stop reserve, lifecycle reserve and the
+replayable-receipt capacity rule live only in the type constants and the
+receipt capacity check; no child re-implements them.
 Cross-repository release admission lives in `source_set.rs`. The read-only
 verifier is coordinated by `source_set.rs`, which keeps the existing entrypoint
 (`verify_document`, `SourceSetReport`, `RepositoryReport`, `ArtifactReport`,
