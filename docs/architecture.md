@@ -46,6 +46,22 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Launch admission, exact-nonce idempotence, receipts and the versioned
+inspect/stop lifecycle now live in `platform/linux_broker/broker.rs`, together
+with the `UnitObservation`, `LaunchReceipt` and `BrokerLifecycleReceipt`
+contracts the backend shares. The coordinator re-exports
+`LinuxSystemdBroker`, `UnitObservation`, `LaunchReceipt` and
+`BrokerLifecycleReceipt` (and keeps `pub(crate)` re-exports of `unit_name`,
+`receipt_from` and `verify_receipt_identity`) so the socket server, native
+backend, ledger and the broker tests keep their existing import paths. The
+`SystemdBackend` trait stays with the coordinator because the socket server,
+the bounded client and the native backend all consume it; the shared error
+vocabulary, protocol bounds and the `ledger`/`descriptor_store` module
+declarations also stay there. Durable admission, nonce replay, retained
+containment and uncertainty are enforced only in `broker`; no child
+re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
