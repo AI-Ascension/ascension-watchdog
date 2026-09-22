@@ -46,6 +46,19 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The Unix socket server and framed transport now live in
+`platform/linux_broker/transport.rs`: the one-request-per-connection `serve`
+loop, `handle_connection`, the typed launch and lifecycle wire responses, the
+bounded `read_frame` and deadline-driven `write_deadline` helpers, and
+`bind_root_owned_socket` (root-owned directory, `0o660`, peer group ownership).
+The coordinator re-exports `serve` and `bind_root_owned_socket` and keeps
+`pub(crate)` re-exports of `read_frame`, `write_deadline` and (test-only)
+`handle_connection` so the native backend, the bootstrap transport and the
+broker tests keep their existing import paths. Endpoint permissions, frame
+bounds, timeout budgets and typed failure responses are enforced only in
+`transport`; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
