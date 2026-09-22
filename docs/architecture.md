@@ -34,6 +34,19 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Its closed request and lifecycle envelopes, the fixed launch-policy model, the
+strict JSON policy documents and the policy validators now live in
+`platform/linux_broker/protocol.rs`. The coordinator re-exports the protocol
+surface (`BrokerComponent`, `BrokerRequest`, `BrokerLifecycleOperation`,
+`BrokerLifecycleState`, `BrokerLifecycleRequest`, `BrokerPolicy`, `LaunchPolicy`,
+`PeerPolicy`, `CapabilityPolicy`, `CgroupPolicy`) so callers, sibling modules,
+tests and the `platform` re-exports keep their existing import paths, and it
+keeps the shared protocol bounds and broker error vocabulary. Unknown-member
+rejection, duplicate-member rejection and every identity, capability, argument,
+environment, timeout and cgroup bound are enforced only in `protocol`; no child
+re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
