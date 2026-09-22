@@ -46,6 +46,18 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The synthetic recovery fixture's runtime-v3 integration target keeps the same
+shape. `crates/fault-fixture/tests/runtime.rs` stays the crate root so every
+`#[test]` keeps its discovered name, and it delegates its scaffolding to child
+modules under `crates/fault-fixture/tests/runtime/` (named with `#[path]`
+attributes because an integration-test file is its own crate root):
+`runtime/running_server.rs` owns the `RunningServer` child-process owner with
+its `Drop` reaping, database cleanup and the connection/health assertions, and
+`runtime/http_support.rs` owns the newline and HTTP request helpers, the
+bootstrap/envelope builders and the schema assertion. The crate root
+re-exports those items, so the runtime-v3 conformance assertions stay in the
+test functions and no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
