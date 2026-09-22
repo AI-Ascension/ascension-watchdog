@@ -62,6 +62,22 @@ reads, and the UTF-16/Win32 error helpers. The public entrypoints
 `native_current_process.rs` and `admin_pipe.rs` are unchanged. Child files use
 explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The Linux native broker backend in
+`crates/watchdog/src/platform/linux_broker/native.rs` follows the same pattern.
+`native.rs` keeps the `NativeSystemdBackend` state, inherited-containment
+recovery and the public `run_native_broker` entrypoint, and delegates to flat
+`#[path]` children: `native_transport.rs` (system-bus connection, manager and
+property proxies, unit inspection and observation policy),
+`native_queued_job.rs` (the bounded, identity-checked queued-job protocol and
+`JobRemoved` decoding), `native_process_identity.rs` (boot-scoped start tokens
+and exact executable/status proofs) and `native_systemd_backend.rs` (the
+effectful `SystemdBackend` lifecycle, including retained-containment capture,
+retirement and stop). Re-exports keep the `native::` names
+(`process_start_token`, `verify_process_executable`,
+`require_no_supplementary_groups`, `run_native_broker` and the queued-job types)
+unchanged for `linux_broker.rs`, and the queued-job tests stay declared as
+`mod queued_job_tests` so their discovery names are unchanged.
+
 Worker handoff authentication is coordinated by `worker_client_auth.rs`, kept
 as the `worker_client::auth` coordinator so the existing entrypoint
 (`WorkerPeerIdentity`, `capture_linux_controller`,
