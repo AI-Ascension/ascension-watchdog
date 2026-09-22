@@ -34,6 +34,22 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime process ownership is coordinated by `runtime_process.rs`. Native
+backend dispatch and its platform conversions are delegated to one cohesive
+child, `runtime_process/native_backend.rs`, which owns the `NativeBackend` enum
+and its create/launch/reopen/inspect/stop/force-cleanup implementation over the
+Linux adapter, the Linux broker client and the Windows job backend, the
+`NativeChild` handle and its retained broker receipt, and the platform
+observation/stop/error conversions (`map_platform_observation`,
+`map_stop_outcome`, `map_adapter_error`, `map_windows_error`,
+`windows_component_kind`, `windows_launch_spec`, `windows_process_identity`).
+The coordinator imports `NativeBackend`, `NativeChild` and `map_adapter_error`
+back so its facade, recovery path and regression tests are unchanged, and it
+names the child file with an explicit `#[path]` attribute because `runtime` is
+itself a `#[path]` module. Broker request/receipt binding and the shared
+containment policy stay in the coordinator; the child only dispatches behind
+the existing platform adapters and never widens containment.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
