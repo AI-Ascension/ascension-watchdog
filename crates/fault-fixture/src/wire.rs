@@ -8,7 +8,7 @@
 
 use std::fmt::Formatter;
 use std::io::BufReader;
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -18,7 +18,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::server::{read_bounded_line, write_raw_response};
-use crate::transport::{DeadlineReader, IO_TIMEOUT};
+use crate::transport::{DeadlineReader, IO_TIMEOUT, connect_bounded};
 use crate::{
     FIXTURE_TIMESTAMP, FaultPoint, FixtureError, MAX_FRAME_BYTES, RECOVERY_SCHEMA_DIGEST,
     is_runtime_v3_kind, request_capability, request_role, response_auth, response_auth_checked,
@@ -173,6 +173,10 @@ impl Frame {
 }
 
 /// A bounded client for the fixture's one-frame-per-connection loopback wire.
+///
+/// Each request still opens exactly one connection, but the connect itself is
+/// retried on a transient loopback timeout (see [`connect_bounded`]); the
+/// one-frame-per-connection contract and the read deadline are unchanged.
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
     address: SocketAddr,
@@ -201,8 +205,7 @@ impl Client {
         if bytes.len() > MAX_FRAME_BYTES {
             return Err(FixtureError::Bounds("request frame"));
         }
-        let mut stream =
-            TcpStream::connect_timeout(&self.address, IO_TIMEOUT).map_err(FixtureError::Io)?;
+        let mut stream = connect_bounded(&self.address).map_err(FixtureError::Io)?;
         write_raw_response(&mut stream, &bytes)?;
         let mut reader = BufReader::new(
             DeadlineReader::new(&stream, Instant::now() + IO_TIMEOUT).map_err(FixtureError::Io)?,
