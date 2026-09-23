@@ -452,11 +452,9 @@ contracts the backend shares. The coordinator re-exports
 `BrokerLifecycleReceipt` (and keeps `pub(crate)` re-exports of `unit_name`,
 `receipt_from` and `verify_receipt_identity`) so the socket server, native
 backend, ledger and the broker tests keep their existing import paths. The
-`SystemdBackend` trait stays with the coordinator because the socket server,
-the bounded client and the native backend all consume it; the shared error
-vocabulary, protocol bounds and the `ledger`/`descriptor_store` module
-declarations also stay there. Durable admission, nonce replay, retained
-containment and uncertainty are enforced only in `broker`; no child
+shared error vocabulary, protocol bounds and the `ledger`/`descriptor_store`
+module declarations stay with the coordinator. Durable admission, nonce replay,
+retained containment and uncertainty are enforced only in `broker`; no child
 re-implements them.
 
 The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
@@ -471,6 +469,21 @@ The coordinator re-exports `serve` and `bind_root_owned_socket` and keeps
 broker tests keep their existing import paths. Endpoint permissions, frame
 bounds, timeout budgets and typed failure responses are enforced only in
 `transport`; no child re-implements them.
+
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The bounded client and the backend contract now live in
+`platform/linux_broker/client.rs` and `platform/linux_broker/backend.rs`:
+`client.rs` owns `BrokerClient` with its `launch`, `inspect`/`stop` lifecycle
+methods and owned launch/lifecycle wire responses, the shared
+`connect_with_deadline` connect, and the receipt-correlation checks;
+`backend.rs` owns the `SystemdBackend` trait that the socket server, the bounded
+client, the native backend and the test fake all implement. The coordinator
+re-exports `BrokerClient` and `SystemdBackend` and keeps `pub(crate)`
+re-exports of `connect_with_deadline` and (test-only)
+`LifecycleWireResponseOwned` so the bootstrap transport, the native/fake
+backends and the broker tests keep their existing import paths. Socket
+ownership checks, frame bounds and receipt correlation are enforced only in
+`client`; no child re-implements them.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
