@@ -102,6 +102,20 @@ arithmetic), `validators.rs` (grant and acknowledgment shape/semantic rules),
 (duplicate-member rejection). `support` is the only owner of the artifact root,
 digest, UUID and canonical-JSON helpers; no child re-implements them.
 
+The authenticated admin wire contract lives in `admin/protocol.rs` and its
+cohesive children. The coordinator keeps the `MAX_*` bounds and re-exports every
+public item so `admin::protocol` remains the single entrypoint:
+`admin/protocol/identity.rs` owns the capability, principal-class and
+command-name identity; `admin/protocol/commands.rs` owns the closed command
+payloads (`AdminCommand`, the retry/backup/quarantine/reconcile/release/restore
+requests, `JobFilter`, `JobsRequest`, `JobSubmitRequest` and `EmptyParams`);
+`admin/protocol/request.rs` owns the authenticated request envelope and
+`DispatchContext`; `admin/protocol/views.rs` owns the bounded wire views;
+`admin/protocol/response.rs` owns the response envelope and the dispatcher
+contract; `admin/protocol/duplicate.rs` owns strict duplicate-member rejection
+applied before typed deserialization; and `admin/protocol/validation.rs` owns the
+bounded validation helpers. No wire contract, error semantic, input bound or
+caller changes.
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command
