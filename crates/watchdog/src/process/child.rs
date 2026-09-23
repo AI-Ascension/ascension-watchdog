@@ -24,9 +24,7 @@ use super::identity::{
 };
 use super::observation::observe_child_exit;
 #[cfg(unix)]
-use super::observation::{
-    group_has_other_members, signal_process_group, wait_for_child_exit,
-};
+use super::observation::{group_has_other_members, signal_process_group, wait_for_child_exit};
 use super::output::{BoundedOutput, OutputSnapshot, spawn_reader};
 use super::spawn_error::ProcessSpawnError;
 use super::validation::validate_component;
