@@ -1,4 +1,21 @@
-use super::*;
+use crate::Result;
+use crate::bundle::{append_bundle_record, git_output, sync_bundle};
+use crate::cli::Cli;
+use crate::dates::date_days;
+use crate::digest::sha256_hex;
+use crate::fixture::create_fixture_directory;
+use crate::model::{Exception, LockEntry, LockFile, Profile, RepositoryMap};
+use crate::parsing::{parse_json, parse_yaml};
+use crate::paths::{collect_files, inspect_managed_destination, prepare_managed_path};
+use crate::planning::{generated_profile, validate_required_checks};
+use crate::validate::{
+    FIXTURE_AS_OF, validate_adoption_identity, validate_check_sets, validate_check_targets,
+    validate_exception, validate_lock_bytes, validate_lock_shape, validate_profile, validate_root,
+    validate_rules,
+};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

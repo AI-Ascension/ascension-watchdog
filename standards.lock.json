@@ -4,12 +4,12 @@
   "profile_id": "planning-bootstrap",
   "source": {
     "repository": "AI-Ascension/.github",
-    "commit": "eed9921b5c5d5c41380655bded84f9e2d0aab599",
-    "bundle_digest": "sha256:cef00213abf2113a99137411e3eee67dc4ee0dd57c3044b2cd4514854161091d",
+    "commit": "18484583f1de87eb3cd1f7c8b08c58c926083ad4",
+    "bundle_digest": "sha256:b4054d6c7472371fec0d2f9f23a2df33e750a1c533b560d9cd308fe78a09c18d",
     "distribution": "local",
     "published": false
   },
-  "profile_sha256": "83dd00bee69668249266a57281a7b0575bb967b0ec2e63fa7c05fd6179dd16c9",
+  "profile_sha256": "5c6c4f0c3c32fb758af3c6a7524f628e40d5baa9e93dcd2e19804dd4744aa2b0",
   "files": [
     {
       "path": "standards/BASELINE.md",
@@ -137,7 +137,7 @@
     },
     {
       "path": "standards/tools/standards-sync/README.md",
-      "sha256": "180674ca7eed9a3740996d33dbc0ce67562d667a89bd5b32dd9e73c5972eef6f"
+      "sha256": "b2a02b358d75a10ef52e820df74037cc9ffa0ba5084cf2c9cbf7a0773357e59e"
     },
     {
       "path": "standards/tools/standards-sync/rust-toolchain.toml",
@@ -145,15 +145,91 @@
     },
     {
       "path": "standards/tools/standards-sync/src/bootstrap.rs",
-      "sha256": "87f6cd90b0888b5ad5e68298e21e6c629c1f5bdc5917301d4b80a4fd1b8ddbe1"
+      "sha256": "36fd5aab71a0b781104faae5a1ad7209bab09d418c33ea912ce2890aff26d6d3"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/bundle.rs",
+      "sha256": "cdcfbc5e85d4bea629e112270ec317e55d5d560236d7d2c7d6dc7271157cb32c"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/cli.rs",
+      "sha256": "3e12a014fb81fbf6de226941e37ebeb1d75105cb78d439267599d3967098062d"
     },
     {
       "path": "standards/tools/standards-sync/src/conformance_tests.rs",
-      "sha256": "e8f4db8a0eedf0cf974c23b986a418e7d285e9694f175c387f8ac0100b8b00ec"
+      "sha256": "7051fc741040234c78fb851f09aa4ed1a7eb7a0d7a485521df9d555f77e12e58"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/dates.rs",
+      "sha256": "5205d8d4eda2daaf4ca24b2e6fea7326200b8cf3ae8ea0e980f83fbc81654bb1"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/digest.rs",
+      "sha256": "5b000847778dc6099474e029be9c218cf0f4ac14aab067c22fc6d7b89443fea8"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/fixture.rs",
+      "sha256": "0ebcc2c88b290d32e82162aa979136b1d24007f4f0adf456c5963ab441f47d32"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/identifiers.rs",
+      "sha256": "2149bccf919d90f7f395ae6b7f3bedc91aba904200cc27d725d6ef0217c655f6"
     },
     {
       "path": "standards/tools/standards-sync/src/main.rs",
-      "sha256": "4f88e99612d88e015a1c192768824fb32ef7d6442495504895d3c9ad935fb714"
+      "sha256": "bc2e613190f77f8c00aa58e2f6aafa14424a25416fe9394eaaf34c7709fc6d32"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/model.rs",
+      "sha256": "5521b04d812d168f5b6eb19089db4b7fc1f8aa87db98d98a33e410e67c988267"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/parsing.rs",
+      "sha256": "2bd06427ece8dd8b8d50673cfb00e0fbe96545aaa64fe2195c3f5ca0c8bf66bf"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/paths.rs",
+      "sha256": "70d2d6867cf69bad6d787ced225c98d96d92947df8a61b1529827c25b4cf1e25"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/planning/managed.rs",
+      "sha256": "e054be1f771dfb12835dd9c7458d0c21e84ab51f8069f72c373f6dcdb6773cf7"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/planning/mod.rs",
+      "sha256": "d71f16e44f246ab207136ebbfe673aba71d1a58565ed1bb884b0bb7ed5a1c38a"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/planning/plan.rs",
+      "sha256": "80b2b5b4d132c16f9664c198d342697005e9638808c284436806d1cb6c47b9d7"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/conformance.rs",
+      "sha256": "0c6f8d6db8085a601db08f361f76f32e6aefecc7e92e2a1a8f22171a67cfd3ed"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/exception.rs",
+      "sha256": "5851ad0bcb03e552a74b7c41892e7bb0f931629d042911564947c3716e8864fe"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/lock.rs",
+      "sha256": "49e3c8205504c3901acf2ce2a3a1cfe6ac12d2782499740e55d7118d6d283512"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/mod.rs",
+      "sha256": "ceaaaf5324cc67a20f7628f5812dac1e698230dae28c167625670b4d8718a806"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/profile.rs",
+      "sha256": "357370040808083508b52c2dde567e62455c3b83409e1b429d31fc1708694c3e"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/rules.rs",
+      "sha256": "b2083e43be61788e101a52d4889bb8abda08d02a2a69459d331a30deb44bff0d"
+    },
+    {
+      "path": "standards/tools/standards-sync/src/validate/schema.rs",
+      "sha256": "da401425ecdb44879be5009d1c751124bb3dc91ff033cc46c2a762c0e160efd3"
     }
   ],
   "protected_paths": [
