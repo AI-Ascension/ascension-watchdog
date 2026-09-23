@@ -5,11 +5,10 @@
 //! lifecycle, together with the `UnitObservation`, `LaunchReceipt` and
 //! `BrokerLifecycleReceipt` contracts it shares with a backend.
 //!
-//! The `SystemdBackend` trait intentionally stays with the coordinator module:
-//! the Unix socket server, the bounded client and the native backend all
-//! consume it, so moving it here would either duplicate the contract or couple
-//! the sibling splits.  The shared error vocabulary, the protocol bounds and
-//! the `ledger`/`descriptor_store` module declarations also stay there.
+//! The `SystemdBackend` trait lives in the sibling `backend` module, so the
+//! Unix socket server, the bounded client and the native backend all consume a
+//! single contract. The shared error vocabulary, the protocol bounds and the
+//! `ledger`/`descriptor_store` module declarations stay with the coordinator.
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
