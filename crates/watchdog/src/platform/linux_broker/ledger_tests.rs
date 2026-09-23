@@ -7,8 +7,6 @@ use super::ledger_binding::{JobBinding, SYSTEMD_JOB_PATH_PREFIX};
 use super::ledger_records::{LaunchIdentity, LedgerRecord, LedgerState, parse_records};
 use super::ledger_store::BrokerLedger;
 
-use super::*;
-
 fn request(nonce: &str) -> BrokerRequest {
     BrokerRequest {
         component: BrokerComponent::Synthetic,

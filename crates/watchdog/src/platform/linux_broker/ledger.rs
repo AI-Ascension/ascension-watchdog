@@ -24,5 +24,7 @@ mod ledger_store;
 mod tests;
 
 pub use ledger_binding::JobBinding;
-pub(super) use ledger_records::{LedgerState, LifecycleRecord, same_process_binding};
+#[cfg(test)]
+pub(super) use ledger_records::LedgerState;
+pub(super) use ledger_records::{LifecycleRecord, same_process_binding};
 pub use ledger_store::BrokerLedger;
