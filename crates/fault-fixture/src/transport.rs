@@ -1,10 +1,50 @@
 //! Absolute transport deadlines for the single-threaded synthetic peer.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Maximum connect attempts for one logical client request.
+///
+/// A loopback handshake can exceed a single [`IO_TIMEOUT`] budget on a loaded
+/// runner even though the peer is healthy (observed as `WSAETIMEDOUT`, OS error
+/// 10060, on `windows-latest` in issue #204). Retrying the *connect* is safe: no
+/// request bytes have been written yet, so a retry can never replay a mutation.
+/// Only `TimedOut` is retried; every other failure is surfaced immediately so a
+/// genuinely absent peer still fails fast.
+pub(crate) const CONNECT_ATTEMPTS: u32 = 4;
+
+/// Bounded pause between connect attempts; keeps retries from busy-looping.
+const CONNECT_RETRY_BACKOFF: Duration = Duration::from_millis(50);
+
+/// Retry a transient connect failure up to [`CONNECT_ATTEMPTS`] times.
+///
+/// `attempt` receives the 1-based attempt number and returns the connect
+/// result. The loop returns the first success, the first non-timeout error as
+/// is, or the final timeout once the attempt cap is reached.
+fn retry_timed_out_connect<T, F>(mut attempt: F) -> io::Result<T>
+where
+    F: FnMut(u32) -> io::Result<T>,
+{
+    let mut index = 1;
+    loop {
+        match attempt(index) {
+            Ok(value) => return Ok(value),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut && index < CONNECT_ATTEMPTS => {
+                index += 1;
+                std::thread::sleep(CONNECT_RETRY_BACKOFF);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Connect to the fixture peer, retrying a timed-out loopback handshake.
+pub(crate) fn connect_bounded(address: &SocketAddr) -> io::Result<TcpStream> {
+    retry_timed_out_connect(|_| TcpStream::connect_timeout(address, IO_TIMEOUT))
+}
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
@@ -88,6 +128,52 @@ mod tests {
     use super::*;
     use socket2::{Domain, SockAddr, SockRef, Socket, Type};
     use std::net::{SocketAddr, TcpListener};
+
+    #[test]
+    fn bounded_connect_succeeds_after_one_transient_timeout() -> io::Result<()> {
+        let mut attempts = 0;
+        let value = retry_timed_out_connect(|_| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "first loopback handshake stalls",
+                ))
+            } else {
+                Ok(7_u8)
+            }
+        })?;
+        assert_eq!(value, 7);
+        assert_eq!(attempts, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_connect_stops_after_the_attempt_cap() {
+        let mut attempts = 0;
+        let error = retry_timed_out_connect(|_| {
+            attempts += 1;
+            Err::<u8, io::Error>(io::Error::new(io::ErrorKind::TimedOut, "always stalls"))
+        })
+        .expect_err("the final timeout must surface");
+        assert_eq!(attempts, CONNECT_ATTEMPTS);
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn bounded_connect_does_not_retry_a_non_timeout_failure() {
+        let mut attempts = 0;
+        let error = retry_timed_out_connect(|_| {
+            attempts += 1;
+            Err::<u8, io::Error>(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "absent peer",
+            ))
+        })
+        .expect_err("refused peers must not be retried");
+        assert_eq!(attempts, 1);
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+    }
 
     #[test]
     fn expired_deadline_rejects_even_already_available_bytes() -> io::Result<()> {
