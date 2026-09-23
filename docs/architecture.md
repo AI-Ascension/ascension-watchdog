@@ -357,6 +357,49 @@ rejection, duplicate-member rejection and every identity, capability, argument,
 environment, timeout and cgroup bound are enforced only in `protocol`; no child
 re-implements them.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Peer authentication and the protected-filesystem helpers now live in
+`platform/linux_broker/peer.rs`: the kernel-derived `PeerCredentials` captured
+with `SO_PEERCRED`, the executable-identity check that pins the peer with a
+`pidfd` and compares the resolved `/proc/<pid>/exe` digest against the
+root-owned allowlist, and the protected path, bounded-read and
+executable-hashing helpers. The coordinator re-exports `PeerCredentials` and
+`peer_credentials` and keeps `pub(crate)` re-exports of the helpers that
+sibling modules (`native`, `ledger`, `descriptor_store`, `bootstrap_transport`)
+and the broker tests already import, so their existing import paths are
+unchanged. The generic `hex_digest`/`io_error` utilities and every identity,
+deadline and ownership bound stay with the coordinator; no child re-implements
+them.
+
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Launch admission, exact-nonce idempotence, receipts and the versioned
+inspect/stop lifecycle now live in `platform/linux_broker/broker.rs`, together
+with the `UnitObservation`, `LaunchReceipt` and `BrokerLifecycleReceipt`
+contracts the backend shares. The coordinator re-exports
+`LinuxSystemdBroker`, `UnitObservation`, `LaunchReceipt` and
+`BrokerLifecycleReceipt` (and keeps `pub(crate)` re-exports of `unit_name`,
+`receipt_from` and `verify_receipt_identity`) so the socket server, native
+backend, ledger and the broker tests keep their existing import paths. The
+`SystemdBackend` trait stays with the coordinator because the socket server,
+the bounded client and the native backend all consume it; the shared error
+vocabulary, protocol bounds and the `ledger`/`descriptor_store` module
+declarations also stay there. Durable admission, nonce replay, retained
+containment and uncertainty are enforced only in `broker`; no child
+re-implements them.
+
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The Unix socket server and framed transport now live in
+`platform/linux_broker/transport.rs`: the one-request-per-connection `serve`
+loop, `handle_connection`, the typed launch and lifecycle wire responses, the
+bounded `read_frame` and deadline-driven `write_deadline` helpers, and
+`bind_root_owned_socket` (root-owned directory, `0o660`, peer group ownership).
+The coordinator re-exports `serve` and `bind_root_owned_socket` and keeps
+`pub(crate)` re-exports of `read_frame`, `write_deadline` and (test-only)
+`handle_connection` so the native backend, the bootstrap transport and the
+broker tests keep their existing import paths. Endpoint permissions, frame
+bounds, timeout budgets and typed failure responses are enforced only in
+`transport`; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
