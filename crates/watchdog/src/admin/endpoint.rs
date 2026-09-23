@@ -233,6 +233,20 @@ impl Drop for EndpointGuard {
 /// process is listening on, and the same file is still present when it is
 /// removed.  Any other condition returns false, so a live or unverifiable
 /// incumbent is never displaced.
+///
+/// A live incumbent proves itself by accepting the probe and a refused connect
+/// proves the socket is orphaned.  Every other connect error is ambiguous: on a
+/// saturated host a loopback `connect` probe can be interrupted or transiently
+/// fail (`EINTR`/`ENOMEM`/`ENOBUFS`/`EMFILE`) without the socket being live.
+/// Those probes are retried a bounded number of times and, if still
+/// unresolved, fail closed rather than being misread as a live incumbent.
+#[cfg(unix)]
+const RECLAIM_PROBE_ATTEMPTS: u32 = 5;
+
+/// Pause between ambiguous orphan-probe retries.
+#[cfg(unix)]
+const RECLAIM_PROBE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
 #[cfg(unix)]
 fn reclaim_stale_socket(path: &Path) -> Result<bool> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -246,20 +260,31 @@ fn reclaim_stale_socket(path: &Path) -> Result<bool> {
     }
     let before_identity = (before.dev(), before.ino());
 
-    match UnixStream::connect(path) {
-        Ok(_stream) => Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            let Ok(after) = fs::symlink_metadata(path) else {
-                return Ok(false);
-            };
-            if !after.file_type().is_socket() || (after.dev(), after.ino()) != before_identity {
-                return Ok(false);
+    let mut orphaned = false;
+    for attempt in 0..RECLAIM_PROBE_ATTEMPTS {
+        match UnixStream::connect(path) {
+            Ok(_stream) => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                orphaned = true;
+                break;
             }
-            fs::remove_file(path)?;
-            Ok(true)
+            Err(_) if attempt + 1 < RECLAIM_PROBE_ATTEMPTS => {
+                std::thread::sleep(RECLAIM_PROBE_RETRY_DELAY);
+            }
+            Err(_) => break,
         }
-        Err(_) => Ok(false),
     }
+    if !orphaned {
+        return Ok(false);
+    }
+    let Ok(after) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    if !after.file_type().is_socket() || (after.dev(), after.ino()) != before_identity {
+        return Ok(false);
+    }
+    fs::remove_file(path)?;
+    Ok(true)
 }
 
 /// Bind a protected Unix endpoint.  A live incumbent is never displaced: an
