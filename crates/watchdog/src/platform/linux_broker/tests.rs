@@ -1,3 +1,4 @@
+use super::client::LifecycleWireResponseOwned;
 use super::*;
 use tempfile::tempdir_in;
 
