@@ -83,7 +83,7 @@ pub(super) enum NativeBackend {
 
 #[cfg(windows)]
 #[derive(Debug)]
-struct WindowsBackend {
+pub(super) struct WindowsBackend {
     launcher: ascension_platform_windows::WindowsProcessLauncher,
 }
 
