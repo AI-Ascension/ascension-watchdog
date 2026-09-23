@@ -34,6 +34,48 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime construction and reconciliation coordination is extracted into
+`runtime/coordinator.rs`: runtime construction and `from_store`, the
+owner-local singleton `acquire_lock`, the ordered `reconcile_once` pass
+(persisted launch intents and identities before any new effect, the worker
+binding before scheduling, durable stop/pause admission before cleanup), the
+`run_until_stopped` loop and the read-only status/job facade. `runtime.rs`
+keeps the `Supervisor` type and re-exports the same public entry points, so
+callers, tests and the `lib.rs` re-exports are unchanged.
+
+Persisted launch and identity recovery is extracted into
+`runtime/recovery.rs`: `reconcile_persisted_launch_intents` reconstructs an
+owned handle only from a proof-recorded native intent whose persisted binding
+still validates, and `reconcile_persisted_identities` fences orphans left by an
+earlier controller generation. Both keep the unknown-outcome handling: a legacy
+or unbound intent, an uncertain containment cleanup, a failed proof binding or
+an ambiguous platform authority quarantines instead of guessing, and no live
+orphan is adopted into a new `Child` handle.
+
+Component health, policy and quarantine bookkeeping is extracted into
+`runtime/health.rs`: `reconcile_component`, the authenticated
+`worker_heartbeat_age_ms` witness that feeds it, and the `quarantine_component`
+/ `retain_quarantined_child` bookkeeping. Health and retry decisions, retained
+child ownership and quarantine semantics are unchanged; missing or
+unauthenticated telemetry still quarantines rather than granting restart
+authority.
+
+Start, abort and stop lifecycle is extracted into `runtime/lifecycle.rs`:
+`release_start_gate`, `start_component`, `abort_launched_child` and
+`stop_component`. The persisted intent and its binding still commit before any
+process effect, activation is verified before a spawn is admitted, an
+unverifiable launch is aborted instead of adopted, and an unconfirmed stop
+leaves cleanup uncertain rather than reporting success.
+
+Launch binding and adapter validation is extracted into
+`runtime/launch_binding.rs`: `launch_spec_for`, `launch_spec_binding_digest`,
+the persisted-proof decoder and validator, and the `RuntimeAdapter` boundary.
+Backend, session, component and configuration binding stay checked against
+trusted runtime configuration rather than a persisted proof, synthetic launches
+still require an explicit opt-in, and `runtime.rs` re-exports the same public
+adapter values so `lib.rs` and every `super::launch_spec_*` caller are
+unchanged.
+
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command
