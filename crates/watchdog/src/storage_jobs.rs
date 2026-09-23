@@ -49,7 +49,7 @@ pub enum JobStatus {
 }
 
 impl JobStatus {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
@@ -59,7 +59,7 @@ impl JobStatus {
         }
     }
 
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "queued" => Ok(Self::Queued),
             "running" => Ok(Self::Running),

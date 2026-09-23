@@ -17,8 +17,9 @@
 //! - `storage_launch_intents` owns pre-spawn launch admission and recovery
 //!   records (issue #100).
 
+use crate::config::validate_digest;
 use crate::error::{Result, WatchdogError};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
