@@ -10,7 +10,7 @@ use std::fmt::Formatter;
 use std::io::BufReader;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::de::{self, DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -201,8 +201,7 @@ impl Client {
         if bytes.len() > MAX_FRAME_BYTES {
             return Err(FixtureError::Bounds("request frame"));
         }
-        let mut stream =
-            TcpStream::connect_timeout(&self.address, IO_TIMEOUT).map_err(FixtureError::Io)?;
+        let mut stream = connect_loopback(&self.address).map_err(FixtureError::Io)?;
         write_raw_response(&mut stream, &bytes)?;
         let mut reader = BufReader::new(
             DeadlineReader::new(&stream, Instant::now() + IO_TIMEOUT).map_err(FixtureError::Io)?,
@@ -211,6 +210,36 @@ impl Client {
             return Err(FixtureError::ResponseLost);
         };
         parse_json_no_duplicates::<Frame>(&line)
+    }
+}
+
+/// Bounded connect retries for one client request.
+///
+/// A single `connect_timeout` can expire on a saturated Windows runner even
+/// though the loopback listener is healthy (the hosted `windows-latest` job
+/// observed `WSAETIMEDOUT`, `Os 10060`, on the receipt-capacity case).  Retry
+/// the connect a bounded number of times rather than depending on one attempt.
+/// Only the connect is retried: no request bytes are written until a
+/// connection exists, so a retry can never duplicate an operation.  A
+/// definitive failure (for example `ECONNREFUSED`) is returned immediately.
+const CONNECT_ATTEMPTS: u32 = 3;
+
+/// Pause before retrying an ambiguous connect timeout.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+fn connect_loopback(address: &SocketAddr) -> std::io::Result<TcpStream> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match TcpStream::connect_timeout(address, IO_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut && attempt < CONNECT_ATTEMPTS =>
+            {
+                std::thread::sleep(CONNECT_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
