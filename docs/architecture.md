@@ -515,6 +515,17 @@ never reconstructs a unit or widens authority; request identity, receipt
 correlation and containment capability checks stay enforced in `broker` and
 `native`.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The durable idempotence journal now lives in `platform/linux_broker/ledger.rs`,
+a facade that re-exports `JobBinding` and `BrokerLedger` under their existing
+paths: `ledger_binding.rs` owns the `StartTransientUnit` job identity and its
+bounded object-path parser, `ledger_records.rs` owns the persisted record
+types, the strict line decoder and the ledger path guards, and `ledger_store.rs`
+owns `BrokerLedger`'s bounded append/commit persistence and reservation
+admission. A pending record is written and synced before `StartTransientUnit`,
+so intent-before-effect ordering, exact identity, unknown-outcome handling and
+retention stay enforced only in the ledger; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
