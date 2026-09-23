@@ -76,6 +76,99 @@ still require an explicit opt-in, and `runtime.rs` re-exports the same public
 adapter values so `lib.rs` and every `super::launch_spec_*` caller are
 unchanged.
 
+The restricted process adapter is coordinated by `process.rs`, which keeps the
+existing entrypoints (`ProcessIdentity`, `OwnedChild`, `OutputSnapshot`,
+`ProcessSpawnError`, `ensure_identity`) and delegates to cohesive children:
+`process/validation.rs` owns the fail-closed pre-spawn validation of one
+approved component specification; `process/spawn_error.rs` owns the
+spawn-failure classification, including the retained `CleanupUncertain`
+outcome; `process/identity.rs` owns the launch identity, its validation and the
+executable-digest and creation-fingerprint helpers; `process/observation.rs`
+owns non-reaping child observation, the exact group signal and the bounded
+process-group membership proof; `process/output.rs` owns bounded diagnostic
+output capture; and `process/child.rs` owns `OwnedChild`, its process-group
+authority, the spawn path and the stop/reap/`Drop` cleanup paths. Every module
+is below the 1,000-line target, so no exception has to be documented. The
+functional acceptance tests remain at `process::tests` so test discovery and
+test names are unchanged.
+The host lease-control conformance target is coordinated the same way.
+`crates/fault-fixture/tests/host_lease_schema/main.rs` keeps the eight
+root-level `#[test]` functions so discovery is unchanged, and delegates to
+`support.rs` (bounded artifact loading, closed-object accessors, canonical
+encoding), `time.rs` (strict UTC parsing and wall/monotonic deadline
+arithmetic), `validators.rs` (grant and acknowledgment shape/semantic rules),
+`frame.rs` (frame validation and the canonical grant-digest rule),
+`reference_host.rs` (the stateful lifecycle reference host) and `strict.rs`
+(duplicate-member rejection). `support` is the only owner of the artifact root,
+digest, UUID and canonical-JSON helpers; no child re-implements them.
+
+The authenticated admin wire contract lives in `admin/protocol.rs` and its
+cohesive children. The coordinator keeps the `MAX_*` bounds and re-exports every
+public item so `admin::protocol` remains the single entrypoint:
+`admin/protocol/identity.rs` owns the capability, principal-class and
+command-name identity; `admin/protocol/commands.rs` owns the closed command
+payloads (`AdminCommand`, the retry/backup/quarantine/reconcile/release/restore
+requests, `JobFilter`, `JobsRequest`, `JobSubmitRequest` and `EmptyParams`);
+`admin/protocol/request.rs` owns the authenticated request envelope and
+`DispatchContext`; `admin/protocol/views.rs` owns the bounded wire views;
+`admin/protocol/response.rs` owns the response envelope and the dispatcher
+contract; `admin/protocol/duplicate.rs` owns strict duplicate-member rejection
+applied before typed deserialization; and `admin/protocol/validation.rs` owns the
+bounded validation helpers. No wire contract, error semantic, input bound or
+caller changes.
+The authenticated worker client is coordinated by `worker_client.rs`, which keeps
+the existing entrypoint (`WorkerClient`, `WorkerClientConfig`,
+`WorkerDispatchResult`, `WorkerReconcileResult`, `WorkerPhaseError`,
+`WorkerPeerIdentity`) and declares cohesive `#[path]` children:
+`worker_client_config.rs` owns the immutable binding, credential references and
+protected-endpoint validation; `worker_client_session.rs` owns the session
+lifecycle, the phase deadline and request header construction;
+`worker_client_exchange.rs` owns the bounded authenticated probe, control,
+dispatch, lookup and acknowledge exchanges; `worker_client_orchestration.rs`
+owns the store-backed claim/dispatch and handoff reconciliation paths and their
+result types; `worker_client_validation.rs` owns response, handoff and witness
+validation plus the protocol/storage tuple conversions. The existing
+`worker_client_auth.rs`, `worker_client_transport.rs` and
+`worker_client_sealed_tests.rs` children are unchanged. Bounded transport,
+worker identity binding and the persist-before-send / persist-after-terminal
+`Store` updates stay in their owning module; no child re-implements a validator
+or reorders persistence relative to an exchange.
+Linux launch authority is coordinated by `platform/linux_launcher.rs`, a facade
+that keeps the module-level framing constants and re-exports the existing
+launcher API while delegating to six cohesive children:
+`linux_launcher/protected_bootstrap.rs` owns `LinuxHelperBootstrap`,
+`ProtectedFileIdentity`, protected path opening, parent-descriptor validation
+and strict helper argument parsing;
+`linux_launcher/parent_launcher.rs` owns `TrustedLinuxLauncher`,
+`ParentBootstrap`, `PendingLaunch`, `LauncherStreams` and readiness/release
+handling; `linux_launcher/helper_authorization.rs` owns the
+`run_hidden_helper*` entry points, `authorize_after_release`,
+`authorize_request` and `spawn_authorized_target`;
+`linux_launcher/framed_protocol.rs` owns frame encoding/decoding and bounded
+bootstrap I/O; `linux_launcher/cgroup.rs` owns cgroup v2 discovery and
+membership verification; `linux_launcher/executable_snapshot.rs` owns verified
+executable opening, sealed snapshot creation and bounded hashing. The facade
+keeps the existing import path (`LinuxHelperBootstrap`,
+`LinuxHelperAuthorization`, `LinuxHelperRequest`, `TrustedLinuxLauncher`,
+`LauncherStreams`, `OutputMode`, `helper_argument`,
+`helper_invocation_requested`, `protected_config_argument` and the
+`run_hidden_helper*` functions), and the inline launcher tests move to
+`linux_launcher/tests.rs` with unchanged names, so callers are unaffected.
+The opt-in real-harness scope ownership test support lives in
+`tests/support/real_harness_worker_scope.rs` and its cohesive children. The
+coordinator keeps the shared bound constants and re-exports every value the test
+crate consumes, so the entrypoint and its `real_harness_worker_scope_tests.rs`
+child are unchanged: `real_harness_worker_scope/properties.rs` owns the pure
+systemd property parsing and proof validation; `.../paths.rs` owns canonical
+file identity and digests; `.../commands.rs` owns bounded helper execution and
+the retained launcher child handles; `.../cgroup.rs` owns the retained
+cgroup-v2 directory/events handles and device/inode identity checks;
+`.../evidence.rs` owns the durable proof writer; and `.../owner.rs` owns scope
+admission, live-property verification and durable stop ownership. Because this
+file is itself included through a `#[path]` module declaration, the children are
+named with explicit `#[path]` attributes so nested-module lookup stays relative
+to this file's directory. No proof semantic, identity/authorization check,
+bound or caller changes.
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command
@@ -141,6 +234,17 @@ test modules) so the sibling test modules and
 carry the same effective linux-broker visibility as before. Lifecycle,
 refusal/uncertainty and conformance assertions exist only in the test modules;
 no child re-implements them.
+The synthetic recovery fixture's runtime-v3 integration target keeps the same
+shape. `crates/fault-fixture/tests/runtime.rs` stays the crate root so every
+`#[test]` keeps its discovered name, and it delegates its scaffolding to child
+modules under `crates/fault-fixture/tests/runtime/` (named with `#[path]`
+attributes because an integration-test file is its own crate root):
+`runtime/running_server.rs` owns the `RunningServer` child-process owner with
+its `Drop` reaping, database cleanup and the connection/health assertions, and
+`runtime/http_support.rs` owns the newline and HTTP request helpers, the
+bootstrap/envelope builders and the schema assertion. The crate root
+re-exports those items, so the runtime-v3 conformance assertions stay in the
+test functions and no child re-implements them.
 The Linux native broker backend in
 `crates/watchdog/src/platform/linux_broker/native.rs` follows the same pattern.
 `native.rs` keeps the `NativeSystemdBackend` state, inherited-containment
