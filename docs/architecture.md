@@ -198,6 +198,18 @@ visibility through coordinator re-exports, so peer identity checks, the
 single-instance local-only endpoint restriction, bounded frames, cancellation
 semantics, the owner/DACL requirements, bounded reads and the no-reparse
 traversal are all preserved for every caller.
+Runtime process ownership is coordinated by `runtime_process.rs`. The launch
+ownership proof is delegated to one cohesive child,
+`runtime_process/ownership.rs`, which owns the closed `OwnershipProof` shape,
+its bounded serialized size, construction from native, broker and synthetic
+identities, the stable runtime incarnation and the strict recovery validation
+applied before a persisted proof is adopted. The coordinator keeps
+`MAX_NATIVE_PROOF_BYTES` because it also enforces that bound when it
+re-serializes a live child proof, and re-exports `OwnershipProof`,
+`validate_proof`, `preflight_synthetic_proof_budget` and `runtime_incarnation`
+so callers, tests and the `runtime.rs` imports are unchanged. There is exactly
+one construction and one validation path for a proof; the coordinator never
+re-implements either.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
