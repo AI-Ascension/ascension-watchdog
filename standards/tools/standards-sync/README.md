@@ -6,6 +6,26 @@ checker without Python, a sibling checkout, a network fetch, or a provider call.
 an isolated Cargo workspace with Rust 1.97.1, serde 1.0.229, serde_json 1.0.151, serde_yaml
 0.9.34, sha2 0.10.9, toml 1.1.4, and pulldown-cmark 0.10.3 pinned in Cargo.lock.
 
+## Source layout
+
+`src/main.rs` is a small dispatcher that wires the command surface together. Each responsibility
+lives in a cohesive module with `pub(crate)` visibility so the crate's public surface (the CLI
+commands, exit codes, diagnostics, and serialized document shapes) is unchanged:
+
+| Module | Responsibility |
+| --- | --- |
+| `cli.rs` | CLI parsing, help text, and fatal error reporting |
+| `model.rs` | Serialized profile/lock/rule/catalog/exception document models |
+| `digest.rs` | Deterministic SHA-256 digests |
+| `identifiers.rs` | Identifier, path, command, and review-reference validators |
+| `dates.rs` | Calendar-date parsing, comparison, and current-date evaluation |
+| `parsing.rs` | Structured TOML/JSON/YAML and UTF-8 text readers |
+| `paths.rs` | Safe managed-destination filesystem helpers |
+| `fixture.rs` | Unique disposable fixture directories |
+| `bundle.rs` | Bundle synchronization and pinned-source verification |
+| `planning/` | Reviewed check plans and deterministic profile generation |
+| `validate/` | Profile, lock, rule, schema, exception, and conformance validation |
+
 ## Validate a local adoption
 
 From a repository containing standards/, standards-profile.toml, and standards.lock.json:

@@ -1,7 +1,19 @@
 //! Documentation/configuration checks for the two actual bootstrap repositories.
 //! These checks do not activate product workspaces or evaluate client settings.
-use super::*;
+use crate::Result;
+use crate::bundle::git_output;
+use crate::identifiers::valid_relative_path;
+use crate::model::Profile;
+use crate::parsing::{parse_toml, read_text};
+use crate::paths::require_regular_file;
+use crate::validate::validate_root;
 use pulldown_cmark::{Event, Parser, Tag};
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use crate::paths::prepare_managed_path;
 
 pub(super) fn check(root: &Path) -> Result<()> {
     validate_root(root, None)?;
