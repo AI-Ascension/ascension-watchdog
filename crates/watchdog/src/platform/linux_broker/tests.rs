@@ -1016,12 +1016,20 @@ fn stop_confirmation_timeout_retains_active_ownership() {
         .component(BrokerComponent::Synthetic)
         .expect("launch policy")
         .clone();
-    launch.timeout = Duration::from_millis(30);
+    // The request budget is the same deadline `authenticate_peer` hashes the peer's
+    // `/proc/<pid>/exe` under and `handle` launches under, so a 30 ms budget made this
+    // case load-sensitive: on a saturated host the budget could expire before the broker
+    // ever reached `stop`, which is why the failure moved between the launch `expect` and
+    // the `stops == 1` assertion. The subject under test is that a stop whose effect is
+    // not confirmed retains ownership, so give the request a load-robust budget; the
+    // retained unit still forces the confirmation loop to exhaust its deadline and the
+    // broker still reports `Unavailable` with the unit held.
+    launch.timeout = Duration::from_secs(2);
     policy = BrokerPolicy::new(
         policy.peer.clone(),
         BTreeMap::from([(BrokerComponent::Synthetic, launch)]),
     )
-    .expect("short test policy");
+    .expect("load-robust test policy");
     let request = request("stop-timeout");
     let mut backend = FakeBackend::new();
     backend.retain_on_stop = true;
