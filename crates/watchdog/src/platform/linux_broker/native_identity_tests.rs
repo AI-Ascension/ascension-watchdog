@@ -1,4 +1,4 @@
-use super::{boot_scoped_start_token, process_start_token};
+use super::native_process_identity::{boot_scoped_start_token, process_start_token};
 
 #[test]
 fn only_the_exact_systemd_method_error_means_unit_absence() -> Result<(), Box<dyn std::error::Error>>
@@ -15,11 +15,11 @@ fn only_the_exact_systemd_method_error_means_unit_absence() -> Result<(), Box<dy
             Some("diagnostic mentions NoSuchUnit".to_owned()),
             message.clone(),
         );
-        assert_eq!(super::unit_is_missing(&error), expected);
+        assert_eq!(super::native_queued_job::unit_is_missing(&error), expected);
     }
-    assert!(!super::unit_is_missing(&zbus::Error::Failure(
-        "NoSuchUnit".to_owned()
-    )));
+    assert!(!super::native_queued_job::unit_is_missing(
+        &zbus::Error::Failure("NoSuchUnit".to_owned())
+    ));
     Ok(())
 }
 
