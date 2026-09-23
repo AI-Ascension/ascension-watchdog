@@ -319,6 +319,14 @@ pub(crate) fn bind_endpoint(path: &Path) -> Result<((), EndpointGuard)> {
 mod tests {
     use super::*;
     use std::os::unix::fs::FileTypeExt;
+    use std::time::{Duration, Instant};
+
+    /// Upper bound on how long the stale-socket test tolerates the kernel's
+    /// asynchronous retirement of a just-closed listener before failing.
+    const ORPHAN_RECLAIM_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Poll interval between reclaim rebind attempts.
+    const ORPHAN_RECLAIM_POLL: Duration = Duration::from_millis(10);
 
     fn socket_path(directory: &Path) -> PathBuf {
         directory.join("admin.sock")
@@ -353,7 +361,27 @@ mod tests {
                 .is_socket()
         );
 
-        let (_listener, guard) = bind_endpoint(&path).expect("stale socket is reclaimed");
+        // `drop(listener)` closes the socket, but the kernel does not retire
+        // the peer synchronously: for a short window after the close a fresh
+        // `connect(2)` can return a transient result that is neither a
+        // successful connection nor `ConnectionRefused` (issue #185 caught the
+        // probe stalling on a loaded `ubuntu-latest` runner).  The reclaim
+        // contract deliberately classifies anything that is not a refusal as
+        // "not provably orphaned" and reports `Busy`, because a live incumbent
+        // must never be displaced.  The test therefore cannot assert on the
+        // very first probe; it must wait out that bounded window.  The contract
+        // is unchanged and remains pinned by the live-incumbent assertion above
+        // and the cleanup assertion below.
+        let reclaimed_deadline = Instant::now() + ORPHAN_RECLAIM_TIMEOUT;
+        let (_listener, guard) = loop {
+            match bind_endpoint(&path) {
+                Ok(bound) => break bound,
+                Err(WatchdogError::Busy(_)) if Instant::now() < reclaimed_deadline => {
+                    std::thread::sleep(ORPHAN_RECLAIM_POLL);
+                }
+                Err(error) => panic!("stale socket is reclaimed: {error:?}"),
+            }
+        };
         drop(guard);
         assert!(
             fs::symlink_metadata(&path).is_err(),
