@@ -91,6 +91,17 @@ authority, the spawn path and the stop/reap/`Drop` cleanup paths. Every module
 is below the 1,000-line target, so no exception has to be documented. The
 functional acceptance tests remain at `process::tests` so test discovery and
 test names are unchanged.
+The host lease-control conformance target is coordinated the same way.
+`crates/fault-fixture/tests/host_lease_schema/main.rs` keeps the eight
+root-level `#[test]` functions so discovery is unchanged, and delegates to
+`support.rs` (bounded artifact loading, closed-object accessors, canonical
+encoding), `time.rs` (strict UTC parsing and wall/monotonic deadline
+arithmetic), `validators.rs` (grant and acknowledgment shape/semantic rules),
+`frame.rs` (frame validation and the canonical grant-digest rule),
+`reference_host.rs` (the stateful lifecycle reference host) and `strict.rs`
+(duplicate-member rejection). `support` is the only owner of the artifact root,
+digest, UUID and canonical-JSON helpers; no child re-implements them.
+
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command

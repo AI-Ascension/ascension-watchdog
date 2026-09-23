@@ -229,3 +229,18 @@ or crash/reconnect outcomes. The executable contract tests therefore assert:
 These artifacts establish the wire contract only. They do not prove consumer
 integration, a durable gateway, a managed host, a live game, reboot recovery,
 or release readiness.
+
+### Conformance harness layout
+
+The executable conformance target is `crates/fault-fixture/tests/host_lease_schema/`.
+Its `main.rs` coordinator owns the eight root-level `#[test]` functions, so the
+discovered test names and count are unchanged from the earlier single-file
+layout. The shared machinery lives in cohesive children: `support.rs` (bounded
+artifact loading, closed-object accessors and canonical encoding), `time.rs`
+(strict UTC timestamp parsing and wall/monotonic deadline arithmetic),
+`validators.rs` (grant and acknowledgment shape/semantic validation),
+`frame.rs` (frame validation plus the canonical grant-digest rule),
+`reference_host.rs` (the stateful lifecycle reference host) and `strict.rs`
+(duplicate-member rejection). Every negative assertion stays with the scenario
+that made it, and each scenario still drives the extracted entrypoints, so the
+target keeps cross-module integration coverage.
