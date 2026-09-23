@@ -34,6 +34,52 @@ child files with explicit `#[path]` attributes because `storage` is itself a
 `#[path]` module. Selector metadata keys and their parse rules exist only in
 `identity`; no child re-implements them.
 
+Runtime process ownership is coordinated by `runtime_process.rs`. The Linux
+broker protocol seam is delegated to one cohesive child,
+`runtime_process/broker.rs`, which owns broker request identity validation and
+construction, the versioned planned-containment encoding and its two decoders,
+unit-name derivation, the broker error mapping and the receipt correlation and
+binding verification (`verify_broker_receipt`, `verify_broker_receipt_request`,
+`verify_broker_receipt_against_proof`, `verify_broker_receipt_binding`). The
+coordinator re-exports every helper its dispatch, recovery and regression tests
+still call so callers, tests and the `runtime.rs` imports are unchanged, and it
+names the child file with an explicit `#[path]` attribute because `runtime` is
+itself a `#[path]` module. There is exactly one request encoder/decoder pair and
+one receipt verifier; the coordinator never re-implements either.
+
+
+Runtime process ownership is coordinated by `runtime_process.rs`. The
+supervision facade is delegated to one cohesive child,
+`runtime_process/facade.rs`, which owns the `RuntimeProcessManager` entrypoint,
+the `RuntimeChild` handle and its synthetic/native variants, the
+`RuntimeObservation`, `RuntimeStopOutcome` and `RuntimeLaunchError` vocabulary
+and the cleanup-uncertain classification applied when a native launch cannot
+prove its identity. The coordinator re-exports `RuntimeChild`,
+`RuntimeLaunchError`, `RuntimeObservation`, `RuntimeProcessManager` and
+`RuntimeStopOutcome` so `runtime.rs`, the sibling runtime modules and the
+existing regression tests are unchanged, and it names the child file with an
+explicit `#[path]` attribute because `runtime` is itself a `#[path]` module.
+The facade owns no platform authority: every native effect goes through the
+coordinator's `NativeBackend` dispatch, which stays in the entry file together
+with the shared proof-size bound and native timeouts.
+
+
+Runtime process ownership is coordinated by `runtime_process.rs`. Native
+backend dispatch and its platform conversions are delegated to one cohesive
+child, `runtime_process/native_backend.rs`, which owns the `NativeBackend` enum
+and its create/launch/reopen/inspect/stop/force-cleanup implementation over the
+Linux adapter, the Linux broker client and the Windows job backend, the
+`NativeChild` handle and its retained broker receipt, and the platform
+observation/stop/error conversions (`map_platform_observation`,
+`map_stop_outcome`, `map_adapter_error`, `map_windows_error`,
+`windows_component_kind`, `windows_launch_spec`, `windows_process_identity`).
+The coordinator imports `NativeBackend`, `NativeChild` and `map_adapter_error`
+back so its facade, recovery path and regression tests are unchanged, and it
+names the child file with an explicit `#[path]` attribute because `runtime` is
+itself a `#[path]` module. Broker request/receipt binding and the shared
+containment policy stay in the coordinator; the child only dispatches behind
+the existing platform adapters and never widens containment.
+
 The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
 being split along the same seams. Executable integrity and bounded hashing are
 coordinated by `native.rs`, which re-exports them from the cohesive child
