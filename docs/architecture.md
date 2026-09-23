@@ -481,8 +481,9 @@ contracts the backend shares. The coordinator re-exports
 `BrokerLifecycleReceipt` (and keeps `pub(crate)` re-exports of `unit_name`,
 `receipt_from` and `verify_receipt_identity`) so the socket server, native
 backend, ledger and the broker tests keep their existing import paths. The
-`SystemdBackend` trait stays with the coordinator because the socket server,
-the bounded client and the native backend all consume it; the shared error
+`SystemdBackend` trait now lives with the bounded client in
+`platform/linux_broker/client.rs` because the socket server, the bounded client
+and the native backend all consume it; the shared error
 vocabulary, protocol bounds and the `ledger`/`descriptor_store` module
 declarations also stay there. Durable admission, nonce replay, retained
 containment and uncertainty are enforced only in `broker`; no child
@@ -500,6 +501,19 @@ The coordinator re-exports `serve` and `bind_root_owned_socket` and keeps
 broker tests keep their existing import paths. Endpoint permissions, frame
 bounds, timeout budgets and typed failure responses are enforced only in
 `transport`; no child re-implements them.
+
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The bounded launch client and the backend contract now live in
+`platform/linux_broker/client.rs`: the `BrokerClient` launch and
+inspect/lifecycle calls, the deadline-driven `connect_with_deadline` helper, the
+owned wire-response DTOs decoded from the transport responses, and the
+`SystemdBackend` contract implemented by the native and fake backends. The
+coordinator re-exports `BrokerClient` and `SystemdBackend` and keeps a
+`pub(crate)` re-export of `connect_with_deadline` so the bootstrap transport
+keeps its existing import path. The client only frames bounded requests and
+never reconstructs a unit or widens authority; request identity, receipt
+correlation and containment capability checks stay enforced in `broker` and
+`native`.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
