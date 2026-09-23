@@ -118,6 +118,31 @@ validation, the retained peer session, image hashing and process-start tokens.
 Credential bytes still leave only through `ProtectedCredential::bytes`, and no
 child adds a new path that exposes them.
 
+The Windows administration transport is split across `admin_pipe.rs` and four
+child modules, and the coordinator keeps every existing entrance so
+`crate::admin_pipe::...` callers and tests are unchanged. `admin_pipe/win32.rs`
+owns the shared Win32 pipe primitives: the unique-ownership handle and
+security-descriptor wrappers, the bounded-frame, timeout and endpoint-name
+validators, the polling read/write helpers with their pending-I/O
+classification, the pipe-local-information query, and the SID, token,
+process-image and creation-time identity queries. `admin_pipe/server.rs` owns
+the fixed admin pipe instance: creation with the local-only owner/SID ACL mode,
+accept and peer authentication, bounded frame reads and writes, the
+outbound-drain proof, and cancel and disconnect of the exact server handle.
+`admin_pipe/client.rs` owns the admin `connect` and worker `connect_worker`
+entry points, the mandatory expected-server-executable binding, server
+account, session and image verification against launch policy, the immutable
+worker image digest guard, and the bounded request read/write and cancel paths.
+`admin_pipe/protected.rs` owns the protected credential, payload and
+service-config readers, the local-path and no-reparse ancestor traversal with
+its retained handles, and the `ProtectedFileAcl` policy enforcement.
+`MAX_ADMIN_PIPE_FRAME`, `process_user_sid`, `AdminPipeServer`, `AdminPipePeer`,
+`AdminPipeClient` and the protected-file entrypoints keep their existing
+visibility through coordinator re-exports, so peer identity checks, the
+single-instance local-only endpoint restriction, bounded frames, cancellation
+semantics, the owner/DACL requirements, bounded reads and the no-reparse
+traversal are all preserved for every caller.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
