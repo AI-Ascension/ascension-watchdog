@@ -515,6 +515,22 @@ never reconstructs a unit or widens authority; request identity, receipt
 correlation and containment capability checks stay enforced in `broker` and
 `native`.
 
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+The durable idempotence journal is now a thin facade at
+`platform/linux_broker/ledger.rs` over three flat siblings. `ledger_binding.rs`
+owns the `StartTransientUnit` `JobBinding` identity and its bounded object-path
+parser; `ledger_records.rs` owns the persisted record types (`LedgerState`,
+`LedgerRecord`, `LifecycleRecord`, `LaunchIdentity`), the strict line decoder
+and the protected directory/ledger path guards; `ledger_store.rs` owns the
+`BrokerLedger` state, its bounded append/commit persistence and its reservation
+admission. The facade re-exports `BrokerLedger` and `JobBinding` under their
+original names and keeps `pub(super)` re-exports of `LifecycleRecord` and
+`same_process_binding` (plus a test-only `LedgerState`) so the socket server,
+native backend, descriptor store, `runtime_process` and the ledger tests keep
+their existing import paths. The durable on-disk schema, record ordering,
+pending-before-effect write and recovery semantics are enforced only in
+`ledger_records`/`ledger_store`; no child re-implements them.
+
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
 No watchdog database is shared with gateway or harness. No watchdog action
