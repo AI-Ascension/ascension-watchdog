@@ -237,6 +237,18 @@ keeps the two cgroup predicates the existing regression tests call. The child
 delegates all process authority to `linux_launcher`/`linux_process`; it never
 widens containment and never re-implements the protected config or membership
 rules.
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Its closed request and lifecycle envelopes, the fixed launch-policy model, the
+strict JSON policy documents and the policy validators now live in
+`platform/linux_broker/protocol.rs`. The coordinator re-exports the protocol
+surface (`BrokerComponent`, `BrokerRequest`, `BrokerLifecycleOperation`,
+`BrokerLifecycleState`, `BrokerLifecycleRequest`, `BrokerPolicy`, `LaunchPolicy`,
+`PeerPolicy`, `CapabilityPolicy`, `CgroupPolicy`) so callers, sibling modules,
+tests and the `platform` re-exports keep their existing import paths, and it
+keeps the shared protocol bounds and broker error vocabulary. Unknown-member
+rejection, duplicate-member rejection and every identity, capability, argument,
+environment, timeout and cgroup bound are enforced only in `protocol`; no child
+re-implements them.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
