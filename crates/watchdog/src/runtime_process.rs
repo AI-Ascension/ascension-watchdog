@@ -24,7 +24,9 @@
 
 #[cfg(target_os = "linux")]
 use crate::config::hex_digest;
-use crate::config::{ComponentConfig, WatchdogConfig, validate_digest};
+#[cfg(target_os = "linux")]
+use crate::config::validate_digest;
+use crate::config::{ComponentConfig, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 #[cfg(any(windows, test))]
 use crate::platform::SessionSelector as PlatformSessionSelector;
