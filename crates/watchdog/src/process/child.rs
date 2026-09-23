@@ -22,8 +22,10 @@ use super::identity::{
     ProcessIdentity, ensure_identity, ensure_spawn_identity, hash_file,
     process_creation_fingerprint,
 };
+use super::observation::observe_child_exit;
+#[cfg(unix)]
 use super::observation::{
-    group_has_other_members, observe_child_exit, signal_process_group, wait_for_child_exit,
+    group_has_other_members, signal_process_group, wait_for_child_exit,
 };
 use super::output::{BoundedOutput, OutputSnapshot, spawn_reader};
 use super::spawn_error::ProcessSpawnError;

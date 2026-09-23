@@ -15,6 +15,7 @@ use std::process::Child;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use super::observation::observe_child_exit;
 
 #[cfg(target_os = "linux")]
