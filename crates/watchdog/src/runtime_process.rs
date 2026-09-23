@@ -3,12 +3,30 @@
 //! Synthetic children are retained only for explicitly opted-in fixtures.
 //! Production children are launched through the platform containment
 //! authority and carry a bounded, versioned proof in the launch-intent row.
+//!
+//! This file stays the `runtime_process` coordinator so every existing
+//! `crate::runtime::runtime_process::*` path keeps working.  The launch
+//! ownership proof now lives in the cohesive `ownership` child module:
+//! `runtime_process/ownership.rs` owns the closed `OwnershipProof` shape,
+//! its bounded serialized size, construction from native/broker/synthetic
+//! identities, the stable runtime incarnation and the strict recovery
+//! validation applied before a persisted proof is adopted.  The coordinator
+//! keeps `MAX_NATIVE_PROOF_BYTES` because it also enforces that bound when it
+//! re-serializes a live child proof, and re-exports the moved items so
+//! callers and the in-module regression tests are unchanged.
+//! `crate::runtime::runtime_process::*` path keeps working.  The Linux helper
+//! admission surface — protected bootstrap validation, worker/gateway-health
+//! binding checks and the exact delegated-cgroup-leaf proof — now lives in the
+//! cohesive `linux_helper` child module (`runtime_process/linux_helper.rs`).
+//! The coordinator re-exports `run_linux_helper_if_requested` and the two
+//! cgroup predicates the in-module regression tests call, so callers and tests
+//! are unchanged.
 
 #[cfg(target_os = "linux")]
-use crate::config::DesiredMode;
-#[cfg(target_os = "linux")]
 use crate::config::hex_digest;
-use crate::config::{ComponentConfig, WatchdogConfig, validate_digest};
+#[cfg(target_os = "linux")]
+use crate::config::validate_digest;
+use crate::config::{ComponentConfig, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 #[cfg(any(windows, test))]
 use crate::platform::SessionSelector as PlatformSessionSelector;
@@ -20,29 +38,37 @@ use crate::platform::{
 };
 use crate::platform::{ComponentKind as PlatformComponentKind, LaunchSpec};
 use crate::process::{OutputSnapshot, OwnedChild, ProcessIdentity, ProcessSpawnError};
-#[cfg(target_os = "linux")]
-use crate::storage::Store;
 use crate::storage::{LaunchIntent, LaunchIntentState};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(target_os = "linux")]
 use sha2::Digest;
 use std::collections::BTreeMap;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", test))]
 use std::fs;
-#[cfg(target_os = "linux")]
-use std::io::Read;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", test))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+
+// `runtime` is declared with `#[path]`, so this coordinator must name the
+// child file explicitly instead of relying on directory derivation.
+#[path = "runtime_process/ownership.rs"]
+mod ownership;
+
+pub(crate) use ownership::runtime_incarnation;
+use ownership::{OwnershipProof, preflight_synthetic_proof_budget, validate_proof};
+#[path = "runtime_process/linux_helper.rs"]
+mod linux_helper;
+
+pub(crate) use linux_helper::run_linux_helper_if_requested;
+#[cfg(all(target_os = "linux", test))]
+use linux_helper::{validate_exact_cgroup_child, validate_planned_cgroup_leaf};
 
 const MAX_NATIVE_PROOF_BYTES: usize = 8 * 1024;
 const NATIVE_MAX_PROCESSES: u32 = 64;
 const NATIVE_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const NATIVE_FORCE_TIMEOUT: Duration = Duration::from_secs(10);
-const INCARNATION_PREFIX: &str = "watchdog-generation-";
 
 /// A child together with the durable intent which admitted it.
 pub(crate) struct RuntimeChild {
@@ -96,27 +122,6 @@ enum NativeChild {
 #[derive(Clone, Debug)]
 struct BrokerOwnedProcess {
     receipt: crate::platform::LaunchReceipt,
-}
-
-/// Closed proof tying a platform process authority to a launch intent.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct OwnershipProof {
-    version: u32,
-    backend: String,
-    intent_id: String,
-    deployment_id: String,
-    instance_id: String,
-    component: String,
-    incarnation: String,
-    launch_nonce: String,
-    containment_id: String,
-    pid: u32,
-    creation_token: String,
-    executable: PathBuf,
-    executable_sha256: String,
-    session_id: Option<u32>,
-    started_at_ms: u64,
 }
 
 #[allow(dead_code)]
@@ -1155,156 +1160,6 @@ impl NativeChild {
     }
 }
 
-impl OwnershipProof {
-    #[cfg(target_os = "linux")]
-    fn from_platform(
-        backend: &str,
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        identity: &PlatformProcessIdentity,
-        now_ms: u64,
-    ) -> Result<Self> {
-        let proof = Self {
-            version: 1,
-            backend: backend.to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: identity.deployment_id.clone(),
-            instance_id: identity.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: identity.incarnation.clone(),
-            launch_nonce: identity.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: identity.creation.pid,
-            creation_token: identity.creation.token.clone(),
-            executable: identity.executable.clone(),
-            executable_sha256: identity.executable_sha256.clone(),
-            session_id: identity.session,
-            started_at_ms: now_ms,
-        };
-        if proof.deployment_id != specification.deployment_id
-            || proof.instance_id != specification.instance_id
-            || proof.launch_nonce != specification.launch_nonce
-            || proof.containment_id != identity.containment.as_str()
-        {
-            return Err(WatchdogError::IdentityMismatch(
-                "platform returned an identity different from the launch request".to_owned(),
-            ));
-        }
-        bound_proof(proof)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn from_broker_receipt(
-        backend: &str,
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        receipt: &crate::platform::LaunchReceipt,
-        now_ms: u64,
-    ) -> Result<Self> {
-        verify_broker_receipt(specification, planned_containment, receipt)?;
-        let proof = Self {
-            version: 1,
-            backend: backend.to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: specification.deployment_id.clone(),
-            instance_id: specification.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: specification.incarnation.clone(),
-            launch_nonce: specification.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: receipt.pid,
-            creation_token: receipt.creation_token.clone(),
-            executable: receipt.executable.clone(),
-            executable_sha256: receipt.executable_sha256.clone(),
-            session_id: None,
-            started_at_ms: now_ms,
-        };
-        bound_proof(proof)
-    }
-
-    fn synthetic(
-        intent_id: &str,
-        specification: &LaunchSpec,
-        planned_containment: &str,
-        portable: &ProcessIdentity,
-    ) -> Result<Self> {
-        bound_proof(Self {
-            version: 1,
-            backend: "synthetic".to_owned(),
-            intent_id: intent_id.to_owned(),
-            deployment_id: specification.deployment_id.clone(),
-            instance_id: specification.instance_id.clone(),
-            component: specification.instance_id.clone(),
-            incarnation: specification.incarnation.clone(),
-            launch_nonce: specification.launch_nonce.clone(),
-            containment_id: planned_containment.to_owned(),
-            pid: portable.pid,
-            creation_token: portable
-                .creation_fingerprint
-                .clone()
-                .unwrap_or_else(|| format!("synthetic:{}", portable.pid)),
-            executable: portable.executable.clone(),
-            executable_sha256: portable.executable_digest.clone(),
-            session_id: None,
-            started_at_ms: portable.started_at_ms,
-        })
-    }
-
-    fn portable_identity(&self) -> ProcessIdentity {
-        ProcessIdentity {
-            pid: self.pid,
-            launch_nonce: self.launch_nonce.clone(),
-            executable: self.executable.clone(),
-            executable_digest: self.executable_sha256.clone(),
-            started_at_ms: self.started_at_ms,
-            creation_fingerprint: Some(self.creation_token.clone()),
-        }
-    }
-}
-
-fn bound_proof(proof: OwnershipProof) -> Result<OwnershipProof> {
-    if serde_json::to_vec(&proof)?.len() > MAX_NATIVE_PROOF_BYTES {
-        return Err(WatchdogError::InvalidInput(
-            "launch ownership proof exceeds runtime bound".to_owned(),
-        ));
-    }
-    Ok(proof)
-}
-
-/// Check the synthetic proof envelope before creating a child.  The runtime
-/// still repeats the real check after spawn because the child identity is part
-/// of the persisted proof; that second failure is classified as cleanup
-/// uncertainty by the caller.
-fn preflight_synthetic_proof_budget(
-    intent_id: &str,
-    specification: &LaunchSpec,
-    planned_containment: &str,
-) -> Result<()> {
-    // The real synthetic identity is produced only after the child exists.
-    // Use the largest scalar identity values here so a proof that can pass
-    // this preflight cannot become oversized merely because the OS selected a
-    // larger PID, creation token, or timestamp.  The executable is resolved
-    // with the same canonicalization used by the child launcher when possible;
-    // retaining the requested path on lookup failure still lets this check
-    // reject an oversized request before process creation.
-    let executable = std::fs::canonicalize(&specification.executable)
-        .unwrap_or_else(|_| specification.executable.clone());
-    let portable = ProcessIdentity {
-        pid: u32::MAX,
-        launch_nonce: specification.launch_nonce.clone(),
-        executable,
-        executable_digest: specification.executable_sha256.clone(),
-        started_at_ms: u64::MAX,
-        // Linux's /proc start time is an unsigned 64-bit decimal value; the
-        // non-Linux fallback is shorter. Twenty decimal digits therefore
-        // conservatively cover either identity source.
-        creation_fingerprint: Some("9".repeat(20)),
-    };
-    OwnershipProof::synthetic(intent_id, specification, planned_containment, &portable).map(|_| ())
-}
-
 #[cfg(target_os = "linux")]
 fn map_platform_observation(observation: &PlatformObservation) -> RuntimeObservation {
     match observation {
@@ -1616,104 +1471,6 @@ fn verify_broker_receipt_binding(
     Ok(())
 }
 
-fn validate_proof(
-    config: &WatchdogConfig,
-    intent: &LaunchIntent,
-    proof: &OwnershipProof,
-) -> Result<()> {
-    if proof.version != 1
-        || proof.intent_id != intent.id
-        || proof.deployment_id != intent.deployment_id
-        || proof.component != intent.component_id
-        || proof.launch_nonce != intent.launch_nonce
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof is not bound to its durable intent".to_owned(),
-        ));
-    }
-    let planned = intent.planned_containment_id.as_deref().ok_or_else(|| {
-        WatchdogError::Conflict(
-            "launch intent has no planned containment for proof recovery".to_owned(),
-        )
-    })?;
-    if planned != proof.containment_id
-        && !(proof.backend == "windows" && planned == format!("windows-job:{}", proof.launch_nonce))
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof containment differs from durable intent".to_owned(),
-        ));
-    }
-    if proof.pid == 0
-        || proof.creation_token.is_empty()
-        || !proof.executable.is_absolute()
-        || validate_digest(&proof.executable_sha256).is_err()
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof identity is incomplete".to_owned(),
-        ));
-    }
-    if proof.backend != "synthetic" && !matches!(proof.backend.as_str(), "linux" | "windows") {
-        return Err(WatchdogError::Unsupported(
-            "launch ownership proof backend is unsupported".to_owned(),
-        ));
-    }
-    let component = config
-        .components
-        .iter()
-        .find(|component| component.id == proof.component)
-        .ok_or_else(|| WatchdogError::Conflict("proof component is not configured".to_owned()))?;
-    let expected_path = std::fs::canonicalize(&component.executable).map_err(|error| {
-        WatchdogError::IdentityMismatch(format!(
-            "approved executable cannot be resolved during proof recovery: {error}"
-        ))
-    })?;
-    let expected_digest = component.executable_sha256.as_deref().ok_or_else(|| {
-        WatchdogError::Unsupported("proof component has no approved executable digest".to_owned())
-    })?;
-    if proof.instance_id != component.id
-        || proof.executable != expected_path
-        || expected_digest != proof.executable_sha256
-    {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof differs from approved component bytes".to_owned(),
-        ));
-    }
-    if proof.incarnation.is_empty() {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof has no incarnation".to_owned(),
-        ));
-    }
-    // The incarnation is part of the platform containment derivation.  A
-    // proof that merely has a plausible-looking generation string is not
-    // enough: rebuild the complete launch request and require the persisted
-    // containment identity to be the one derived from that request.  This
-    // prevents a proof from being rebound to another generation or nonce.
-    let specification = super::launch_spec_for(
-        config,
-        component,
-        intent.launch_nonce.clone(),
-        proof.incarnation.clone(),
-    )?;
-    let expected_containment = expected_containment_for(config, &specification)?;
-    if expected_containment != proof.containment_id {
-        return Err(WatchdogError::IdentityMismatch(
-            "launch ownership proof containment is not derived from its incarnation and request"
-                .to_owned(),
-        ));
-    }
-    if proof.backend == "linux" && proof.session_id.is_some() {
-        return Err(WatchdogError::IdentityMismatch(
-            "Linux launch proof unexpectedly contains a session identity".to_owned(),
-        ));
-    }
-    if proof.backend == "windows" && proof.session_id != Some(0) {
-        return Err(WatchdogError::IdentityMismatch(
-            "Windows service launch proof is not bound to session zero".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
 fn expected_containment_for(config: &WatchdogConfig, specification: &LaunchSpec) -> Result<String> {
     if config.linux_broker.is_some() {
@@ -1788,16 +1545,6 @@ fn native_allowlist(
         ));
     }
     Ok(allowlist)
-}
-
-/// Stable incarnation shared by launch construction and helper authorization.
-pub(crate) fn runtime_incarnation(restart_generation: i64) -> Result<String> {
-    if restart_generation <= 0 {
-        return Err(WatchdogError::Conflict(
-            "restart generation must be positive before native launch".to_owned(),
-        ));
-    }
-    Ok(format!("{INCARNATION_PREFIX}{restart_generation}"))
 }
 
 #[cfg(windows)]
@@ -1875,332 +1622,6 @@ fn windows_process_identity(
             )
         })?,
     })
-}
-
-#[cfg(target_os = "linux")]
-pub fn run_linux_helper_if_requested() -> Result<Option<i32>> {
-    crate::platform::linux_launcher::run_hidden_helper_if_requested_with_health_authorizer(
-        authorize_linux_helper_with_health,
-    )
-    .map_err(map_adapter_error)
-}
-
-#[cfg(not(target_os = "linux"))]
-#[allow(clippy::unnecessary_wraps)]
-pub fn run_linux_helper_if_requested() -> Result<Option<i32>> {
-    Ok(None)
-}
-
-#[cfg(target_os = "linux")]
-fn authorize_linux_helper_with_health(
-    request: &crate::platform::LinuxHelperRequest,
-    bootstrap: &crate::platform::LinuxHelperBootstrap,
-    observed_health: Option<&crate::platform::gateway_health::GatewayHealthFrameBinding>,
-) -> std::result::Result<(crate::platform::LinuxHelperAuthorization, Store), AdapterError> {
-    let config = protected_config_from_bootstrap(bootstrap)?;
-    // Serialize durable Stop with target exec just as Windows admission holds
-    // its reservation through ResumeThread. This is a read-only transaction
-    // in terms of row effects, but it intentionally reserves the writer slot.
-    let store = Store::open(&config.database, &config)
-        .and_then(Store::reserve_launch_admission)
-        .map_err(watchdog_to_adapter_error)?;
-    let status = store.status().map_err(watchdog_to_adapter_error)?;
-    if status.desired_mode != DesiredMode::Running {
-        return Err(AdapterError::Unavailable(
-            "durable running intent was revoked before Linux helper release".to_owned(),
-        ));
-    }
-    let expected_incarnation =
-        runtime_incarnation(status.restart_generation).map_err(watchdog_to_adapter_error)?;
-    let component = config
-        .components
-        .iter()
-        .find(|component| {
-            component.id == request.specification.instance_id
-                && component_kind(component)
-                    .map(|kind| kind == request.specification.component)
-                    .unwrap_or(false)
-        })
-        .ok_or_else(|| {
-            AdapterError::IdentityMismatch(
-                "Linux helper component is not in the protected configuration".to_owned(),
-            )
-        })?;
-    component.executable_sha256.as_deref().ok_or_else(|| {
-        AdapterError::Unsupported(
-            "Linux helper component has no approved executable digest".to_owned(),
-        )
-    })?;
-    let expected = super::launch_spec_for(
-        &config,
-        component,
-        request.specification.launch_nonce.clone(),
-        expected_incarnation,
-    )
-    .map_err(watchdog_to_adapter_error)?;
-    if request.specification != expected {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper request differs from protected component configuration".to_owned(),
-        ));
-    }
-    let planned = crate::platform::LinuxProcessAdapter::planned_containment_for(&expected)?;
-    let health_required = config
-        .gateway_health
-        .as_ref()
-        .is_some_and(|health| health.component_id == component.id);
-    match (health_required, observed_health) {
-        (true, Some(observed)) => {
-            super::runtime_gateway_health_admission::authorize_stored(
-                &config,
-                &store,
-                &expected,
-                planned.as_str(),
-                observed,
-                None,
-            )
-            .map_err(watchdog_to_adapter_error)?;
-        }
-        (false, None) => {}
-        _ => {
-            return Err(AdapterError::IdentityMismatch(
-                "gateway health pipe presence differs from approved configuration".to_owned(),
-            ));
-        }
-    }
-    let intents = store
-        .unsettled_launch_intents()
-        .map_err(watchdog_to_adapter_error)?;
-    let matches = intents
-        .iter()
-        .filter(|intent| {
-            intent.deployment_id == status.deployment_id
-                && intent.component_id == component.id
-                && intent.launch_nonce == request.specification.launch_nonce
-                && intent.planned_containment_id.as_deref() == Some(planned.as_str())
-        })
-        .collect::<Vec<_>>();
-    if matches.len() != 1 || matches[0].state != LaunchIntentState::Prepared {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper has no unique prepared durable launch intent".to_owned(),
-        ));
-    }
-    let worker_required = config
-        .worker
-        .as_ref()
-        .is_some_and(|worker| worker.component_id == component.id);
-    let binding = if worker_required {
-        store
-            .worker_bootstrap_binding(&matches[0].id)
-            .map_err(watchdog_to_adapter_error)?
-    } else {
-        None
-    };
-    super::runtime_worker_bootstrap::verify_binding(
-        binding.as_ref(),
-        worker_required,
-        bootstrap.worker_boot_id(),
-        bootstrap.worker_frame_sha256(),
-    )
-    .map_err(watchdog_to_adapter_error)?;
-    validate_planned_cgroup_leaf(&request.cgroup_path, planned.as_str())?;
-    let delegated_root = bootstrap.delegated_cgroup_root_path().ok_or_else(|| {
-        AdapterError::IdentityMismatch(
-            "Linux helper has no trusted delegated cgroup root bootstrap".to_owned(),
-        )
-    })?;
-    verify_current_cgroup_full_path(&request.cgroup_path, delegated_root)?;
-    if !request.cgroup_path.is_absolute() {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper cgroup path is not absolute".to_owned(),
-        ));
-    }
-    let mut allowlisted_executables = BTreeMap::new();
-    for configured in &config.components {
-        if let Ok(kind) = component_kind(configured)
-            && configured.executable_sha256.is_some()
-        {
-            allowlisted_executables.insert(kind, configured.executable.clone());
-        }
-    }
-    Ok((
-        crate::platform::LinuxHelperAuthorization {
-            specification: expected,
-            cgroup_path: request.cgroup_path.clone(),
-            allowlisted_executables,
-        },
-        store,
-    ))
-}
-
-/// Bind the requested leaf to the exact containment persisted before launch.
-#[cfg(target_os = "linux")]
-fn validate_planned_cgroup_leaf(
-    requested: &Path,
-    planned: &str,
-) -> std::result::Result<(), AdapterError> {
-    let leaf = planned
-        .strip_prefix("cgroup-v2:")
-        .filter(|leaf| !leaf.is_empty())
-        .ok_or_else(|| {
-            AdapterError::Invalid("Linux containment identity is malformed".to_owned())
-        })?;
-    if requested.file_name().and_then(|name| name.to_str()) != Some(leaf) {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper cgroup path differs from durable containment intent".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn protected_config_from_bootstrap(
-    bootstrap: &crate::platform::LinuxHelperBootstrap,
-) -> std::result::Result<WatchdogConfig, AdapterError> {
-    let mut bytes = Vec::new();
-    bootstrap
-        .protected_config_file()?
-        .take(65_537)
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            AdapterError::Io(format!("Linux protected config read failed: {error}"))
-        })?;
-    if bytes.len() > 65_536 {
-        return Err(AdapterError::Invalid(
-            "Linux protected config exceeds the bounded read size".to_owned(),
-        ));
-    }
-    let mut config: WatchdogConfig = serde_json::from_slice(&bytes).map_err(|error| {
-        AdapterError::Invalid(format!("Linux protected config is invalid: {error}"))
-    })?;
-    config.source_path = Some(bootstrap.protected_config_path().to_path_buf());
-    config.validate().map_err(watchdog_to_adapter_error)?;
-    Ok(config)
-}
-
-#[cfg(target_os = "linux")]
-/// Also verify actual membership using the complete cgroup path.
-fn verify_current_cgroup_full_path(
-    requested: &Path,
-    delegated_root: &Path,
-) -> std::result::Result<(), AdapterError> {
-    if !requested.is_absolute() {
-        return Err(AdapterError::Invalid(
-            "Linux helper cgroup path must be absolute".to_owned(),
-        ));
-    }
-    let current_relative = fs::read_to_string("/proc/self/cgroup")
-        .map_err(|error| {
-            AdapterError::Unavailable(format!("Linux cgroup membership unavailable: {error}"))
-        })?
-        .lines()
-        .find_map(|line| {
-            let mut fields = line.splitn(3, ':');
-            let hierarchy = fields.next()?;
-            let controllers = fields.next()?;
-            let path = fields.next()?;
-            (hierarchy == "0" && controllers.is_empty()).then_some(path.to_owned())
-        })
-        .ok_or_else(|| {
-            AdapterError::Unavailable("Linux cgroup v2 membership entry is unavailable".to_owned())
-        })?;
-    let mountpoint = cgroup_v2_mountpoint()?;
-    let relative = current_relative.trim_start_matches('/');
-    let current = mountpoint.join(relative);
-    let expected = validate_exact_cgroup_child(requested, delegated_root)?;
-    let actual = fs::canonicalize(&current).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux current cgroup path cannot be resolved: {error}"
-        ))
-    })?;
-    if expected != actual {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper is not in the authorized full cgroup path".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn validate_exact_cgroup_child(
-    requested: &Path,
-    delegated_root: &Path,
-) -> std::result::Result<PathBuf, AdapterError> {
-    let expected = fs::canonicalize(requested).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux authorized cgroup path cannot be resolved: {error}"
-        ))
-    })?;
-    let trusted_root = fs::canonicalize(delegated_root).map_err(|error| {
-        AdapterError::Unavailable(format!(
-            "Linux delegated cgroup root cannot be resolved: {error}"
-        ))
-    })?;
-    if expected != requested || expected.parent() != Some(trusted_root.as_path()) {
-        return Err(AdapterError::IdentityMismatch(
-            "Linux helper cgroup is not the exact child of the trusted delegated root".to_owned(),
-        ));
-    }
-    Ok(expected)
-}
-
-#[cfg(target_os = "linux")]
-fn cgroup_v2_mountpoint() -> std::result::Result<PathBuf, AdapterError> {
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
-        AdapterError::Unavailable(format!("Linux mountinfo unavailable: {error}"))
-    })?;
-    for line in mountinfo.lines() {
-        let Some((before, after)) = line.split_once(" - ") else {
-            continue;
-        };
-        let post_fields = after.split_whitespace().collect::<Vec<_>>();
-        if post_fields.first().copied() != Some("cgroup2") {
-            continue;
-        }
-        let fields = before.split_whitespace().collect::<Vec<_>>();
-        let Some(mountpoint) = fields.get(4) else {
-            continue;
-        };
-        return Ok(PathBuf::from(unescape_mountinfo(mountpoint)));
-    }
-    Err(AdapterError::Unavailable(
-        "Linux cgroup v2 mountpoint is unavailable".to_owned(),
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn unescape_mountinfo(value: &str) -> String {
-    value
-        .replace("\\134", "\\")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\040", " ")
-}
-
-#[cfg(target_os = "linux")]
-fn watchdog_to_adapter_error(error: WatchdogError) -> AdapterError {
-    match error {
-        WatchdogError::InvalidInput(message) => AdapterError::Invalid(message),
-        WatchdogError::Unauthorized(message) | WatchdogError::Conflict(message) => {
-            AdapterError::IdentityMismatch(message)
-        }
-        WatchdogError::MissingState(path) => AdapterError::Unavailable(format!(
-            "protected watchdog state is missing: {}",
-            path.display()
-        )),
-        WatchdogError::NotFound(message) | WatchdogError::Unsupported(message) => {
-            AdapterError::Unavailable(message)
-        }
-        WatchdogError::Busy(path) => AdapterError::Unavailable(format!(
-            "protected watchdog state is busy: {}",
-            path.display()
-        )),
-        WatchdogError::IdentityMismatch(message) => AdapterError::IdentityMismatch(message),
-        WatchdogError::Timeout(message) => AdapterError::Timeout(message),
-        WatchdogError::Sqlite(error) => AdapterError::Io(error.to_string()),
-        WatchdogError::Io(error) => AdapterError::Io(error.to_string()),
-        WatchdogError::Json(error) => AdapterError::Invalid(error.to_string()),
-        WatchdogError::VerificationFailed(report) => AdapterError::Invalid(report),
-    }
 }
 
 #[cfg(test)]

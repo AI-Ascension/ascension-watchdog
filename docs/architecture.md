@@ -260,6 +260,24 @@ retirement and stop). Re-exports keep the `native::` names
 `require_no_supplementary_groups`, `run_native_broker` and the queued-job types)
 unchanged for `linux_broker.rs`, and the queued-job tests stay declared as
 `mod queued_job_tests` so their discovery names are unchanged.
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Suspended launch and bootstrap handoff are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_launch.rs`: the `WindowsProcessLauncher` facade, the suspended
+`CreateProcess` path (`spawn_suspended_with_job`) that assigns the exact named
+Job Object through `PROC_THREAD_ATTRIBUTE_JOB_LIST` before `ResumeThread`, the
+inheritable-handle list and bootstrap pipe handoff (`LaunchBootstrap`,
+`BootstrapPipe`, `write_bootstrap`), the post-creation cleanup classification
+(`WindowsLaunchError`, `SpawnFailure`, `classify_spawn_cleanup`) that keeps a
+possibly-owned Job authoritative, the session/token selection
+(`select_active_session`, `ActiveSession`, `query_user_token`,
+`current_process_session`) and the process-creation material (`command_line`,
+`environment_block`) plus the shared Win32 wait-bound helpers
+(`duration_to_millis`, `validate_stop_timeouts`). The public
+`WindowsProcessLauncher`/`WindowsLaunchError`/`ActiveSession` entrypoints and
+the shared `pub(crate)` helpers keep their existing names, so callers in
+`native.rs` and the `watchdog` runtime are unchanged. Child files use explicit
+`#[path]` attributes to remain flat siblings of `native.rs`.
 
 Worker handoff authentication is coordinated by `worker_client_auth.rs`, kept
 as the `worker_client::auth` coordinator so the existing entrypoint
@@ -302,6 +320,42 @@ visibility through coordinator re-exports, so peer identity checks, the
 single-instance local-only endpoint restriction, bounded frames, cancellation
 semantics, the owner/DACL requirements, bounded reads and the no-reparse
 traversal are all preserved for every caller.
+Runtime process ownership is coordinated by `runtime_process.rs`. The launch
+ownership proof is delegated to one cohesive child,
+`runtime_process/ownership.rs`, which owns the closed `OwnershipProof` shape,
+its bounded serialized size, construction from native, broker and synthetic
+identities, the stable runtime incarnation and the strict recovery validation
+applied before a persisted proof is adopted. The coordinator keeps
+`MAX_NATIVE_PROOF_BYTES` because it also enforces that bound when it
+re-serializes a live child proof, and re-exports `OwnershipProof`,
+`validate_proof`, `preflight_synthetic_proof_budget` and `runtime_incarnation`
+so callers, tests and the `runtime.rs` imports are unchanged. There is exactly
+one construction and one validation path for a proof; the coordinator never
+re-implements either.
+Runtime process ownership is coordinated by `runtime_process.rs`. The Linux
+privileged helper path is delegated to one cohesive child,
+`runtime_process/linux_helper.rs`, which owns protected-bootstrap config
+reading and validation, worker/gateway-health bootstrap binding checks, the
+durable prepared-intent correlation and the exact delegated-cgroup-leaf proof
+(`validate_planned_cgroup_leaf`, `verify_current_cgroup_full_path`,
+`validate_exact_cgroup_child`, `cgroup_v2_mountpoint`). The coordinator
+re-exports `run_linux_helper_if_requested` so `runtime.rs` is unchanged and
+keeps the two cgroup predicates the existing regression tests call. The child
+delegates all process authority to `linux_launcher`/`linux_process`; it never
+widens containment and never re-implements the protected config or membership
+rules.
+The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
+Its closed request and lifecycle envelopes, the fixed launch-policy model, the
+strict JSON policy documents and the policy validators now live in
+`platform/linux_broker/protocol.rs`. The coordinator re-exports the protocol
+surface (`BrokerComponent`, `BrokerRequest`, `BrokerLifecycleOperation`,
+`BrokerLifecycleState`, `BrokerLifecycleRequest`, `BrokerPolicy`, `LaunchPolicy`,
+`PeerPolicy`, `CapabilityPolicy`, `CgroupPolicy`) so callers, sibling modules,
+tests and the `platform` re-exports keep their existing import paths, and it
+keeps the shared protocol bounds and broker error vocabulary. Unknown-member
+rejection, duplicate-member rejection and every identity, capability, argument,
+environment, timeout and cgroup bound are enforced only in `protocol`; no child
+re-implements them.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
