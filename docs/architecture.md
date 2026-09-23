@@ -279,6 +279,32 @@ the shared `pub(crate)` helpers keep their existing names, so callers in
 `native.rs` and the `watchdog` runtime are unchanged. Child files use explicit
 `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Executable integrity and bounded hashing are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_integrity.rs`: the retained immutable-image guard (`IntegrityGuards`),
+the kernel file identity captured from the hashed handle (`FileIdentity`), the
+no-write/no-delete reopen path used by the launch barrier, the bounded
+immutable-file SHA-256 (`hash_immutable_file`, `Sha256`, `MAX_HASH_BYTES`,
+`HASH_READ_BYTES`) and `check_image_deadline`. The public `executable_sha256`
+entrypoint and the shared `pub(crate)` helpers keep their existing names, so
+callers in `native.rs`, `native_current_process.rs` and `admin_pipe.rs` are
+unchanged. Child files use explicit `#[path]` attributes to remain flat
+siblings of `native.rs`.
+
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Job containment and process lifecycle are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_job.rs`: the `JobOwnedProcess` owner, `create_job` with an owner-only
+security descriptor, the exact process/job limit queries and verification,
+prepared-job recovery (`open_planned_job`), the bounded
+`terminate_job_and_wait` stop path and its `StopOutcome`, and the nonce-bound
+`job_name`/`planned_job_nonce` helpers with their `JOB_NAME_PREFIX`/
+`PLANNED_JOB_PREFIX` constants. The public `JobOwnedProcess`/`StopOutcome`
+entrypoints and the shared `pub(crate)` helpers keep their existing names, so
+callers in `native.rs` and the `watchdog` runtime are unchanged. Child files
+use explicit `#[path]` attributes to remain flat siblings of `native.rs`.
+
 Worker handoff authentication is coordinated by `worker_client_auth.rs`, kept
 as the `worker_client::auth` coordinator so the existing entrypoint
 (`WorkerPeerIdentity`, `capture_linux_controller`,
