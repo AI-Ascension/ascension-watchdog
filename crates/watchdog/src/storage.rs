@@ -4,13 +4,11 @@
 //! missing path is never opened by read-only commands, and an existing but
 //! malformed path is reported as corruption instead of being recreated.
 
-use crate::config::{DesiredMode, WatchdogConfig, hex_digest, validate_digest};
+use crate::config::{DesiredMode, hex_digest, validate_digest};
 use crate::error::{Result, WatchdogError};
 use crate::policy::ComponentState;
 use crate::process::ProcessIdentity;
-use rusqlite::{
-    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
-};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
