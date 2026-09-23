@@ -133,6 +133,27 @@ validation plus the protocol/storage tuple conversions. The existing
 worker identity binding and the persist-before-send / persist-after-terminal
 `Store` updates stay in their owning module; no child re-implements a validator
 or reorders persistence relative to an exchange.
+Linux launch authority is coordinated by `platform/linux_launcher.rs`, a facade
+that keeps the module-level framing constants and re-exports the existing
+launcher API while delegating to six cohesive children:
+`linux_launcher/protected_bootstrap.rs` owns `LinuxHelperBootstrap`,
+`ProtectedFileIdentity`, protected path opening, parent-descriptor validation
+and strict helper argument parsing;
+`linux_launcher/parent_launcher.rs` owns `TrustedLinuxLauncher`,
+`ParentBootstrap`, `PendingLaunch`, `LauncherStreams` and readiness/release
+handling; `linux_launcher/helper_authorization.rs` owns the
+`run_hidden_helper*` entry points, `authorize_after_release`,
+`authorize_request` and `spawn_authorized_target`;
+`linux_launcher/framed_protocol.rs` owns frame encoding/decoding and bounded
+bootstrap I/O; `linux_launcher/cgroup.rs` owns cgroup v2 discovery and
+membership verification; `linux_launcher/executable_snapshot.rs` owns verified
+executable opening, sealed snapshot creation and bounded hashing. The facade
+keeps the existing import path (`LinuxHelperBootstrap`,
+`LinuxHelperAuthorization`, `LinuxHelperRequest`, `TrustedLinuxLauncher`,
+`LauncherStreams`, `OutputMode`, `helper_argument`,
+`helper_invocation_requested`, `protected_config_argument` and the
+`run_hidden_helper*` functions), and the inline launcher tests move to
+`linux_launcher/tests.rs` with unchanged names, so callers are unaffected.
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command
