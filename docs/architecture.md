@@ -219,6 +219,17 @@ test modules) so the sibling test modules and
 carry the same effective linux-broker visibility as before. Lifecycle,
 refusal/uncertainty and conformance assertions exist only in the test modules;
 no child re-implements them.
+The synthetic recovery fixture's runtime-v3 integration target keeps the same
+shape. `crates/fault-fixture/tests/runtime.rs` stays the crate root so every
+`#[test]` keeps its discovered name, and it delegates its scaffolding to child
+modules under `crates/fault-fixture/tests/runtime/` (named with `#[path]`
+attributes because an integration-test file is its own crate root):
+`runtime/running_server.rs` owns the `RunningServer` child-process owner with
+its `Drop` reaping, database cleanup and the connection/health assertions, and
+`runtime/http_support.rs` owns the newline and HTTP request helpers, the
+bootstrap/envelope builders and the schema assertion. The crate root
+re-exports those items, so the runtime-v3 conformance assertions stay in the
+test functions and no child re-implements them.
 The Linux native broker backend in
 `crates/watchdog/src/platform/linux_broker/native.rs` follows the same pattern.
 `native.rs` keeps the `NativeSystemdBackend` state, inherited-containment
