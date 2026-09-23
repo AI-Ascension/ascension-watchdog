@@ -106,6 +106,35 @@ entrypoints and the shared `pub(crate)` helpers keep their existing names, so
 callers in `native.rs` and the `watchdog` runtime are unchanged. Child files
 use explicit `#[path]` attributes to remain flat siblings of `native.rs`.
 
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. The lifecycle named-pipe transport is
+coordinated by `native.rs`, which re-exports it from the cohesive child
+`native_named_pipe.rs`: the peer identity captured from the local pipe
+(`NamedPipePeer`), the owner-only one-instance server (`NamedPipeServer`), the
+configured executable/session authentication and durable epoch/nonce replay
+window (`create_for_config`, `configure_replay_policy`,
+`authenticate_configured_peer`), the bounded length-prefixed message poll
+reader/writer (`read_frame`/`read_request`, `write_frame`/`write_request`) and
+the cancel/disconnect reset path. The public transport entrypoints keep their
+existing names, and the owner-only ACL, fixed local pipe namespace,
+remote-client rejection and replay-window monotonicity are unchanged. Child
+files use explicit `#[path]` attributes to remain flat siblings of
+`native.rs`.
+
+The reviewed Windows boundary in `crates/platform-windows/src/native.rs` is
+being split along the same seams. Service installation, binding and runtime are
+coordinated by `native.rs`, which re-exports them from the cohesive child
+`native_service.rs`: the idempotent least-privilege `ServiceInstallPlan`
+(`install_as`, `install_as_with_config`, `uninstall`), the opaque
+`ServiceBinding` and `StoppedServiceWitness` used by the uninstall path, the
+bounded `ScmHealthChecker`, and the readiness-gated `ServiceRuntime`
+(`run`, `run_with_readiness`) with `bind_installed_service`,
+`stop_bound_service` and `delete_bound_stopped_service`. The public service
+entrypoints keep their existing names, and the fixed service name, the refusal
+of the legacy `LocalSystem` installer and the canonical command-line/config
+revalidation before stop and delete are unchanged. Child files use explicit
+`#[path]` attributes to remain flat siblings of `native.rs`.
+
 Runtime construction and reconciliation coordination is extracted into
 `runtime/coordinator.rs`: runtime construction and `from_store`, the
 owner-local singleton `acquire_lock`, the ordered `reconcile_once` pass
