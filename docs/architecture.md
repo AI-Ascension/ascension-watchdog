@@ -76,6 +76,21 @@ still require an explicit opt-in, and `runtime.rs` re-exports the same public
 adapter values so `lib.rs` and every `super::launch_spec_*` caller are
 unchanged.
 
+The restricted process adapter is coordinated by `process.rs`, which keeps the
+existing entrypoints (`ProcessIdentity`, `OwnedChild`, `OutputSnapshot`,
+`ProcessSpawnError`, `ensure_identity`) and delegates to cohesive children:
+`process/validation.rs` owns the fail-closed pre-spawn validation of one
+approved component specification; `process/spawn_error.rs` owns the
+spawn-failure classification, including the retained `CleanupUncertain`
+outcome; `process/identity.rs` owns the launch identity, its validation and the
+executable-digest and creation-fingerprint helpers; `process/observation.rs`
+owns non-reaping child observation, the exact group signal and the bounded
+process-group membership proof; `process/output.rs` owns bounded diagnostic
+output capture; and `process/child.rs` owns `OwnedChild`, its process-group
+authority, the spawn path and the stop/reap/`Drop` cleanup paths. Every module
+is below the 1,000-line target, so no exception has to be documented. The
+functional acceptance tests remain at `process::tests` so test discovery and
+test names are unchanged.
 Operator command admission lives in `storage.rs::storage_admin.rs`, a sibling
 module that re-exports the ledger values and delegates to four cohesive
 children. `storage_admin/types.rs` owns the closed capability/command
