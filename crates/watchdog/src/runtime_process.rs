@@ -48,7 +48,7 @@
 
 use crate::config::{ComponentConfig, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::platform::SessionSelector as PlatformSessionSelector;
 use crate::platform::{ComponentKind as PlatformComponentKind, LaunchSpec};
 #[cfg(all(target_os = "linux", test))]

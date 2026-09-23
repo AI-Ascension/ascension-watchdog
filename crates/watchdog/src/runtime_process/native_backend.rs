@@ -29,6 +29,7 @@ use crate::platform::{
 use crate::platform::{ComponentKind as PlatformComponentKind, LaunchSpec};
 use crate::process::ProcessIdentity;
 use std::collections::BTreeMap;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::Duration;
@@ -281,7 +282,7 @@ impl NativeBackend {
                         &windows_spec,
                         &native_frame,
                         || {
-                            super::runtime_worker_admission::authorize(
+                            crate::runtime::runtime_worker_admission::authorize(
                                 config,
                                 specification,
                                 planned_containment,
@@ -308,7 +309,7 @@ impl NativeBackend {
                             &windows_spec,
                             &native_frame,
                             || {
-                                super::runtime_gateway_health_admission::authorize_windows(
+                                crate::runtime::runtime_gateway_health_admission::authorize_windows(
                                     config,
                                     specification,
                                     planned_containment,
