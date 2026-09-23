@@ -524,11 +524,14 @@ identity and its bounded object-path parser;
 strict line decoder and the ledger path guards;
 `platform/linux_broker/ledger_store.rs` owns `BrokerLedger`'s
 append/commit persistence and reservation admission. The coordinator keeps
-`mod ledger; pub use ledger::{BrokerLedger, JobBinding};` and the facade
-re-exports `LifecycleRecord`, `same_process_binding`, `parse_records`,
-`sync_directory` and `validate_protected_ledger_path` at their original
-visibilities so the broker, the socket server and the ledger tests keep their
-existing import paths. Intent-before-effect ordering, exact identity and
+`mod ledger; pub use ledger::{BrokerLedger, JobBinding};` and the facade keeps
+`pub(super)` re-exports of `LifecycleRecord` and `same_process_binding` (plus a
+`#[cfg(test)]` `LedgerState`) so `broker`, `fake_backend`, `native`,
+`native_queued_job` and the ledger tests keep their existing import paths. The
+strict line decoder and path guards (`parse_records`, `sync_directory`,
+`validate_protected_ledger_path`) stay `pub(super)` inside `ledger_records` and
+are imported directly by `ledger_store` and the moved tests rather than
+re-exported by the facade. Intent-before-effect ordering, exact identity and
 unknown outcomes are enforced only in `ledger_store`; no child re-implements
 them. The existing in-file tests moved unchanged to `ledger_tests.rs`.
 
