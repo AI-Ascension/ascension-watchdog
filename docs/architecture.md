@@ -210,6 +210,18 @@ re-serializes a live child proof, and re-exports `OwnershipProof`,
 so callers, tests and the `runtime.rs` imports are unchanged. There is exactly
 one construction and one validation path for a proof; the coordinator never
 re-implements either.
+Runtime process ownership is coordinated by `runtime_process.rs`. The Linux
+privileged helper path is delegated to one cohesive child,
+`runtime_process/linux_helper.rs`, which owns protected-bootstrap config
+reading and validation, worker/gateway-health bootstrap binding checks, the
+durable prepared-intent correlation and the exact delegated-cgroup-leaf proof
+(`validate_planned_cgroup_leaf`, `verify_current_cgroup_full_path`,
+`validate_exact_cgroup_child`, `cgroup_v2_mountpoint`). The coordinator
+re-exports `run_linux_helper_if_requested` so `runtime.rs` is unchanged and
+keeps the two cgroup predicates the existing regression tests call. The child
+delegates all process authority to `linux_launcher`/`linux_process`; it never
+widens containment and never re-implements the protected config or membership
+rules.
 
 Incompatible recovery interfaces must have explicit versions and digests and be
 integrated with their real consumers. Frozen runtime-v3 artifacts stay frozen.
