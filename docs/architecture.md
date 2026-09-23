@@ -234,7 +234,6 @@ unchanged. The generic `hex_digest`/`io_error` utilities and every identity,
 deadline and ownership bound stay with the coordinator; no child re-implements
 them.
 
-
 The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
 Launch admission, exact-nonce idempotence, receipts and the versioned
 inspect/stop lifecycle now live in `platform/linux_broker/broker.rs`, together
@@ -251,7 +250,6 @@ declarations also stay there. Durable admission, nonce replay, retained
 containment and uncertainty are enforced only in `broker`; no child
 re-implements them.
 
-
 The root-owned Linux broker stays coordinated by `platform/linux_broker.rs`.
 The Unix socket server and framed transport now live in
 `platform/linux_broker/transport.rs`: the one-request-per-connection `serve`
@@ -264,7 +262,6 @@ The coordinator re-exports `serve` and `bind_root_owned_socket` and keeps
 broker tests keep their existing import paths. Endpoint permissions, frame
 bounds, timeout budgets and typed failure responses are enforced only in
 `transport`; no child re-implements them.
-
 
 The linux broker unit tests in
 `crates/watchdog/src/platform/linux_broker/tests.rs` keep the same shape. The
