@@ -18,7 +18,9 @@ use super::{
 use crate::config::{DesiredMode, WatchdogConfig};
 use crate::error::{Result, WatchdogError};
 use rusqlite::{OpenFlags, TransactionBehavior, params};
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
