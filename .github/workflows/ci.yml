@@ -50,6 +50,17 @@ jobs:
       - name: Check documentation links
         if: runner.os == 'Linux'
         run: RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links --document-private-items" cargo doc --workspace --no-deps --locked
+      # The step above resolves the host target on Linux, where every
+      # `#[cfg(windows)]` item is compiled out, and the Windows leg skips it
+      # entirely - so nothing documented the native Windows surface.  This
+      # crate is pure Rust and needs no cross linker, so documenting it for
+      # the Windows target on Linux is cheap and closes that hole (#241).
+      - name: Check Windows native documentation links
+        if: runner.os == 'Linux'
+        run: |
+          rustup target add --toolchain 1.97.1 x86_64-pc-windows-gnu
+          RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links --document-private-items" \
+            cargo doc -p ascension-platform-windows --no-deps --locked --target x86_64-pc-windows-gnu
       - name: Run unit and synthetic tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
       - name: Classify Windows hosted-session evidence
