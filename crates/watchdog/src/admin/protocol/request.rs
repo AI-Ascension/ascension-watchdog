@@ -28,7 +28,7 @@ pub struct AdminRequest {
 ///
 /// A transport may retain the raw request only while authenticating it.  Once
 /// this context is constructed, the request credential is dropped and cannot
-/// be observed by an [`AdminDispatcher`] implementation.  The command
+/// be observed by an [`AdminDispatcher`](super::response::AdminDispatcher) implementation.  The command
 /// fingerprint is canonical: it covers the v1 contract, claimed capability,
 /// and closed command payload, while excluding the request UUID, deadline,
 /// transport identity, and credential.
