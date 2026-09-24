@@ -380,6 +380,43 @@ mod tests {
             None,
             &supervisor.worker_boot_id
         ));
+        let retained_reason = supervisor
+            .store
+            .component("harness")?
+            .and_then(|record| record.last_error)
+            .ok_or_else(|| {
+                WatchdogError::Conflict("quarantine lost its cleanup reason".to_owned())
+            })?;
+        // The retained record must survive later passive reconciliation
+        // passes: an owned-but-unsettled child keeps reporting `Running` to
+        // the observation layer, and neither a `Paused` operator intent nor a
+        // stale-heartbeat `Running` pass may re-stamp the record or clear the
+        // cleanup reason that explains why no replacement was launched.
+        for (mode, now_ms) in [
+            (crate::DesiredMode::Paused, 2_500),
+            (crate::DesiredMode::Paused, 2_501),
+            (crate::DesiredMode::Running, 3_000),
+        ] {
+            supervisor.store.set_desired_mode_at(mode, now_ms)?;
+            let report = supervisor.reconcile_once(now_ms + 1)?;
+            assert!(
+                report.started.is_empty(),
+                "quarantined cleanup launched a replacement: {report:?}"
+            );
+            assert!(report.stopped.is_empty());
+            assert_eq!(supervisor.children.len(), 1);
+            assert_eq!(supervisor.store.unsettled_launch_intents()?.len(), 1);
+            let record = supervisor
+                .store
+                .component("harness")?
+                .ok_or_else(|| WatchdogError::Conflict("missing durable record".to_owned()))?;
+            assert_eq!(
+                record.state,
+                crate::policy::ComponentState::Quarantined,
+                "uncertain cleanup must remain quarantined across reconciliation"
+            );
+            assert_eq!(record.last_error.as_deref(), Some(retained_reason.as_str()));
+        }
         supervisor.stop_component(
             &component,
             3000,

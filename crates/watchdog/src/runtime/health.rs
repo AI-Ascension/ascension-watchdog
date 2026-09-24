@@ -417,7 +417,18 @@ impl Supervisor {
                 report.quarantined.push(component.id.clone());
             }
             ReconcileAction::Wait | ReconcileAction::Noop | ReconcileAction::MarkSuspect => {
-                let state = if desired_mode == DesiredMode::Paused {
+                // A durable quarantine is not cleared by a passive pass.  The
+                // owned-but-unsettled child still reports `Running` to the
+                // observation layer, so a `Paused` (or stale-heartbeat
+                // `Running`) pass must not re-stamp the record: doing so
+                // erases both the `Quarantined` state and the cleanup reason
+                // that explains why no replacement was launched.
+                let quarantined = prior
+                    .as_ref()
+                    .is_some_and(|record| record.state == ComponentState::Quarantined);
+                let state = if quarantined {
+                    ComponentState::Quarantined
+                } else if desired_mode == DesiredMode::Paused {
                     ComponentState::Paused
                 } else if desired_mode.stops_children() {
                     ComponentState::Stopped
@@ -441,7 +452,11 @@ impl Supervisor {
                             last_restart_at_ms: prior
                                 .as_ref()
                                 .and_then(|record| record.last_restart_at_ms),
-                            last_error: None,
+                            last_error: if quarantined {
+                                prior.as_ref().and_then(|record| record.last_error.clone())
+                            } else {
+                                None
+                            },
                         },
                         now_ms,
                     )?;
