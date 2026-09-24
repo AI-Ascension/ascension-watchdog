@@ -16,6 +16,9 @@ mod runtime_worker_admission;
 #[path = "runtime_worker_bootstrap.rs"]
 mod runtime_worker_bootstrap;
 pub use runtime_gateway_health::GatewayHealthDiagnostics;
+#[cfg(test)]
+#[path = "runtime_stop_uncertainty_tests.rs"]
+mod runtime_stop_uncertainty_tests;
 #[cfg(all(test, windows))]
 #[path = "runtime_worker_windows_tests.rs"]
 mod runtime_worker_windows_tests;
