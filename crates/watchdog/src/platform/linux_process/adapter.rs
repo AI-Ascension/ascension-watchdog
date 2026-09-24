@@ -59,7 +59,7 @@ impl LinuxProcessAdapter {
     /// Construct an adapter with an explicit helper executable.
     ///
     /// This is the seam used by a real watchdog executable and by platform
-    /// tests.  The helper must dispatch [`super::linux_launcher::helper_argument`]
+    /// tests.  The helper must dispatch [`crate::platform::linux_launcher::helper_argument`]
     /// before normal CLI parsing; no direct-spawn fallback exists.
     pub fn with_cgroup_root_and_limit_and_launcher(
         root: impl Into<PathBuf>,

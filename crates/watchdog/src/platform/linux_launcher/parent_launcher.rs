@@ -493,7 +493,7 @@ impl TrustedLinuxLauncher {
 
     /// Construct a launcher from the executable containing the watchdog main.
     ///
-    /// The root executable must dispatch [`helper_argument`] before normal CLI
+    /// The root executable must dispatch [`helper_argument`](super::helper_argument) before normal CLI
     /// parsing.  This constructor does not silently fall back to direct target
     /// spawning when that dispatch is absent.
     ///
