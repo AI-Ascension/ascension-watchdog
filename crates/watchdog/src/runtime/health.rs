@@ -417,7 +417,19 @@ impl Supervisor {
                 report.quarantined.push(component.id.clone());
             }
             ReconcileAction::Wait | ReconcileAction::Noop | ReconcileAction::MarkSuspect => {
-                let state = if desired_mode == DesiredMode::Paused {
+                // A retained owned child whose containment cleanup outcome is
+                // unknown is a blocking disposition, not operator state.  A
+                // later paused or running desired mode must not erase the
+                // durable record that the child is still unresolved: the
+                // component stays quarantined and its cleanup error is kept
+                // unchanged until an explicit stop/cleanup resolves it.
+                let uncertain_cleanup = is_running
+                    && prior
+                        .as_ref()
+                        .is_some_and(|record| record.state == ComponentState::Quarantined);
+                let state = if uncertain_cleanup {
+                    ComponentState::Quarantined
+                } else if desired_mode == DesiredMode::Paused {
                     ComponentState::Paused
                 } else if desired_mode.stops_children() {
                     ComponentState::Stopped
@@ -441,7 +453,11 @@ impl Supervisor {
                             last_restart_at_ms: prior
                                 .as_ref()
                                 .and_then(|record| record.last_restart_at_ms),
-                            last_error: None,
+                            last_error: if uncertain_cleanup {
+                                prior.as_ref().and_then(|record| record.last_error.clone())
+                            } else {
+                                None
+                            },
                         },
                         now_ms,
                     )?;
