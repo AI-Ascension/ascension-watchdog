@@ -48,19 +48,45 @@ jobs:
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Check documentation links
+        # Read the verdict from the LOG, not the step conclusion: a renamed or
+        # mistyped `-D rustdoc::…` deny is an inert `unknown lint` warning that
+        # rustdoc reports and then exits 0 on, so cargo's status alone cannot
+        # tell an accepted deny from an ignored one.
         if: runner.os == 'Linux'
-        run: RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links --document-private-items" cargo doc --workspace --no-deps --locked
+        run: |
+          set -o pipefail
+          log=target/doc.log
+          mkdir -p target
+          status=0
+          RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links --document-private-items" \
+            cargo doc --workspace --no-deps --locked 2>&1 | tee "$log" || status=$?
+          errors=$(awk '/^error/{count++} END{print count+0}' "$log")
+          unknown=$(awk '/unknown lint/{count++} END{print count+0}' "$log")
+          warnings=$(awk '/^warning/{count++} END{print count+0}' "$log")
+          echo "doc: exit=$status errors=$errors warnings=$warnings unknown_lints=$unknown"
+          [ "$status" -eq 0 ] && [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ] && [ "$unknown" -eq 0 ]
       # The step above resolves the host target on Linux, where every
       # `#[cfg(windows)]` item is compiled out, and the Windows leg skips it
       # entirely - so nothing documented the native Windows surface.  This
       # crate is pure Rust and needs no cross linker, so documenting it for
       # the Windows target on Linux is cheap and closes that hole (#241).
       - name: Check Windows native documentation links
+        # Same mechanism as the host gate above: a renamed deny is inert, so the
+        # counters are read from the log rather than trusting the exit code.
         if: runner.os == 'Linux'
         run: |
           rustup target add --toolchain 1.97.1 x86_64-pc-windows-gnu
+          set -o pipefail
+          log=target/windows-doc.log
+          mkdir -p target
+          status=0
           RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links --document-private-items" \
-            cargo doc -p ascension-platform-windows --no-deps --locked --target x86_64-pc-windows-gnu
+            cargo doc -p ascension-platform-windows --no-deps --locked --target x86_64-pc-windows-gnu 2>&1 | tee "$log" || status=$?
+          errors=$(awk '/^error/{count++} END{print count+0}' "$log")
+          unknown=$(awk '/unknown lint/{count++} END{print count+0}' "$log")
+          warnings=$(awk '/^warning/{count++} END{print count+0}' "$log")
+          echo "windows-doc: exit=$status errors=$errors warnings=$warnings unknown_lints=$unknown"
+          [ "$status" -eq 0 ] && [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ] && [ "$unknown" -eq 0 ]
       - name: Run unit and synthetic tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
       - name: Classify Windows hosted-session evidence
