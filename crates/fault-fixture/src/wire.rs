@@ -175,7 +175,7 @@ impl Frame {
 /// A bounded client for the fixture's one-frame-per-connection loopback wire.
 ///
 /// Each request still opens exactly one connection, but the connect itself is
-/// retried on a transient loopback timeout (see [`connect_bounded`]); the
+/// retried on a transient loopback timeout (see `connect_bounded`); the
 /// one-frame-per-connection contract and the read deadline are unchanged.
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
