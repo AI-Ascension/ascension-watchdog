@@ -49,7 +49,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Check documentation links
         if: runner.os == 'Linux'
-        run: RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links --document-private-items" cargo doc --workspace --no-deps --locked
+        run: RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links --document-private-items" cargo doc --workspace --no-deps --locked
       # The step above resolves the host target on Linux, where every
       # `#[cfg(windows)]` item is compiled out, and the Windows leg skips it
       # entirely - so nothing documented the native Windows surface.  This
@@ -59,7 +59,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           rustup target add --toolchain 1.97.1 x86_64-pc-windows-gnu
-          RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links --document-private-items" \
+          RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links --document-private-items" \
             cargo doc -p ascension-platform-windows --no-deps --locked --target x86_64-pc-windows-gnu
       - name: Run unit and synthetic tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
