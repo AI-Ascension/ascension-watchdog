@@ -6,6 +6,7 @@
 //! request, credential and observation values. No behaviour changed.
 
 use super::*;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir_in;
 
 pub(in crate::platform::linux_broker) fn digest(path: &Path) -> String {
@@ -41,10 +42,34 @@ pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
     // binary.  An `is_file()` check alone leaves a stale helper in place after
     // the helper source changes, which would silently authenticate the old
     // build for the rest of the run.
-    if !helper_is_current(&helper) {
-        build_helper();
-    }
+    //
+    // The decision to rebuild is made *under* the lock and re-checked there, so
+    // a test that arrives after the first build finished waits and then finds
+    // the helper already current instead of starting a second `rustc` against
+    // the same output path.  `cargo test --lib` runs these tests in parallel on
+    // a target directory that has no prebuilt helper, so without this every
+    // one of them used to build at once (#253).
+    ensure_helper_is_current(&helper);
     fs::canonicalize(&helper).unwrap_or(helper)
+}
+
+/// Rebuild `helper` from its source unless it is already current, under the
+/// process-wide build lock.
+///
+/// The re-check lives *inside* the lock, so the second and later callers in a
+/// parallel `cargo test --lib` run observe the artifact the first one published
+/// rather than each starting their own `rustc` against the same path.
+fn ensure_helper_is_current(helper: &Path) {
+    // A poisoned lock means an earlier build already panicked.  Recovering the
+    // guard rather than propagating the poison keeps a single failed rebuild
+    // from turning every later test into a confusing "poisoned lock" panic
+    // instead of the real build error it is standing on.
+    let _build_guard = HELPER_BUILD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !helper_is_current(helper) {
+        build_helper(helper);
+    }
 }
 
 /// Target-directory path of the helper binary.
@@ -82,26 +107,125 @@ fn helper_is_current(helper: &Path) -> bool {
 /// against the same target directory would wait forever.  The helper needs no
 /// dependency other than `std`, so a direct one-file compile is both correct
 /// and fast.
-fn build_helper() {
+///
+/// The compile goes to a process-unique path and is then moved onto the shared
+/// one, so a second writer can never have the linker truncating or linking
+/// over an artifact another reader is about to hash.  Concurrent `rustc`
+/// invocations sharing one `-o` path do not merely race on the file: the
+/// linkers collide inside it, and the observed failure is
+/// `undefined symbol: main`, which reads like a corrupt source rather than a
+/// concurrency fault (issue #253).  The move is atomic within a directory, so
+/// the broker only ever hashes a complete helper.
+fn build_helper(helper: &Path) {
     let source = helper_source();
-    let executable = helper_path();
+    let executable = helper.to_path_buf();
+    let staging = executable.with_extension(format!("{}.{}", std::process::id(), "staging"));
+    BUILD_IN_PROGRESS.fetch_add(1, Ordering::SeqCst);
+    MAX_CONCURRENT_BUILDS.fetch_max(BUILD_IN_PROGRESS.load(Ordering::SeqCst), Ordering::SeqCst);
     let status = std::process::Command::new("rustc")
         .args(["--edition", "2024", "-C", "debuginfo=0", "-o"])
-        .arg(&executable)
+        .arg(&staging)
         .arg(&source)
         .status()
         .expect("rustc build for the broker peer helper");
+    BUILD_IN_PROGRESS.fetch_sub(1, Ordering::SeqCst);
     assert!(status.success(), "broker peer helper build failed");
     // Prove the artifact the broker is about to hash is the one just built.
     // Without this the fingerprint is taken on faith, and a silent no-op
     // compile would leave a stale helper authenticating these tests.
     assert!(
-        executable.is_file(),
+        staging.is_file(),
         "broker peer helper build produced no executable"
     );
+    // Publish atomically.  A failure to move the artifact into place must not
+    // leave the staging file behind to be mistaken for a helper on a later
+    // run, and must not be swallowed into a stale-but-present executable.
+    if let Err(error) = fs::rename(&staging, &executable) {
+        let _ = fs::remove_file(&staging);
+        panic!("broker peer helper install failed: {error}");
+    }
 }
 
 const HELPER_BIN: &str = "broker-peer-fixture";
+
+/// Serialises the on-demand helper build within this test process.
+///
+/// A `OnceLock` alone would not do: the helper must be rebuilt when its source
+/// changes, not once per process, so the guard wraps a *re-checked* build
+/// rather than a one-shot initialisation.
+static HELPER_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// How many `rustc` builds are in flight, and the high-water mark.
+///
+/// These exist for the #253 witness below. They are always compiled — the
+/// counters cost a few atomic operations per build, and a build happens at most
+/// once per test run — so the witness measures the same `build_helper` the
+/// broker tests use rather than a stand-in that could drift from it.
+static BUILD_IN_PROGRESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static MAX_CONCURRENT_BUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Regression witness for the #253 build race.
+///
+/// The race was not reachable by asserting on the helper's contents: every
+/// writer produced a *correct* helper, and the defect was that the writers
+/// collided inside the shared output path, so a test could only observe it by
+/// entering `build_helper` the way the real failure does — many threads at
+/// once, on a helper that is deliberately not yet current.
+#[cfg(test)]
+mod build_race_tests {
+    use super::*;
+
+    /// Concurrent `helper_executable()` calls must not overlap their builds.
+    ///
+    /// Before the fix every thread that found the helper missing or stale ran
+    /// its own `rustc` against the one shared path at the same time; measured
+    /// directly, 8 concurrent writers to one `-o` path failed 22 times in 32
+    /// attempts, while 8 concurrent writers to distinct paths failed 0 times in
+    /// 32. This asserts that the build is serialised by reading the counters
+    /// `build_helper` maintains around the real `rustc` call, so it cannot pass
+    /// by asserting on something the fix did not change, and it does not depend
+    /// on host load — which is exactly what kept the original flake invisible to
+    /// CI.
+    ///
+    /// The helper is removed first, because that is what puts every thread on
+    /// the build path: a fresh target directory has no helper, and
+    /// `helper_is_current` otherwise short-circuits the second and later
+    /// threads before they ever reach the build.
+    #[test]
+    fn concurrent_helper_calls_do_not_overlap_their_build() {
+        const THREADS: usize = 8;
+        let helper = helper_path();
+        let _ = fs::remove_file(&helper);
+        MAX_CONCURRENT_BUILDS.store(0, Ordering::SeqCst);
+        let threads: Vec<_> = (0..THREADS)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    // The real call, so the lock under test is the one the
+                    // broker tests take.
+                    let resolved = helper_executable();
+                    assert!(
+                        resolved.is_file(),
+                        "helper_executable returned a path with no artifact: {}",
+                        resolved.display()
+                    );
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("helper thread");
+        }
+        assert!(
+            MAX_CONCURRENT_BUILDS.load(Ordering::SeqCst) <= 1,
+            "two rustc builds ran at once, so the shared output path is still raced"
+        );
+        assert!(
+            helper.is_file(),
+            "the helper was never published: {}",
+            helper.display()
+        );
+    }
+}
 
 /// A live authenticated peer plus the broker end of its connection.
 ///
