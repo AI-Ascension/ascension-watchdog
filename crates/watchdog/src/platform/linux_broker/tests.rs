@@ -20,7 +20,7 @@ mod fixtures;
 pub(super) use fake_backend::FakeBackend;
 pub(in crate::platform::linux_broker) use fixtures::PeerSession;
 pub(super) use fixtures::{
-    credentials, observation, policy, protected_tempdir, request, transport_policy,
+    credentials, digest, observation, policy, protected_tempdir, request, transport_policy,
 };
 
 #[test]

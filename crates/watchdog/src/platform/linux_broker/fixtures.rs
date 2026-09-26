@@ -36,16 +36,43 @@ pub(in crate::platform::linux_broker) fn wait_for_peer_executable(pid: u32) -> P
 /// broker's `authenticate_peer` hash cheap and the request deadline from
 /// measuring test-binary size.
 pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
-    let helper = std::env::current_exe()
+    let helper = helper_path();
+    // Rebuild whenever the helper is missing *or* its source is newer than the
+    // binary.  An `is_file()` check alone leaves a stale helper in place after
+    // the helper source changes, which would silently authenticate the old
+    // build for the rest of the run.
+    if !helper_is_current(&helper) {
+        build_helper();
+    }
+    fs::canonicalize(&helper).unwrap_or(helper)
+}
+
+/// Target-directory path of the helper binary.
+fn helper_path() -> PathBuf {
+    std::env::current_exe()
         .expect("test executable path")
         .parent()
         .and_then(Path::parent)
         .expect("target directory")
-        .join(HELPER_BIN);
-    if !helper.is_file() {
-        build_helper();
-    }
-    fs::canonicalize(&helper).unwrap_or(helper)
+        .join(HELPER_BIN)
+}
+
+/// Source path of the helper.
+fn helper_source() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("bin")
+        .join("broker_peer_fixture.rs")
+}
+
+/// Whether `helper` is present and no older than its source.
+fn helper_is_current(helper: &Path) -> bool {
+    let Ok(helper_modified) = fs::metadata(helper).and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+    fs::metadata(helper_source())
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|source_modified| source_modified <= helper_modified)
 }
 
 /// Build the helper with `rustc` directly.
@@ -56,16 +83,8 @@ pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
 /// dependency other than `std`, so a direct one-file compile is both correct
 /// and fast.
 fn build_helper() {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("bin")
-        .join("broker_peer_fixture.rs");
-    let executable = std::env::current_exe()
-        .expect("test executable path")
-        .parent()
-        .and_then(Path::parent)
-        .expect("target directory")
-        .join(HELPER_BIN);
+    let source = helper_source();
+    let executable = helper_path();
     let status = std::process::Command::new("rustc")
         .args([
             "--edition",
@@ -79,6 +98,13 @@ fn build_helper() {
         .status()
         .expect("rustc build for the broker peer helper");
     assert!(status.success(), "broker peer helper build failed");
+    // Prove the artifact the broker is about to hash is the one just built.
+    // Without this the fingerprint is taken on faith, and a silent no-op
+    // compile would leave a stale helper authenticating these tests.
+    assert!(
+        executable.is_file(),
+        "broker peer helper build produced no executable"
+    );
 }
 
 const HELPER_BIN: &str = "broker-peer-fixture";
@@ -93,6 +119,7 @@ pub(in crate::platform::linux_broker) struct PeerSession {
     socket: Option<UnixStream>,
     child: std::process::Child,
     reply_path: PathBuf,
+    closed_path: PathBuf,
     release_path: PathBuf,
     _directory: tempfile::TempDir,
 }
@@ -121,12 +148,14 @@ impl PeerSession {
         let path = directory.path().join("broker-peer.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).map_err(io_error)?;
         let reply_path = directory.path().join("broker-reply.bin");
+        let closed_path = directory.path().join("broker-closed");
         let release_path = directory.path().join("broker-release");
         let mut command = std::process::Command::new(&peer.executable);
         command
             .arg(&path)
             .arg(&reply_path)
             .arg(&release_path)
+            .arg(&closed_path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null());
         if drop_reply {
@@ -141,6 +170,7 @@ impl PeerSession {
             socket: Some(socket),
             child,
             reply_path,
+            closed_path,
             release_path,
             _directory: directory,
         })
@@ -196,6 +226,24 @@ impl PeerSession {
         }
         Err(BrokerError::Io(
             "broker peer helper never relayed a reply".to_owned(),
+        ))
+    }
+
+    /// Block until the helper has stopped using the socket.
+    ///
+    /// A broker write only fails once the peer's end is closed, so a test that
+    /// needs the broker to observe a lost response has to wait for this marker
+    /// first.  Without it the answer can sit in the kernel buffer and the
+    /// broker succeeds, so the test would assert nothing.
+    pub(in crate::platform::linux_broker) fn wait_for_close(&self) -> BrokerResult<()> {
+        for _ in 0..3_000 {
+            if self.closed_path.is_file() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(BrokerError::Io(
+            "broker peer helper never closed the connection".to_owned(),
         ))
     }
 

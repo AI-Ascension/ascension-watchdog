@@ -1,7 +1,11 @@
 use super::*;
 use crate::platform::gateway_health::GatewayHealthBootstrap;
-use crate::platform::linux_broker::tests::{FakeBackend, PeerSession, transport_policy};
-use crate::platform::linux_broker::{BrokerComponent, BrokerLifecycleState, BrokerPolicy};
+use crate::platform::linux_broker::tests::{
+    FakeBackend, PeerSession, digest, transport_policy,
+};
+use crate::platform::linux_broker::{
+    BrokerComponent, BrokerLifecycleState, BrokerPolicy, authenticate_peer,
+};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use uuid::Uuid;
@@ -33,6 +37,69 @@ fn gateway_policy() -> BrokerPolicy {
         peer: base.peer,
         components: BTreeMap::from([(BrokerComponent::Gateway, launch)]),
     }
+}
+
+#[test]
+fn peer_authentication_refuses_each_withdrawn_peer_approval()
+-> Result<(), Box<dyn std::error::Error>> {
+    let policy = gateway_policy();
+    let session = PeerSession::start(&policy.peer)?;
+    let credentials = session.credentials;
+    let approved = policy.peer.clone();
+    let deadline = Instant::now() + Duration::from_secs(30);
+
+    // Control.  Without it the refusals below would just as happily be
+    // satisfied by a fixture that authenticates nobody.
+    authenticate_peer(credentials, &approved, deadline)?;
+
+    // The approved path, with a digest that does not describe its contents.
+    let mut wrong_digest = approved.clone();
+    wrong_digest.executable_sha256 = "0".repeat(64);
+    assert!(authenticate_peer(credentials, &wrong_digest, deadline).is_err());
+
+    // The approved path, with the hash of some other file entirely.
+    let mut swapped_digest = approved.clone();
+    swapped_digest.executable_sha256 =
+        digest(&fs::canonicalize("/usr/bin/true").expect("fixture executable path"));
+    assert!(authenticate_peer(credentials, &swapped_digest, deadline).is_err());
+
+    // The approved digest, but the policy now points at another executable, so
+    // the running peer's own `/proc/<pid>/exe` is no longer the approved one.
+    let mut wrong_path = approved.clone();
+    wrong_path.executable = fs::canonicalize("/usr/bin/true")?;
+    assert!(authenticate_peer(credentials, &wrong_path, deadline).is_err());
+
+    // A live peer process that is not the connected one.  Note this must be a
+    // *different executable*, not a second copy of the helper: two copies of
+    // the approved binary are genuinely approved, and asserting a refusal
+    // there would be asserting a bug.
+    let other = PeerSession::start(&approved)?;
+    let mut other_executable = approved.clone();
+    other_executable.executable = fs::canonicalize("/usr/bin/sleep")?;
+    other_executable.executable_sha256 =
+        digest(&fs::canonicalize("/usr/bin/sleep").expect("sleep fixture path"));
+    assert!(authenticate_peer(other.credentials, &other_executable, deadline).is_err());
+
+    // Credentials that name a PID which is not the peer at all.  The pidfd pin
+    // has to fail rather than authenticate whatever now owns that PID.
+    let mut wrong_pid = credentials;
+    wrong_pid.pid = credentials.pid.wrapping_add(1).max(1);
+    assert!(authenticate_peer(wrong_pid, &approved, deadline).is_err());
+
+    // UID and GID are compared against the policy, not merely plausible.
+    let mut wrong_uid = credentials;
+    wrong_uid.uid = credentials.uid.wrapping_add(1);
+    assert!(authenticate_peer(wrong_uid, &approved, deadline).is_err());
+    let mut wrong_gid = credentials;
+    wrong_gid.gid = credentials.gid.wrapping_add(1);
+    assert!(authenticate_peer(wrong_gid, &approved, deadline).is_err());
+
+    // A PID that is not running at all, so the identity pin cannot be taken.
+    let mut dead_pid = credentials;
+    dead_pid.pid = u32::MAX;
+    assert!(authenticate_peer(dead_pid, &approved, deadline).is_err());
+
+    Ok(())
 }
 
 #[test]
@@ -173,14 +240,24 @@ fn lost_binary_response_retains_receipt_for_inspect_and_exact_stop()
     let policy = gateway_policy();
     let mut session = PeerSession::start_dropping_reply(&policy.peer)?;
     let credentials = session.credentials;
-    let mut broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
+    let broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
     let mut server = session.take_socket()?;
     // The helper relays the request, then closes the connection instead of
     // reading the answer, so the broker observes a lost response.
     session.exchange(&encode_request(&request, &bootstrap)?)?;
+    // Wait until the helper's end is really closed.  A Unix socket write only
+    // fails after the peer is gone, so without this the broker could still
+    // write into the kernel buffer and succeed, and the assertions below would
+    // be testing the happy path under a different name.
+    session.wait_for_close()?;
     let deadline = Instant::now() + Duration::from_secs(30);
-    let result = super::super::handle_connection(&mut server, &mut broker, deadline);
-    assert!(result.is_err());
+    let handle = std::thread::spawn(move || {
+        let mut broker = broker;
+        let result = super::super::handle_connection(&mut server, &mut broker, deadline);
+        (result, broker)
+    });
+    let (result, mut broker) = handle.join().expect("broker fixture thread");
+    assert!(result.is_err(), "a peer that vanished must not be answered");
     assert_eq!(broker.backend.starts, 1);
     assert_eq!(
         broker.inspect(credentials, request.clone())?.state,

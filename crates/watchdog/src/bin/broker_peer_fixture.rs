@@ -22,11 +22,17 @@
 //! the deadline enforcement all still apply, they simply apply to a small
 //! object instead of a hundred-megabyte one.
 //!
-//! Usage: `broker-peer-fixture SOCKET REPLY_PATH RELEASE_PATH [DROP_REPLY]`.
+//! Usage: `broker-peer-fixture SOCKET REPLY_PATH RELEASE_PATH CLOSED_PATH [DROP_REPLY]`.
 //!
 //! With `DROP_REPLY`, the helper closes the connection instead of relaying the
 //! broker's answer, so the test can observe what the broker does when a peer
 //! vanishes mid-request.
+//!
+//! `CLOSED_PATH` is created immediately after the helper stops using the
+//! socket.  A Unix socket write only fails once the peer has been closed, so a
+//! test that needs the broker to observe a lost response waits for that file
+//! before calling the broker; without it the broker's answer can land in the
+//! kernel buffer and the "peer vanished" case would pass for the wrong reason.
 //!
 //! The helper stays alive until `RELEASE_PATH` appears, so the peer process
 //! still exists for every `authenticate_peer` call the broker makes - the
@@ -51,8 +57,12 @@ fn main() {
         (arguments.next(), arguments.next(), arguments.next())
     else {
         eprintln!(
-            "broker-peer-fixture: SOCKET, REPLY_PATH and RELEASE_PATH arguments are required"
+            "broker-peer-fixture: SOCKET, REPLY_PATH, RELEASE_PATH and CLOSED_PATH arguments are required"
         );
+        std::process::exit(2);
+    };
+    let Some(closed) = arguments.next() else {
+        eprintln!("broker-peer-fixture: CLOSED_PATH argument is required");
         std::process::exit(2);
     };
     let drop_reply = arguments
@@ -62,6 +72,7 @@ fn main() {
         &socket,
         Path::new(&reply),
         PathBuf::from(release),
+        PathBuf::from(closed),
         drop_reply,
     ) {
         eprintln!("broker-peer-fixture: {error}");
@@ -80,6 +91,7 @@ fn run(
     socket: &std::ffi::OsStr,
     reply: &std::path::Path,
     release: PathBuf,
+    closed: PathBuf,
     drop_reply: bool,
 ) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(socket)?;
@@ -94,6 +106,7 @@ fn run(
         // lingers until released so a later `authenticate_peer` still finds a
         // live peer, exactly as the test's follow-up inspect/stop calls need.
         drop(stream);
+        std::fs::File::create(&closed)?;
         wait_for_release(&release)?;
         return Ok(());
     }
@@ -102,6 +115,8 @@ fn run(
     let mut file = std::fs::File::create(reply)?;
     file.write_all(&response)?;
     file.flush()?;
+    drop(stream);
+    std::fs::File::create(&closed)?;
     wait_for_release(&release)
 }
 
