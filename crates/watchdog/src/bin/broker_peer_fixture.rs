@@ -32,11 +32,19 @@
 //! still exists for every `authenticate_peer` call the broker makes - the
 //! broker re-authenticates on each call, and a helper that exited early would
 //! make the pidfd pin fail for reasons unrelated to what is under test.
+//!
+//! It is a Linux-only peer, so on other targets the binary is still declared
+//! (the crate's `cargo build --bins` gate builds it everywhere) but refuses to
+//! run rather than pretending to relay a `SO_PEERCRED` peer it cannot spawn.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "linux")]
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
     let (Some(socket), Some(reply), Some(release)) =
@@ -61,6 +69,13 @@ fn main() {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("broker-peer-fixture is only available on Linux");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "linux")]
 fn run(
     socket: &std::ffi::OsStr,
     reply: &std::path::Path,
@@ -90,6 +105,7 @@ fn run(
     wait_for_release(&release)
 }
 
+#[cfg(target_os = "linux")]
 fn wait_for_release(release: &Path) -> std::io::Result<()> {
     for _ in 0..600_000 {
         if release.exists() {
