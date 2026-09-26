@@ -86,13 +86,7 @@ fn build_helper() {
     let source = helper_source();
     let executable = helper_path();
     let status = std::process::Command::new("rustc")
-        .args([
-            "--edition",
-            "2024",
-            "-C",
-            "debuginfo=0",
-            "-o",
-        ])
+        .args(["--edition", "2024", "-C", "debuginfo=0", "-o"])
         .arg(&executable)
         .arg(&source)
         .status()
@@ -189,7 +183,10 @@ impl PeerSession {
 
     /// Write `request` to the peer helper's stdin.  The helper relays it to
     /// the broker, half-closes, and writes the broker's reply to its stdout.
-    pub(in crate::platform::linux_broker) fn exchange(&mut self, request: &[u8]) -> BrokerResult<()> {
+    pub(in crate::platform::linux_broker) fn exchange(
+        &mut self,
+        request: &[u8],
+    ) -> BrokerResult<()> {
         use std::io::Write;
         self.child
             .stdin

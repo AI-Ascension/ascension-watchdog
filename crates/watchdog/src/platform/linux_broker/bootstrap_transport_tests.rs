@@ -1,8 +1,6 @@
 use super::*;
 use crate::platform::gateway_health::GatewayHealthBootstrap;
-use crate::platform::linux_broker::tests::{
-    FakeBackend, PeerSession, digest, transport_policy,
-};
+use crate::platform::linux_broker::tests::{FakeBackend, PeerSession, digest, transport_policy};
 use crate::platform::linux_broker::{
     BrokerComponent, BrokerLifecycleState, BrokerPolicy, authenticate_peer,
 };
