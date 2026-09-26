@@ -48,25 +48,36 @@ pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
     fs::canonicalize(&helper).unwrap_or(helper)
 }
 
+/// Build the helper with `rustc` directly.
+///
+/// Re-entering `cargo` here would deadlock: the enclosing `cargo test` holds
+/// the build-directory lock for the whole run, so a nested `cargo build`
+/// against the same target directory would wait forever.  The helper needs no
+/// dependency other than `std`, so a direct one-file compile is both correct
+/// and fast.
 fn build_helper() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("bin")
+        .join("broker_peer_fixture.rs");
+    let executable = std::env::current_exe()
+        .expect("test executable path")
         .parent()
         .and_then(Path::parent)
-        .expect("workspace root");
-    let status = std::process::Command::new(env!("CARGO"))
-        .current_dir(workspace)
+        .expect("target directory")
+        .join(HELPER_BIN);
+    let status = std::process::Command::new("rustc")
         .args([
-            "build",
-            "--locked",
-            "--offline",
-            "--package",
-            "ascension-watchdog",
-            "--bin",
-            HELPER_BIN,
+            "--edition",
+            "2024",
+            "-C",
+            "debuginfo=0",
+            "-o",
         ])
+        .arg(&executable)
+        .arg(&source)
         .status()
-        .expect("cargo build for the broker peer helper");
+        .expect("rustc build for the broker peer helper");
     assert!(status.success(), "broker peer helper build failed");
 }
 
