@@ -18,8 +18,9 @@ mod fake_backend;
 mod fixtures;
 
 pub(super) use fake_backend::FakeBackend;
+pub(in crate::platform::linux_broker) use fixtures::PeerSession;
 pub(super) use fixtures::{
-    credentials, observation, policy, protected_tempdir, request, transport_policy,
+    credentials, digest, observation, policy, protected_tempdir, request, transport_policy,
 };
 
 #[test]
@@ -619,16 +620,13 @@ fn stop_confirmation_timeout_retains_active_ownership() {
 fn versioned_lifecycle_round_trip_uses_real_unix_stream_transport() {
     let policy = transport_policy();
     let request = request("transport-inspect");
-    let peer = PeerCredentials {
-        pid: std::process::id(),
-        uid: policy.peer.uid,
-        gid: policy.peer.gid,
-    };
+    let mut session = PeerSession::start(&policy.peer).expect("broker peer session");
+    let peer = session.credentials;
     let mut broker = LinuxSystemdBroker::new(policy.clone(), FakeBackend::new());
     broker
         .handle(peer, request.clone())
         .expect("seed exact committed unit");
-    let (mut client, mut server) = UnixStream::pair().expect("unix stream pair");
+    let mut server = session.take_socket().expect("broker socket");
     let join = thread::spawn(move || {
         handle_connection(&mut server, &mut broker, Instant::now() + MAX_IO_TIMEOUT)
     });
@@ -638,15 +636,11 @@ fn versioned_lifecycle_round_trip_uses_real_unix_stream_transport() {
         request,
     };
     let bytes = serde_json::to_vec(&envelope).expect("lifecycle request JSON");
-    client.write_all(&bytes).expect("write lifecycle request");
-    client
-        .shutdown(std::net::Shutdown::Write)
-        .expect("finish lifecycle request");
-    let response =
-        read_frame(&mut client, Instant::now() + MAX_IO_TIMEOUT).expect("read lifecycle response");
+    session.exchange(&bytes).expect("write lifecycle request");
     join.join()
         .expect("transport server thread")
         .expect("transport request");
+    let response = session.reply().expect("read lifecycle response");
     let response: LifecycleWireResponseOwned =
         parse_json(&response, "lifecycle response").expect("closed lifecycle response");
     assert!(response.accepted);

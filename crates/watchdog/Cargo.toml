@@ -14,6 +14,14 @@ path = "src/lib.rs"
 name = "watchdog"
 path = "src/main.rs"
 
+# Test-only authenticated peer for the linux broker's transport tests.  It
+# exists so those tests can hash a small peer executable instead of the whole
+# test binary; see the module documentation.  It is never installed or
+# launched outside the test suite.
+[[bin]]
+name = "broker-peer-fixture"
+path = "src/bin/broker_peer_fixture.rs"
+
 [dependencies]
 base64 = "=0.22.1"
 fs2 = "0.4.3"
