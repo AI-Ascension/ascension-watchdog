@@ -3,7 +3,6 @@ use crate::platform::gateway_health::GatewayHealthBootstrap;
 use crate::platform::linux_broker::tests::{FakeBackend, PeerSession, transport_policy};
 use crate::platform::linux_broker::{BrokerComponent, BrokerLifecycleState, BrokerPolicy};
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -143,16 +142,16 @@ fn authenticated_unix_binary_launch_delivers_exact_frame_once()
     let broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
     let deadline = Instant::now() + Duration::from_secs(30);
     let bytes = encode_request(&request, &bootstrap)?;
-    let mut server = session.socket.try_clone()?;
+    let mut server = session.take_socket()?;
     let handle = std::thread::spawn(move || {
         let mut broker = broker;
         let result = super::super::handle_connection(&mut server, &mut broker, deadline);
         (result, broker)
     });
     session.exchange(&bytes)?;
-    let response = session.reply()?;
     let (result, mut broker) = handle.join().expect("broker fixture thread");
     result?;
+    let response = session.reply()?;
     let receipt = decode_response(&response, &request, bootstrap.binding())?;
     assert_eq!(broker.backend.starts, 1);
     assert_eq!(broker.backend.bootstraps.len(), 1);
@@ -172,22 +171,17 @@ fn lost_binary_response_retains_receipt_for_inspect_and_exact_stop()
 -> Result<(), Box<dyn std::error::Error>> {
     let (request, bootstrap) = fixture()?;
     let policy = gateway_policy();
-    let mut session = PeerSession::start(&policy.peer)?;
+    let mut session = PeerSession::start_dropping_reply(&policy.peer)?;
     let credentials = session.credentials;
     let mut broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
-    let mut server = session.socket.try_clone()?;
-    // Send the request, then drop the connection without reading the reply so
-    // the broker observes a lost response.
+    let mut server = session.take_socket()?;
+    // The helper relays the request, then closes the connection instead of
+    // reading the answer, so the broker observes a lost response.
     session.exchange(&encode_request(&request, &bootstrap)?)?;
-    drop(session);
-    assert!(
-        super::super::handle_connection(
-            &mut server,
-            &mut broker,
-            Instant::now() + Duration::from_secs(30)
-        )
-        .is_err()
-    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let result = super::super::handle_connection(&mut server, &mut broker, deadline);
+    session.wait_for_exit()?;
+    assert!(result.is_err());
     assert_eq!(broker.backend.starts, 1);
     assert_eq!(
         broker.inspect(credentials, request.clone())?.state,
@@ -214,13 +208,13 @@ fn invalid_binary_frame_never_reserves_or_calls_backend() -> Result<(), Box<dyn 
     let mut broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
     let mut bytes = encode_request(&request, &bootstrap)?;
     *bytes.last_mut().expect("frame exists") ^= 1;
-    let (mut client, mut server) = UnixStream::pair()?;
-    client.write_all(&bytes)?;
-    client.shutdown(std::net::Shutdown::Write)?;
+    let mut session = PeerSession::start(&broker.policy.peer)?;
+    let mut server = session.take_socket()?;
     let deadline = Instant::now() + Duration::from_secs(30);
+    session.exchange(&bytes)?;
     super::super::handle_connection(&mut server, &mut broker, deadline)?;
-    server.shutdown(std::net::Shutdown::Write)?;
-    let response = read_frame(&mut client, deadline)?;
+    drop(server);
+    let response = session.reply()?;
     assert!(decode_response(&response, &request, bootstrap.binding()).is_err());
     assert!(!broker.ledger.contains(&request));
     assert_eq!(broker.backend.starts, 0);

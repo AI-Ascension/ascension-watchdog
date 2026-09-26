@@ -90,8 +90,10 @@ const HELPER_BIN: &str = "broker-peer-fixture";
 /// broker hash a small peer executable.
 pub(in crate::platform::linux_broker) struct PeerSession {
     pub(in crate::platform::linux_broker) credentials: PeerCredentials,
-    pub(in crate::platform::linux_broker) socket: UnixStream,
-    pub(in crate::platform::linux_broker) child: std::process::Child,
+    socket: Option<UnixStream>,
+    child: std::process::Child,
+    reply_path: PathBuf,
+    _directory: tempfile::TempDir,
 }
 
 impl PeerSession {
@@ -100,23 +102,55 @@ impl PeerSession {
     /// `peer.executable` is the helper the caller put in its policy, so the
     /// broker hashes this process rather than the test binary.
     pub(in crate::platform::linux_broker) fn start(peer: &PeerPolicy) -> BrokerResult<Self> {
-        let directory = tempdir_in(std::env::temp_dir()).map_err(io_error)?;
+        Self::spawn(peer, false)
+    }
+
+    /// Spawn a helper that closes the connection instead of relaying the
+    /// broker's answer, modelling a peer that vanishes mid-request.
+    pub(in crate::platform::linux_broker) fn start_dropping_reply(
+        peer: &PeerPolicy,
+    ) -> BrokerResult<Self> {
+        Self::spawn(peer, true)
+    }
+
+    fn spawn(peer: &PeerPolicy, drop_reply: bool) -> BrokerResult<Self> {
+        // The helper connects by path, so the directory that holds the socket
+        // has to outlive `start`; keep it owned by the session.
+        let directory = protected_tempdir();
         let path = directory.path().join("broker-peer.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).map_err(io_error)?;
-        let mut child = std::process::Command::new(&peer.executable)
+        let reply_path = directory.path().join("broker-reply.bin");
+        let mut command = std::process::Command::new(&peer.executable);
+        command
             .arg(&path)
+            .arg(&reply_path)
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .map_err(io_error)?;
+            .stdout(std::process::Stdio::null());
+        if drop_reply {
+            command.arg("DROP_REPLY");
+        }
+        let child = command.spawn().map_err(io_error)?;
         let (socket, _) = listener.accept().map_err(io_error)?;
         let credentials = peer_credentials(&socket)?;
         wait_for_helper_executable(credentials.pid, &peer.executable);
         Ok(Self {
             credentials,
-            socket,
+            socket: Some(socket),
             child,
+            reply_path,
+            _directory: directory,
         })
+    }
+
+    /// Take the broker end of the connection.
+    ///
+    /// Ownership moves out so the test never keeps a second copy open: the
+    /// helper only observes end-of-response once every broker-side descriptor
+    /// is closed.
+    pub(in crate::platform::linux_broker) fn take_socket(&mut self) -> BrokerResult<UnixStream> {
+        self.socket
+            .take()
+            .ok_or_else(|| BrokerError::Io("peer socket was already taken".to_owned()))
     }
 
     /// Write `request` to the peer helper's stdin.  The helper relays it to
@@ -129,26 +163,35 @@ impl PeerSession {
             .ok_or_else(|| BrokerError::Io("peer helper stdin is closed".to_owned()))?
             .write_all(request)
             .map_err(io_error)?;
-        // Half-close so the helper sees end-of-request and the broker answers.
+        // Close the helper's stdin so it sees end-of-request and the broker
+        // answers; dropping the handle closes the pipe.
         self.child
             .stdin
             .take()
-            .ok_or_else(|| BrokerError::Io("peer helper stdin is closed".to_owned()))?
-            .shutdown()
-            .map_err(io_error)
+            .ok_or_else(|| BrokerError::Io("peer helper stdin is closed".to_owned()))?;
+        Ok(())
     }
 
-    /// Read the broker's reply, as relayed by the helper's stdout.
+    /// Wait for the helper to finish, then read the broker's reply it relayed.
+    ///
+    /// Call this only after the broker call has returned, so the helper has
+    /// observed end-of-response and written the whole reply.
     pub(in crate::platform::linux_broker) fn reply(&mut self) -> BrokerResult<Vec<u8>> {
-        use std::io::Read;
-        let mut response = Vec::new();
-        self.child
-            .stdout
-            .as_mut()
-            .ok_or_else(|| BrokerError::Io("peer helper stdout is closed".to_owned()))?
-            .read_to_end(&mut response)
-            .map_err(io_error)?;
-        Ok(response)
+        self.wait_for_exit()?;
+        fs::read(&self.reply_path).map_err(io_error)
+    }
+
+    /// Wait for the helper to finish relaying.
+    ///
+    /// A dropping helper never writes a reply file, so this does not read one.
+    pub(in crate::platform::linux_broker) fn wait_for_exit(&mut self) -> BrokerResult<()> {
+        let status = self.child.wait().map_err(io_error)?;
+        if !status.success() {
+            return Err(BrokerError::Io(format!(
+                "broker peer helper exited with {status}"
+            )));
+        }
+        Ok(())
     }
 }
 
