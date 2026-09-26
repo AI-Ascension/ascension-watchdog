@@ -1,6 +1,6 @@
 use super::*;
 use crate::platform::gateway_health::GatewayHealthBootstrap;
-use crate::platform::linux_broker::tests::{FakeBackend, transport_policy};
+use crate::platform::linux_broker::tests::{FakeBackend, PeerSession, transport_policy};
 use crate::platform::linux_broker::{BrokerComponent, BrokerLifecycleState, BrokerPolicy};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -26,20 +26,13 @@ fn fixture() -> Result<(BrokerRequest, BrokerBootstrapLaunch), Box<dyn std::erro
 fn gateway_policy() -> BrokerPolicy {
     let base = transport_policy();
     let launch = base.components[&BrokerComponent::Synthetic].clone();
-    // `transport_policy` intentionally uses the current test process through
-    // `/proc/self/exe`; production policy construction still rejects procfs
-    // paths.  Keep this test-only fixture outside that production validator.
+    // `transport_policy` authenticates a dedicated small peer helper rather
+    // than the test process; production policy construction still rejects
+    // procfs paths and protected-file violations, so keep this test-only
+    // fixture outside that production validator.
     BrokerPolicy {
         peer: base.peer,
         components: BTreeMap::from([(BrokerComponent::Gateway, launch)]),
-    }
-}
-
-fn credentials(policy: &BrokerPolicy) -> PeerCredentials {
-    PeerCredentials {
-        pid: std::process::id(),
-        uid: policy.peer.uid,
-        gid: policy.peer.gid,
     }
 }
 
@@ -145,19 +138,19 @@ fn authenticated_unix_binary_launch_delivers_exact_frame_once()
 -> Result<(), Box<dyn std::error::Error>> {
     let (request, bootstrap) = fixture()?;
     let policy = gateway_policy();
-    let credentials = credentials(&policy);
+    let mut session = PeerSession::start(&policy.peer)?;
+    let credentials = session.credentials;
     let broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
-    let (mut client, mut server) = UnixStream::pair()?;
     let deadline = Instant::now() + Duration::from_secs(30);
     let bytes = encode_request(&request, &bootstrap)?;
+    let mut server = session.socket.try_clone()?;
     let handle = std::thread::spawn(move || {
         let mut broker = broker;
         let result = super::super::handle_connection(&mut server, &mut broker, deadline);
         (result, broker)
     });
-    client.write_all(&bytes)?;
-    client.shutdown(std::net::Shutdown::Write)?;
-    let response = read_frame(&mut client, deadline)?;
+    session.exchange(&bytes)?;
+    let response = session.reply()?;
     let (result, mut broker) = handle.join().expect("broker fixture thread");
     result?;
     let receipt = decode_response(&response, &request, bootstrap.binding())?;
@@ -179,12 +172,14 @@ fn lost_binary_response_retains_receipt_for_inspect_and_exact_stop()
 -> Result<(), Box<dyn std::error::Error>> {
     let (request, bootstrap) = fixture()?;
     let policy = gateway_policy();
-    let credentials = credentials(&policy);
+    let mut session = PeerSession::start(&policy.peer)?;
+    let credentials = session.credentials;
     let mut broker = LinuxSystemdBroker::new(policy, FakeBackend::new());
-    let (mut client, mut server) = UnixStream::pair()?;
-    client.write_all(&encode_request(&request, &bootstrap)?)?;
-    client.shutdown(std::net::Shutdown::Write)?;
-    drop(client);
+    let mut server = session.socket.try_clone()?;
+    // Send the request, then drop the connection without reading the reply so
+    // the broker observes a lost response.
+    session.exchange(&encode_request(&request, &bootstrap)?)?;
+    drop(session);
     assert!(
         super::super::handle_connection(
             &mut server,
@@ -256,7 +251,8 @@ fn worker_fixture(
 fn worker_controller_binding_accepts_decimal_ticks_and_rejects_each_changed_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let policy = gateway_policy();
-    let credentials = credentials(&policy);
+    let session = PeerSession::start(&policy.peer)?;
+    let credentials = session.credentials;
     let birth = process_start_token(credentials.pid)?;
     let (_, ticks) = birth.rsplit_once(':').expect("boot-scoped broker birth");
     let peer = crate::worker_bootstrap::LinuxPeer::new(
@@ -299,7 +295,8 @@ fn typed_worker_admission_preserves_controller_and_exact_frame()
         peer: base.peer,
         components: BTreeMap::from([(BrokerComponent::Harness, launch)]),
     };
-    let credentials = credentials(&policy);
+    let session = PeerSession::start(&policy.peer)?;
+    let credentials = session.credentials;
     let birth = process_start_token(credentials.pid)?;
     let (_, ticks) = birth.rsplit_once(':').expect("boot-scoped broker birth");
     let peer = crate::worker_bootstrap::LinuxPeer::new(

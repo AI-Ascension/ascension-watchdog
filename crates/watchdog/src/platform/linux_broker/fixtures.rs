@@ -28,6 +28,137 @@ pub(in crate::platform::linux_broker) fn wait_for_peer_executable(pid: u32) -> P
     panic!("peer fixture process did not reach its executable");
 }
 
+/// Canonical path of the small test-only broker peer helper.
+///
+/// `cargo test --lib` does not build `[[bin]]` targets, so the helper is built
+/// on demand into the same target directory the test binary lives in.  The
+/// helper is a few megabytes of trivially-linked code, which is what keeps the
+/// broker's `authenticate_peer` hash cheap and the request deadline from
+/// measuring test-binary size.
+pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
+    let helper = std::env::current_exe()
+        .expect("test executable path")
+        .parent()
+        .and_then(Path::parent)
+        .expect("target directory")
+        .join(HELPER_BIN);
+    if !helper.is_file() {
+        build_helper();
+    }
+    fs::canonicalize(&helper).unwrap_or(helper)
+}
+
+fn build_helper() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let status = std::process::Command::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args([
+            "build",
+            "--locked",
+            "--offline",
+            "--package",
+            "ascension-watchdog",
+            "--bin",
+            HELPER_BIN,
+        ])
+        .status()
+        .expect("cargo build for the broker peer helper");
+    assert!(status.success(), "broker peer helper build failed");
+}
+
+const HELPER_BIN: &str = "broker-peer-fixture";
+
+/// A live authenticated peer plus the broker end of its connection.
+///
+/// The helper connects itself, so `SO_PEERCRED` on the returned socket reports
+/// the helper's PID rather than the test process's.  That is what lets the
+/// broker hash a small peer executable.
+pub(in crate::platform::linux_broker) struct PeerSession {
+    pub(in crate::platform::linux_broker) credentials: PeerCredentials,
+    pub(in crate::platform::linux_broker) socket: UnixStream,
+    pub(in crate::platform::linux_broker) child: std::process::Child,
+}
+
+impl PeerSession {
+    /// Spawn the helper and accept the connection it opens.
+    ///
+    /// `peer.executable` is the helper the caller put in its policy, so the
+    /// broker hashes this process rather than the test binary.
+    pub(in crate::platform::linux_broker) fn start(peer: &PeerPolicy) -> BrokerResult<Self> {
+        let directory = tempdir_in(std::env::temp_dir()).map_err(io_error)?;
+        let path = directory.path().join("broker-peer.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).map_err(io_error)?;
+        let mut child = std::process::Command::new(&peer.executable)
+            .arg(&path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(io_error)?;
+        let (socket, _) = listener.accept().map_err(io_error)?;
+        let credentials = peer_credentials(&socket)?;
+        wait_for_helper_executable(credentials.pid, &peer.executable);
+        Ok(Self {
+            credentials,
+            socket,
+            child,
+        })
+    }
+
+    /// Write `request` to the peer helper's stdin.  The helper relays it to
+    /// the broker, half-closes, and writes the broker's reply to its stdout.
+    pub(in crate::platform::linux_broker) fn exchange(&mut self, request: &[u8]) -> BrokerResult<()> {
+        use std::io::Write;
+        self.child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| BrokerError::Io("peer helper stdin is closed".to_owned()))?
+            .write_all(request)
+            .map_err(io_error)?;
+        // Half-close so the helper sees end-of-request and the broker answers.
+        self.child
+            .stdin
+            .take()
+            .ok_or_else(|| BrokerError::Io("peer helper stdin is closed".to_owned()))?
+            .shutdown()
+            .map_err(io_error)
+    }
+
+    /// Read the broker's reply, as relayed by the helper's stdout.
+    pub(in crate::platform::linux_broker) fn reply(&mut self) -> BrokerResult<Vec<u8>> {
+        use std::io::Read;
+        let mut response = Vec::new();
+        self.child
+            .stdout
+            .as_mut()
+            .ok_or_else(|| BrokerError::Io("peer helper stdout is closed".to_owned()))?
+            .read_to_end(&mut response)
+            .map_err(io_error)?;
+        Ok(response)
+    }
+}
+
+/// Wait until the peer process reports the approved executable.
+///
+/// The exec race matters: a spawned process is still the pre-exec image when
+/// `connect` returns, so reading `/proc/<pid>/exe` immediately can observe a
+/// different binary than the one the broker is about to hash.
+fn wait_for_helper_executable(pid: u32, expected: &Path) {
+    let proc_executable = format!("/proc/{pid}/exe");
+    for _ in 0..10_000 {
+        if let Ok(executable) = fs::read_link(&proc_executable)
+            && executable == expected
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("broker peer helper did not reach its executable");
+}
+
 pub(in crate::platform::linux_broker) fn peer_fixture() -> (PathBuf, String) {
     let mut child = std::process::Command::new("/usr/bin/sleep")
         .arg("30")
@@ -84,7 +215,7 @@ pub(in crate::platform::linux_broker) fn policy() -> BrokerPolicy {
 
 pub(in crate::platform::linux_broker) fn transport_policy() -> BrokerPolicy {
     let base = policy();
-    let executable = fs::canonicalize("/proc/self/exe").expect("test executable path");
+    let executable = helper_executable();
     let peer = PeerPolicy {
         uid: base.peer.uid,
         gid: base.peer.gid,
@@ -95,9 +226,11 @@ pub(in crate::platform::linux_broker) fn transport_policy() -> BrokerPolicy {
     for launch in components.values_mut() {
         launch.timeout = MAX_IO_TIMEOUT;
     }
-    // This fixture deliberately authenticates the current test process over a
-    // socket pair.  Production rejects procfs policy paths; the direct struct
-    // construction is test-only and keeps that production validation intact.
+    // This fixture authenticates a dedicated small peer process (see
+    // `PeerSession`) rather than the test process itself.  Production rejects
+    // procfs policy paths and validates the peer executable as a protected
+    // root-owned file; the direct struct construction here is test-only and
+    // keeps that production validation intact.
     BrokerPolicy { peer, components }
 }
 
