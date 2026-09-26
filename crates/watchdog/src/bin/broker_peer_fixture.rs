@@ -22,33 +22,49 @@
 //! the deadline enforcement all still apply, they simply apply to a small
 //! object instead of a hundred-megabyte one.
 //!
-//! Usage: `broker-peer-fixture SOCKET REPLY_PATH [DROP_REPLY]`.
+//! Usage: `broker-peer-fixture SOCKET REPLY_PATH RELEASE_PATH [DROP_REPLY]`.
 //!
 //! With `DROP_REPLY`, the helper closes the connection instead of relaying the
 //! broker's answer, so the test can observe what the broker does when a peer
 //! vanishes mid-request.
+//!
+//! The helper stays alive until `RELEASE_PATH` appears, so the peer process
+//! still exists for every `authenticate_peer` call the broker makes - the
+//! broker re-authenticates on each call, and a helper that exited early would
+//! make the pidfd pin fail for reasons unrelated to what is under test.
 
+use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
-    let (Some(socket), Some(reply)) = (arguments.next(), arguments.next()) else {
-        eprintln!("broker-peer-fixture: SOCKET and REPLY_PATH arguments are required");
+    let (Some(socket), Some(reply), Some(release)) =
+        (arguments.next(), arguments.next(), arguments.next())
+    else {
+        eprintln!(
+            "broker-peer-fixture: SOCKET, REPLY_PATH and RELEASE_PATH arguments are required"
+        );
         std::process::exit(2);
     };
     let drop_reply = arguments
         .next()
         .is_some_and(|argument| argument == "DROP_REPLY");
-    if let Err(error) = relay(&socket, std::path::Path::new(&reply), drop_reply) {
+    if let Err(error) = run(
+        &socket,
+        Path::new(&reply),
+        PathBuf::from(release),
+        drop_reply,
+    ) {
         eprintln!("broker-peer-fixture: {error}");
         std::process::exit(1);
     }
 }
 
-fn relay(
+fn run(
     socket: &std::ffi::OsStr,
     reply: &std::path::Path,
+    release: PathBuf,
     drop_reply: bool,
 ) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(socket)?;
@@ -58,12 +74,31 @@ fn relay(
     let _ = stream.shutdown(std::net::Shutdown::Write);
     relayed?;
     if drop_reply {
-        // Model a peer that disappears before the broker answers.
+        // Model a peer that disappears before the broker answers.  Closing
+        // the socket is what the broker observes; the process itself then
+        // lingers until released so a later `authenticate_peer` still finds a
+        // live peer, exactly as the test's follow-up inspect/stop calls need.
+        drop(stream);
+        wait_for_release(&release)?;
         return Ok(());
     }
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
     let mut file = std::fs::File::create(reply)?;
     file.write_all(&response)?;
-    file.flush()
+    file.flush()?;
+    wait_for_release(&release)
+}
+
+fn wait_for_release(release: &Path) -> std::io::Result<()> {
+    for _ in 0..600_000 {
+        if release.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "broker peer helper was never released",
+    ))
 }

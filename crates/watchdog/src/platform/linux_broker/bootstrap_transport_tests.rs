@@ -180,7 +180,6 @@ fn lost_binary_response_retains_receipt_for_inspect_and_exact_stop()
     session.exchange(&encode_request(&request, &bootstrap)?)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     let result = super::super::handle_connection(&mut server, &mut broker, deadline);
-    session.wait_for_exit()?;
     assert!(result.is_err());
     assert_eq!(broker.backend.starts, 1);
     assert_eq!(
@@ -197,6 +196,7 @@ fn lost_binary_response_retains_receipt_for_inspect_and_exact_stop()
             .is_err()
     );
     assert_eq!(broker.backend.starts, 1);
+    session.wait_for_exit()?;
     Ok(())
 }
 

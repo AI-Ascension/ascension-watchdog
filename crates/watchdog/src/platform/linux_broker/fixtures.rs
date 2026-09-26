@@ -93,6 +93,7 @@ pub(in crate::platform::linux_broker) struct PeerSession {
     socket: Option<UnixStream>,
     child: std::process::Child,
     reply_path: PathBuf,
+    release_path: PathBuf,
     _directory: tempfile::TempDir,
 }
 
@@ -120,10 +121,12 @@ impl PeerSession {
         let path = directory.path().join("broker-peer.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).map_err(io_error)?;
         let reply_path = directory.path().join("broker-reply.bin");
+        let release_path = directory.path().join("broker-release");
         let mut command = std::process::Command::new(&peer.executable);
         command
             .arg(&path)
             .arg(&reply_path)
+            .arg(&release_path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null());
         if drop_reply {
@@ -138,6 +141,7 @@ impl PeerSession {
             socket: Some(socket),
             child,
             reply_path,
+            release_path,
             _directory: directory,
         })
     }
@@ -175,16 +179,32 @@ impl PeerSession {
     /// Wait for the helper to finish, then read the broker's reply it relayed.
     ///
     /// Call this only after the broker call has returned, so the helper has
-    /// observed end-of-response and written the whole reply.
+    /// observed end-of-response and written the whole reply.  The peer process
+    /// stays alive, because the broker re-authenticates on every call and the
+    /// test may keep using the same credentials afterwards.
     pub(in crate::platform::linux_broker) fn reply(&mut self) -> BrokerResult<Vec<u8>> {
-        self.wait_for_exit()?;
-        fs::read(&self.reply_path).map_err(io_error)
+        self.read_reply()
     }
 
-    /// Wait for the helper to finish relaying.
+    /// Read the relayed reply, waiting for the helper to have written it.
+    fn read_reply(&self) -> BrokerResult<Vec<u8>> {
+        for _ in 0..3_000 {
+            if self.reply_path.is_file() {
+                return fs::read(&self.reply_path).map_err(io_error);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(BrokerError::Io(
+            "broker peer helper never relayed a reply".to_owned(),
+        ))
+    }
+
+    /// Release the helper and wait for it to exit.
     ///
-    /// A dropping helper never writes a reply file, so this does not read one.
+    /// The helper lingers until released so the peer process stays alive for
+    /// every broker call the test makes; releasing it is what ends the wait.
     pub(in crate::platform::linux_broker) fn wait_for_exit(&mut self) -> BrokerResult<()> {
+        fs::write(&self.release_path, b"release").map_err(io_error)?;
         let status = self.child.wait().map_err(io_error)?;
         if !status.success() {
             return Err(BrokerError::Io(format!(
@@ -192,6 +212,16 @@ impl PeerSession {
             )));
         }
         Ok(())
+    }
+}
+
+impl Drop for PeerSession {
+    fn drop(&mut self) {
+        // Never leave the helper parked: release it and reap it even when a
+        // test fails part way through.
+        let _ = fs::write(&self.release_path, b"release");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
