@@ -68,11 +68,13 @@ fn main() {
     let drop_reply = arguments
         .next()
         .is_some_and(|argument| argument == "DROP_REPLY");
+    let release = PathBuf::from(release);
+    let closed = PathBuf::from(closed);
     if let Err(error) = run(
         &socket,
         Path::new(&reply),
-        PathBuf::from(release),
-        PathBuf::from(closed),
+        release.as_path(),
+        closed.as_path(),
         drop_reply,
     ) {
         eprintln!("broker-peer-fixture: {error}");
@@ -90,8 +92,8 @@ fn main() {
 fn run(
     socket: &std::ffi::OsStr,
     reply: &std::path::Path,
-    release: PathBuf,
-    closed: PathBuf,
+    release: &Path,
+    closed: &Path,
     drop_reply: bool,
 ) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(socket)?;
@@ -106,8 +108,8 @@ fn run(
         // lingers until released so a later `authenticate_peer` still finds a
         // live peer, exactly as the test's follow-up inspect/stop calls need.
         drop(stream);
-        std::fs::File::create(&closed)?;
-        wait_for_release(&release)?;
+        std::fs::File::create(closed)?;
+        wait_for_release(release)?;
         return Ok(());
     }
     let mut response = Vec::new();
@@ -116,8 +118,8 @@ fn run(
     file.write_all(&response)?;
     file.flush()?;
     drop(stream);
-    std::fs::File::create(&closed)?;
-    wait_for_release(&release)
+    std::fs::File::create(closed)?;
+    wait_for_release(release)
 }
 
 #[cfg(target_os = "linux")]

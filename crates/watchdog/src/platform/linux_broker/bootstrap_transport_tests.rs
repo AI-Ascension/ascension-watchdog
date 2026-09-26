@@ -78,24 +78,36 @@ fn peer_authentication_refuses_each_withdrawn_peer_approval()
         digest(&fs::canonicalize("/usr/bin/sleep").expect("sleep fixture path"));
     assert!(authenticate_peer(other.credentials, &other_executable, deadline).is_err());
 
-    // Credentials that name a PID which is not the peer at all.  The pidfd pin
-    // has to fail rather than authenticate whatever now owns that PID.
-    let mut wrong_pid = credentials;
-    wrong_pid.pid = credentials.pid.wrapping_add(1).max(1);
-    assert!(authenticate_peer(wrong_pid, &approved, deadline).is_err());
-
-    // UID and GID are compared against the policy, not merely plausible.
-    let mut wrong_uid = credentials;
-    wrong_uid.uid = credentials.uid.wrapping_add(1);
-    assert!(authenticate_peer(wrong_uid, &approved, deadline).is_err());
-    let mut wrong_gid = credentials;
-    wrong_gid.gid = credentials.gid.wrapping_add(1);
-    assert!(authenticate_peer(wrong_gid, &approved, deadline).is_err());
-
-    // A PID that is not running at all, so the identity pin cannot be taken.
-    let mut dead_pid = credentials;
-    dead_pid.pid = u32::MAX;
-    assert!(authenticate_peer(dead_pid, &approved, deadline).is_err());
+    // Each credential field is withdrawn in turn.  A PID that names some other
+    // process has to fail at the pidfd pin rather than authenticate whatever
+    // now owns that PID, and `u32::MAX` names no process at all.  UID and GID
+    // are compared against the policy, not merely plausible.
+    let withdraw = |change: &mut dyn FnMut(&mut PeerCredentials)| -> PeerCredentials {
+        let mut altered = credentials;
+        change(&mut altered);
+        altered
+    };
+    let foreign_process = withdraw(&mut |altered: &mut PeerCredentials| {
+        altered.pid = credentials.pid.wrapping_add(1).max(1);
+    });
+    let unrunnable_process = withdraw(&mut |altered: &mut PeerCredentials| altered.pid = u32::MAX);
+    let claimed_user = withdraw(&mut |altered: &mut PeerCredentials| {
+        altered.uid = credentials.uid.wrapping_add(1)
+    });
+    let claimed_group = withdraw(&mut |altered: &mut PeerCredentials| {
+        altered.gid = credentials.gid.wrapping_add(1)
+    });
+    for (label, altered) in [
+        ("pid", foreign_process),
+        ("pid", unrunnable_process),
+        ("uid", claimed_user),
+        ("gid", claimed_group),
+    ] {
+        assert!(
+            authenticate_peer(altered, &approved, deadline).is_err(),
+            "a peer whose {label} is not approved must be refused"
+        );
+    }
 
     Ok(())
 }
