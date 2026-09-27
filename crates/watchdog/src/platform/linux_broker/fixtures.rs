@@ -66,7 +66,7 @@ fn ensure_helper_is_current(helper: &Path) {
     // instead of the real build error it is standing on.
     let _build_guard = HELPER_BUILD_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !helper_is_current(helper) {
         build_helper(helper);
     }
@@ -164,68 +164,6 @@ static HELPER_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static BUILD_IN_PROGRESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static MAX_CONCURRENT_BUILDS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
-/// Regression witness for the #253 build race.
-///
-/// The race was not reachable by asserting on the helper's contents: every
-/// writer produced a *correct* helper, and the defect was that the writers
-/// collided inside the shared output path, so a test could only observe it by
-/// entering `build_helper` the way the real failure does — many threads at
-/// once, on a helper that is deliberately not yet current.
-#[cfg(test)]
-mod build_race_tests {
-    use super::*;
-
-    /// Concurrent `helper_executable()` calls must not overlap their builds.
-    ///
-    /// Before the fix every thread that found the helper missing or stale ran
-    /// its own `rustc` against the one shared path at the same time; measured
-    /// directly, 8 concurrent writers to one `-o` path failed 22 times in 32
-    /// attempts, while 8 concurrent writers to distinct paths failed 0 times in
-    /// 32. This asserts that the build is serialised by reading the counters
-    /// `build_helper` maintains around the real `rustc` call, so it cannot pass
-    /// by asserting on something the fix did not change, and it does not depend
-    /// on host load — which is exactly what kept the original flake invisible to
-    /// CI.
-    ///
-    /// The helper is removed first, because that is what puts every thread on
-    /// the build path: a fresh target directory has no helper, and
-    /// `helper_is_current` otherwise short-circuits the second and later
-    /// threads before they ever reach the build.
-    #[test]
-    fn concurrent_helper_calls_do_not_overlap_their_build() {
-        const THREADS: usize = 8;
-        let helper = helper_path();
-        let _ = fs::remove_file(&helper);
-        MAX_CONCURRENT_BUILDS.store(0, Ordering::SeqCst);
-        let threads: Vec<_> = (0..THREADS)
-            .map(|_| {
-                std::thread::spawn(move || {
-                    // The real call, so the lock under test is the one the
-                    // broker tests take.
-                    let resolved = helper_executable();
-                    assert!(
-                        resolved.is_file(),
-                        "helper_executable returned a path with no artifact: {}",
-                        resolved.display()
-                    );
-                })
-            })
-            .collect();
-        for thread in threads {
-            thread.join().expect("helper thread");
-        }
-        assert!(
-            MAX_CONCURRENT_BUILDS.load(Ordering::SeqCst) <= 1,
-            "two rustc builds ran at once, so the shared output path is still raced"
-        );
-        assert!(
-            helper.is_file(),
-            "the helper was never published: {}",
-            helper.display()
-        );
-    }
-}
 
 /// A live authenticated peer plus the broker end of its connection.
 ///
@@ -545,4 +483,66 @@ pub(in crate::platform::linux_broker) fn protected_tempdir() -> tempfile::TempDi
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     tempdir_in(runtime_directory).expect("protected test directory")
+}
+
+/// Regression witness for the #253 build race.
+///
+/// The race was not reachable by asserting on the helper's contents: every
+/// writer produced a *correct* helper, and the defect was that the writers
+/// collided inside the shared output path, so a test could only observe it by
+/// entering `build_helper` the way the real failure does — many threads at
+/// once, on a helper that is deliberately not yet current.
+#[cfg(test)]
+mod build_race_tests {
+    use super::*;
+
+    /// Concurrent `helper_executable()` calls must not overlap their builds.
+    ///
+    /// Before the fix every thread that found the helper missing or stale ran
+    /// its own `rustc` against the one shared path at the same time; measured
+    /// directly, 8 concurrent writers to one `-o` path failed 22 times in 32
+    /// attempts, while 8 concurrent writers to distinct paths failed 0 times in
+    /// 32. This asserts that the build is serialised by reading the counters
+    /// `build_helper` maintains around the real `rustc` call, so it cannot pass
+    /// by asserting on something the fix did not change, and it does not depend
+    /// on host load — which is exactly what kept the original flake invisible to
+    /// CI.
+    ///
+    /// The helper is removed first, because that is what puts every thread on
+    /// the build path: a fresh target directory has no helper, and
+    /// `helper_is_current` otherwise short-circuits the second and later
+    /// threads before they ever reach the build.
+    #[test]
+    fn concurrent_helper_calls_do_not_overlap_their_build() {
+        const THREADS: usize = 8;
+        let helper = helper_path();
+        let _ = fs::remove_file(&helper);
+        MAX_CONCURRENT_BUILDS.store(0, Ordering::SeqCst);
+        let threads: Vec<_> = (0..THREADS)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    // The real call, so the lock under test is the one the
+                    // broker tests take.
+                    let resolved = helper_executable();
+                    assert!(
+                        resolved.is_file(),
+                        "helper_executable returned a path with no artifact: {}",
+                        resolved.display()
+                    );
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("helper thread");
+        }
+        assert!(
+            MAX_CONCURRENT_BUILDS.load(Ordering::SeqCst) <= 1,
+            "two rustc builds ran at once, so the shared output path is still raced"
+        );
+        assert!(
+            helper.is_file(),
+            "the helper was never published: {}",
+            helper.display()
+        );
+    }
 }
