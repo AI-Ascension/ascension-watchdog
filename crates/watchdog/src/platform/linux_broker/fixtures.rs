@@ -37,7 +37,20 @@ pub(in crate::platform::linux_broker) fn wait_for_peer_executable(pid: u32) -> P
 /// broker's `authenticate_peer` hash cheap and the request deadline from
 /// measuring test-binary size.
 pub(in crate::platform::linux_broker) fn helper_executable() -> PathBuf {
-    let helper = helper_path();
+    helper_executable_at(&helper_path())
+}
+
+/// Resolve `helper` to a current, canonical executable at `path`.
+///
+/// Split out from [`helper_executable`] so the #253 build-race witness can run
+/// the real build path against a path of its own.  The witness has to remove
+/// its helper to put every thread on the build path, and removing the *shared*
+/// helper installs a new inode: any `PeerSession` already running from the old
+/// one then resolves `/proc/<pid>/exe` to `<path> (deleted)`, which can never
+/// re-equal the approved path again and permanently fails
+/// `authenticate_peer` for that session (issue #255).
+fn helper_executable_at(path: &Path) -> PathBuf {
+    let helper = path.to_path_buf();
     // Rebuild whenever the helper is missing *or* its source is newer than the
     // binary.  An `is_file()` check alone leaves a stale helper in place after
     // the helper source changes, which would silently authenticate the old
@@ -74,12 +87,18 @@ fn ensure_helper_is_current(helper: &Path) {
 
 /// Target-directory path of the helper binary.
 fn helper_path() -> PathBuf {
+    target_directory().join(HELPER_BIN)
+}
+
+/// Directory the test binary itself lives in, one level below the target
+/// directory that holds on-demand build products.
+fn target_directory() -> PathBuf {
     std::env::current_exe()
         .expect("test executable path")
         .parent()
         .and_then(Path::parent)
         .expect("target directory")
-        .join(HELPER_BIN)
+        .to_path_buf()
 }
 
 /// Source path of the helper.
@@ -120,6 +139,9 @@ fn build_helper(helper: &Path) {
     let source = helper_source();
     let executable = helper.to_path_buf();
     let staging = executable.with_extension(format!("{}.{}", std::process::id(), "staging"));
+    if let Some(parent) = executable.parent() {
+        fs::create_dir_all(parent).expect("helper output directory");
+    }
     BUILD_IN_PROGRESS.fetch_add(1, Ordering::SeqCst);
     MAX_CONCURRENT_BUILDS.fetch_max(BUILD_IN_PROGRESS.load(Ordering::SeqCst), Ordering::SeqCst);
     let status = std::process::Command::new("rustc")
@@ -512,18 +534,42 @@ mod build_race_tests {
     /// the build path: a fresh target directory has no helper, and
     /// `helper_is_current` otherwise short-circuits the second and later
     /// threads before they ever reach the build.
+    ///
+    /// It is removed from a directory of its own, never from the shared target
+    /// directory.  The witness and the broker tests run in the same process,
+    /// and unlinking the shared helper installs a new inode: every
+    /// `PeerSession` already running from the old one then resolves
+    /// `/proc/<pid>/exe` to `<path> (deleted)`, which can never re-equal the
+    /// approved executable again, so the broker permanently refuses that live
+    /// peer with `Unauthorized("peer executable path is not approved")`.  That
+    /// is issue #255, which this witness caused on `bootstrap` while fixing
+    /// #253; building against a private path keeps the lock under test
+    /// without unlinking the artifact the other broker tests are using.
     #[test]
     fn concurrent_helper_calls_do_not_overlap_their_build() {
+        drive_concurrent_helper_builds();
+    }
+
+    /// The body of the #253 witness, shared with the #255 regression below.
+    ///
+    /// Both the fix and its regression call this one function, so the
+    /// regression cannot pass by exercising a different code path than the
+    /// defect lived in.  Whichever helper path this drives, a live peer
+    /// authenticated before it ran must still authenticate afterwards.
+    fn drive_concurrent_helper_builds() {
         const THREADS: usize = 8;
-        let helper = helper_path();
-        let _ = fs::remove_file(&helper);
+        // A private, empty directory: no helper exists, so every thread must
+        // reach `build_helper`, and nothing outside this test is disturbed.
+        let scratch = tempfile::tempdir().expect("witness scratch directory");
+        let helper = scratch.path().join(HELPER_BIN);
         MAX_CONCURRENT_BUILDS.store(0, Ordering::SeqCst);
         let threads: Vec<_> = (0..THREADS)
             .map(|_| {
+                let helper = helper.clone();
                 std::thread::spawn(move || {
                     // The real call, so the lock under test is the one the
                     // broker tests take.
-                    let resolved = helper_executable();
+                    let resolved = helper_executable_at(&helper);
                     assert!(
                         resolved.is_file(),
                         "helper_executable returned a path with no artifact: {}",
@@ -543,6 +589,55 @@ mod build_race_tests {
             helper.is_file(),
             "the helper was never published: {}",
             helper.display()
+        );
+    }
+
+    /// Regression witness for #255: the build race must not unlink the shared
+    /// helper out from under a live peer.
+    ///
+    /// #254's witness built against the shared `helper_path()` and removed it
+    /// first.  Because the rebuild republishes the artifact under a *new*
+    /// inode, every `PeerSession` started before that removal kept resolving
+    /// `/proc/<pid>/exe` to the unlinked name, which the kernel reports as
+    /// `<path> (deleted)`.  `authenticate_peer` compares that string against
+    /// the approved executable path, so the comparison could never re-equal
+    /// and each surviving session failed permanently with
+    /// `Unauthorized("peer executable path is not approved")` — which is how
+    /// the #251 and #253 witnesses were themselves made to fail.
+    ///
+    /// This asserts the mechanism directly rather than by racing: after the
+    /// race witness has rebuilt its own private helper, the shared artifact
+    /// must still be the one every live session resolves, so an approved peer
+    /// keeps authenticating.
+    #[test]
+    fn a_live_approved_peer_survives_the_build_race_witness() {
+        let policy = transport_policy();
+        let session = PeerSession::start(&policy.peer).expect("peer session must start");
+        let credentials = session.credentials;
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        // The exact build the race witness performs, via the exact function it
+        // performs it in.  If that ever unlinks the shared helper again, the
+        // assertions below fail on this run rather than on whichever
+        // unrelated broker test loses the race for it.
+        drive_concurrent_helper_builds();
+
+        // The shared helper must be untouched: present, and still the exact
+        // executable the running peer resolves to.
+        let shared = helper_executable();
+        assert!(shared.is_file(), "the shared helper went missing");
+        let resolved = fs::read_link(format!("/proc/{}/exe", credentials.pid))
+            .expect("the live peer must still resolve its executable");
+        assert_eq!(
+            resolved, shared,
+            "the shared helper was republished, so the live peer now resolves a \
+             different path than the approved one"
+        );
+
+        // And the broker must still approve that live peer.
+        assert!(
+            authenticate_peer(credentials, &policy.peer, deadline).is_ok(),
+            "a live approved peer must still authenticate after the race witness"
         );
     }
 }
