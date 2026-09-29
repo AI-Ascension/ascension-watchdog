@@ -1,0 +1,28 @@
+name: Review of record (reusable reference)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number to evaluate
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review-of-record:
+    name: review-of-record
+    uses: AI-Ascension/.github/.github/workflows/review-gate.yml@7e5e885835ddb09cd7927412f61c63f4c42bb57a
+    with:
+      gate-repository: AI-Ascension/.github
+      gate-sha: 7e5e885835ddb09cd7927412f61c63f4c42bb57a
+    permissions:
+      contents: read
+      pull-requests: read
