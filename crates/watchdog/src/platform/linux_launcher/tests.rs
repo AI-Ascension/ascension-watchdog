@@ -276,6 +276,23 @@ fn parent_bootstrap_drop_closes_keepalive_descriptors() -> Result<(), Box<dyn st
     Ok(())
 }
 
+/// Reaps a spawned helper so the error path cannot leave it running.
+///
+/// The delayed-readiness helper blocks on its release pipe, so an early
+/// `?` return would otherwise drop the `Child` un-waited and leak a process
+/// for exactly the runs that are already failing. Dropping this guard kills
+/// and reaps the child; both errors are ignored because the child may
+/// already have exited and reaped itself. This is the same kill-then-wait
+/// shape used elsewhere in this file.
+struct DelayedHelperGuard(std::process::Child);
+
+impl Drop for DelayedHelperGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -295,7 +312,7 @@ fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dy
         gateway_health_reader_fd: None,
         gateway_health_writer: None,
     };
-    let mut delayed_helper = Command::new("/bin/sh")
+    let delayed_helper = Command::new("/bin/sh")
         .args([
             "-c",
             // Block until the parent has recorded its start timestamp, then hold
@@ -311,14 +328,68 @@ fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dy
         ])
         .stdin(Stdio::piped())
         .spawn()?;
-    let mut release_stdin = delayed_helper.stdin.take().expect("piped stdin");
+    let mut delayed_helper = DelayedHelperGuard(delayed_helper);
+    let mut release_stdin = delayed_helper.0.stdin.take().expect("piped stdin");
     let started = Instant::now();
     // Release the helper only now, so `started` provably precedes the delay.
     release_stdin.write_all(b"go\n")?;
     release_stdin.flush()?;
     parent.wait_for_ready("x", Duration::from_secs(1))?;
     assert!(started.elapsed() >= Duration::from_millis(30));
-    assert!(delayed_helper.wait()?.success());
+    assert!(delayed_helper.0.wait()?.success());
+    Ok(())
+}
+
+/// A process is still running exactly when `/proc/<pid>` resolves and its
+/// state byte is not `Z` (zombie) or `X` (dead).
+fn helper_is_running(pid: u32) -> bool {
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // The comm field is parenthesised and may itself contain spaces, so the
+    // state byte is the one after the final ')'.
+    let Some(state) = stat
+        .rsplit_once(") ")
+        .and_then(|(_, rest)| rest.chars().next())
+    else {
+        return false;
+    };
+    state != 'Z' && state != 'X'
+}
+
+#[test]
+fn delayed_helper_guard_reaps_a_helper_left_blocked_on_its_release_pipe()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Same helper shape as the test above: it blocks reading its release pipe
+    // and only acknowledges afterwards.
+    let ready = File::from(memfd_create("ascension-ready-guard", MemfdFlags::CLOEXEC)?);
+    let ready_fd = ready.as_raw_fd();
+    let spawned = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "read -r _ <&$2; sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
+            "guarded-helper",
+            &ready_fd.to_string(),
+            "0",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let helper_pid = spawned.id();
+    let guard = DelayedHelperGuard(spawned);
+    // Prove the child is genuinely alive and genuinely blocked, so a later
+    // "not running" observation can only come from the guard killing it.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        helper_is_running(helper_pid),
+        "helper should still be blocked on its release pipe"
+    );
+    // Returning here is the early-return shape: without the guard's Drop the
+    // Child is dropped un-waited and this helper stays alive.
+    drop(guard);
+    assert!(
+        !helper_is_running(helper_pid),
+        "helper {helper_pid} outlived the guard"
+    );
     Ok(())
 }
 
