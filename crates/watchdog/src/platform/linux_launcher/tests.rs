@@ -279,6 +279,14 @@ fn parent_bootstrap_drop_closes_keepalive_descriptors() -> Result<(), Box<dyn st
 #[test]
 fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dyn std::error::Error>>
 {
+    struct DelayedHelperGuard(std::process::Child);
+    impl Drop for DelayedHelperGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     let ready = File::from(memfd_create("ascension-ready-test", MemfdFlags::CLOEXEC)?);
     let ready_fd = ready.as_raw_fd();
     let mut parent = ParentBootstrap {
@@ -295,18 +303,27 @@ fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dy
         gateway_health_reader_fd: None,
         gateway_health_writer: None,
     };
-    let mut delayed_helper = Command::new("/bin/sh")
+    let delayed_helper = Command::new("/bin/sh")
         .args([
             "-c",
-            "sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
+            "read -r _release || exit 3; sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
             "delayed-helper",
             &ready_fd.to_string(),
         ])
+        .stdin(Stdio::piped())
         .spawn()?;
+    let mut delayed_helper = DelayedHelperGuard(delayed_helper);
+    let mut release = delayed_helper
+        .0
+        .stdin
+        .take()
+        .ok_or("helper release pipe missing")?;
     let started = Instant::now();
+    release.write_all(b"1\n")?;
+    drop(release);
     parent.wait_for_ready("x", Duration::from_secs(1))?;
     assert!(started.elapsed() >= Duration::from_millis(30));
-    assert!(delayed_helper.wait()?.success());
+    assert!(delayed_helper.0.wait()?.success());
     Ok(())
 }
 
