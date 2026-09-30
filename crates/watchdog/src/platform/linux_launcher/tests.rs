@@ -298,12 +298,24 @@ fn delayed_helper_ready_ack_keeps_parent_descriptor_alive() -> Result<(), Box<dy
     let mut delayed_helper = Command::new("/bin/sh")
         .args([
             "-c",
-            "sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
+            // Block until the parent has recorded its start timestamp, then hold
+            // the acknowledgement back for a further fixed delay. A wall-clock
+            // `sleep` here cannot prove the ack was withheld: on a saturated
+            // host `spawn()` can return only after the sleep has already
+            // elapsed, which made the parent's elapsed-time assertion race its
+            // own child. The gate makes the ordering explicit instead.
+            "read -r _ <&$2; sleep 0.05; printf 'ASC-RDY1\\001\\000x' > /proc/$PPID/fd/$1",
             "delayed-helper",
             &ready_fd.to_string(),
+            "0",
         ])
+        .stdin(Stdio::piped())
         .spawn()?;
+    let mut release_stdin = delayed_helper.stdin.take().expect("piped stdin");
     let started = Instant::now();
+    // Release the helper only now, so `started` provably precedes the delay.
+    release_stdin.write_all(b"go\n")?;
+    release_stdin.flush()?;
     parent.wait_for_ready("x", Duration::from_secs(1))?;
     assert!(started.elapsed() >= Duration::from_millis(30));
     assert!(delayed_helper.wait()?.success());
