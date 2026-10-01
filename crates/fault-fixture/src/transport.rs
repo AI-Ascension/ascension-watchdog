@@ -12,19 +12,30 @@ pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
 /// runner even though the peer is healthy (observed as `WSAETIMEDOUT`, OS error
 /// 10060, on `windows-latest` in issue #204). Retrying the *connect* is safe: no
 /// request bytes have been written yet, so a retry can never replay a mutation.
-/// Only `TimedOut` is retried; every other failure is surfaced immediately so a
+/// [`WouldBlock`](io::ErrorKind::WouldBlock) is retried for the same reason: it
+/// is this host's `EAGAIN`/`EWOULDBLOCK` from `connect(2)` when the process is
+/// momentarily out of descriptors or ephemeral ports, which says nothing about
+/// the health of the peer. Every other failure is surfaced immediately so a
 /// genuinely absent peer still fails fast.
 pub(crate) const CONNECT_ATTEMPTS: u32 = 4;
 
 /// Bounded pause between connect attempts; keeps retries from busy-looping.
 const CONNECT_RETRY_BACKOFF: Duration = Duration::from_millis(50);
 
+/// Whether a connect failure is transient rather than a verdict about the peer.
+fn is_transient_connect_failure(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
+}
+
 /// Retry a transient connect failure up to [`CONNECT_ATTEMPTS`] times.
 ///
 /// `attempt` receives the 1-based attempt number and returns the connect
 /// result. The loop returns the first success, the first non-timeout error as
 /// is, or the final timeout once the attempt cap is reached.
-fn retry_timed_out_connect<T, F>(mut attempt: F) -> io::Result<T>
+fn retry_transient_connect<T, F>(mut attempt: F) -> io::Result<T>
 where
     F: FnMut(u32) -> io::Result<T>,
 {
@@ -32,7 +43,7 @@ where
     loop {
         match attempt(index) {
             Ok(value) => return Ok(value),
-            Err(error) if error.kind() == io::ErrorKind::TimedOut && index < CONNECT_ATTEMPTS => {
+            Err(error) if is_transient_connect_failure(&error) && index < CONNECT_ATTEMPTS => {
                 index += 1;
                 std::thread::sleep(CONNECT_RETRY_BACKOFF);
             }
@@ -43,7 +54,7 @@ where
 
 /// Connect to the fixture peer, retrying a timed-out loopback handshake.
 pub(crate) fn connect_bounded(address: &SocketAddr) -> io::Result<TcpStream> {
-    retry_timed_out_connect(|_| TcpStream::connect_timeout(address, IO_TIMEOUT))
+    retry_transient_connect(|_| TcpStream::connect_timeout(address, IO_TIMEOUT))
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -129,10 +140,33 @@ mod tests {
     use socket2::{Domain, SockAddr, SockRef, Socket, Type};
     use std::net::{SocketAddr, TcpListener};
 
+    /// The host's real `EAGAIN`/`EWOULDBLOCK` error, as `connect(2)` reports it
+    /// when the process is momentarily out of descriptors or ephemeral ports.
+    /// Reading it off the host keeps the regression honest on both Linux
+    /// (`EAGAIN`) and Windows (`WSAEWOULDBLOCK`) without naming either code.
+    fn eagain_error() -> io::Result<io::Error> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let connector = TcpStream::connect_timeout(&listener.local_addr()?, IO_TIMEOUT)?;
+        let (mut probe, _peer) = listener.accept()?;
+        probe.set_nonblocking(true)?;
+        let mut buffer = [0_u8; 1];
+        let outcome = match probe.read(&mut buffer) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(error),
+            _ => Err(io::Error::other(
+                "a nonblocking empty socket must report WouldBlock",
+            )),
+        };
+        // Hold the connected peer open until after the probe so the socket has
+        // no data to read and no EOF to report; a premature `Ok(0)` would be a
+        // closed connection, not a `WouldBlock`.
+        drop(connector);
+        outcome
+    }
+
     #[test]
     fn bounded_connect_succeeds_after_one_transient_timeout() -> io::Result<()> {
         let mut attempts = 0;
-        let value = retry_timed_out_connect(|_| {
+        let value = retry_transient_connect(|_| {
             attempts += 1;
             if attempts == 1 {
                 Err(io::Error::new(
@@ -151,7 +185,7 @@ mod tests {
     #[test]
     fn bounded_connect_stops_after_the_attempt_cap() {
         let mut attempts = 0;
-        let error = retry_timed_out_connect(|_| {
+        let error = retry_transient_connect(|_| {
             attempts += 1;
             Err::<u8, io::Error>(io::Error::new(io::ErrorKind::TimedOut, "always stalls"))
         })
@@ -163,7 +197,7 @@ mod tests {
     #[test]
     fn bounded_connect_does_not_retry_a_non_timeout_failure() {
         let mut attempts = 0;
-        let error = retry_timed_out_connect(|_| {
+        let error = retry_transient_connect(|_| {
             attempts += 1;
             Err::<u8, io::Error>(io::Error::new(
                 io::ErrorKind::ConnectionRefused,
@@ -173,6 +207,37 @@ mod tests {
         .expect_err("refused peers must not be retried");
         assert_eq!(attempts, 1);
         assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+    }
+
+    #[test]
+    fn bounded_connect_succeeds_after_a_transient_would_block() -> io::Result<()> {
+        let would_block = eagain_error()?;
+        let mut attempts = 0;
+        let value = retry_transient_connect(|_| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(io::Error::from(would_block.kind()))
+            } else {
+                Ok(9_u8)
+            }
+        })?;
+        assert_eq!(value, 9);
+        assert_eq!(attempts, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_connect_stops_retrying_would_block_at_the_attempt_cap() -> io::Result<()> {
+        let would_block = eagain_error()?;
+        let mut attempts = 0;
+        let error = retry_transient_connect(|_| {
+            attempts += 1;
+            Err::<u8, io::Error>(io::Error::from(would_block.kind()))
+        })
+        .expect_err("a persistently unavailable connect must surface");
+        assert_eq!(attempts, CONNECT_ATTEMPTS);
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        Ok(())
     }
 
     #[test]
