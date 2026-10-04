@@ -335,6 +335,13 @@ test modules) so the sibling test modules and
 carry the same effective linux-broker visibility as before. Lifecycle,
 refusal/uncertainty and conformance assertions exist only in the test modules;
 no child re-implements them.
+The on-demand broker-peer helper builder keeps its process-wide mutex and
+atomic publication, and also takes an owner-local advisory file lock around the
+currentness re-check and build. Each `rustc` invocation writes intermediates
+and its output into a unique directory before atomic publication, so an
+orphaned compiler cannot collide with a recovering builder. Linux fixture
+tests exercise independent builders, process-lock mutation detection, and
+recovery after a lock owner exits with a live compiler child.
 The synthetic recovery fixture's runtime-v3 integration target keeps the same
 shape. `crates/fault-fixture/tests/runtime.rs` stays the crate root so every
 `#[test]` keeps its discovered name, and it delegates its scaffolding to child
