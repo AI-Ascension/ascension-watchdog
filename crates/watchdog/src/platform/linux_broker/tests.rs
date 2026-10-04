@@ -23,6 +23,184 @@ pub(super) use fixtures::{
     credentials, digest, observation, policy, protected_tempdir, request, transport_policy,
 };
 
+#[cfg(target_os = "linux")]
+#[test]
+fn dead_builder_rustc_isolated_from_recovery_build() {
+    let scratch = tempdir_in(fixtures::target_directory()).expect("builder death scratch");
+    let helper = scratch.path().join("output/broker-peer-fixture");
+    fs::create_dir_all(helper.parent().expect("helper parent")).expect("helper output directory");
+    let owner_marker = scratch.path().join("owner-rustc");
+    let recovery_marker = scratch.path().join("recovery-rustc");
+    let receipt = scratch.path().join("recovery-receipt");
+    let executable = std::env::current_exe().expect("test executable");
+    let mut rustc_children = RustcChildGuard::default();
+    let mut owner = std::process::Command::new(&executable)
+        .arg("independent_helper_builder_process_worker")
+        .arg("--nocapture")
+        .env("ASCENSION_WATCHDOG_HELPER_OUTPUT", &helper)
+        .env(fixtures::HELPER_BUILD_RUSTC_CHILD_MARKER_ENV, &owner_marker)
+        .env(fixtures::HELPER_BUILD_EXIT_AFTER_RUSTC_CHILD_ENV, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn lock-owning helper builder");
+    if !fixtures::build_race_tests::wait_for_helper_build_test_file(&owner_marker) {
+        let _ = owner.kill();
+        let _ = owner.wait();
+        rustc_children.track_outputs_under(&scratch.path().join("output"));
+        panic!("builder did not stop its rustc child");
+    }
+    let (owner_rustc, owner_staging) = fixtures::read_rustc_marker(&owner_marker);
+    let owner_identity =
+        fixtures::rustc_process_identity(owner_rustc).expect("stopped owner rustc");
+    rustc_children.track(owner_rustc, owner_identity.2);
+    assert_eq!(owner_identity.0, 'T');
+    let owner_output = fixtures::build_race_tests::wait_for_helper_builder_children_with_timeout(
+        vec![owner],
+        Duration::from_secs(10),
+    )
+    .pop()
+    .expect("owner process result");
+    assert_eq!(owner_output.status.code(), Some(73));
+
+    let lock_path = fixtures::helper_build_lock_path(&helper);
+    assert!(
+        lock_path.is_file(),
+        "lock file must persist after owner death"
+    );
+    let mut recovery = std::process::Command::new(&executable)
+        .arg("independent_helper_builder_process_worker")
+        .arg("--nocapture")
+        .env("ASCENSION_WATCHDOG_HELPER_OUTPUT", &helper)
+        .env("ASCENSION_WATCHDOG_HELPER_TEST_RECEIPT", &receipt)
+        .env(
+            fixtures::HELPER_BUILD_RUSTC_CHILD_MARKER_ENV,
+            &recovery_marker,
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn recovery helper builder");
+    let recovery_pid = recovery.id();
+    let marker_ready =
+        fixtures::build_race_tests::wait_for_helper_build_test_file(&recovery_marker);
+    if !marker_ready {
+        let _ = recovery.kill();
+        let _ = recovery.wait();
+        rustc_children.track_outputs_under(&scratch.path().join("output"));
+        panic!("stale lock file blocked a recovery builder");
+    }
+    let (recovery_rustc, recovery_staging) = fixtures::read_rustc_marker(&recovery_marker);
+    let recovery_identity =
+        fixtures::rustc_process_identity(recovery_rustc).expect("stopped recovery rustc");
+    rustc_children.track(recovery_rustc, recovery_identity.2);
+    assert_eq!(recovery_identity.0, 'T');
+    assert_eq!(recovery_identity.1, recovery_pid);
+    assert_ne!(owner_staging.parent(), recovery_staging.parent());
+    assert!(owner_staging.starts_with(scratch.path()));
+    assert!(recovery_staging.starts_with(scratch.path()));
+
+    fixtures::signal_rustc_child(owner_rustc, owner_identity.2, "CONT");
+    fixtures::signal_rustc_child(recovery_rustc, recovery_identity.2, "CONT");
+    let recovery_output =
+        fixtures::build_race_tests::wait_for_helper_builder_children_with_timeout(
+            vec![recovery],
+            Duration::from_secs(20),
+        )
+        .pop()
+        .expect("recovery process result");
+    assert!(
+        recovery_output.status.success(),
+        "recovery builder failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&recovery_output.stdout),
+        String::from_utf8_lossy(&recovery_output.stderr)
+    );
+    wait_for_rustc_child_exit(owner_rustc, owner_identity.2, Duration::from_secs(10));
+    rustc_children.forget(owner_rustc);
+    rustc_children.forget(recovery_rustc);
+    assert!(
+        owner_staging.is_file(),
+        "orphan rustc did not finish its private output"
+    );
+    assert!(
+        lock_path.is_file(),
+        "recovery must leave the persistent lock file"
+    );
+    assert!(helper.is_file(), "recovery did not publish its helper");
+    let summary = fs::read_to_string(receipt).expect("recovery validation receipt");
+    assert!(summary.lines().any(|line| line == "exit=2"));
+    assert!(summary.lines().any(|line| line.starts_with("sha256=")));
+    fs::remove_dir_all(owner_staging.parent().expect("orphan staging directory"))
+        .expect("remove completed orphan build directory");
+}
+
+fn wait_for_rustc_child_exit(pid: u32, start_time: u64, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if fixtures::rustc_process_identity(pid)
+            .is_none_or(|identity| identity.2 != start_time || identity.0 == 'Z')
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "orphan rustc did not exit");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[derive(Default)]
+struct RustcChildGuard(Vec<(u32, u64)>);
+
+impl RustcChildGuard {
+    fn track(&mut self, pid: u32, start_time: u64) {
+        self.0.push((pid, start_time));
+    }
+
+    fn forget(&mut self, pid: u32) {
+        self.0.retain(|(child, _)| *child != pid);
+    }
+
+    fn track_outputs_under(&mut self, directory: &Path) {
+        for entry in fs::read_dir("/proc").into_iter().flatten().flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+            else {
+                continue;
+            };
+            let Ok(command) = fs::read_to_string(entry.path().join("cmdline")) else {
+                continue;
+            };
+            let arguments = command.split('\0').collect::<Vec<_>>();
+            if arguments.first().is_none_or(|path| {
+                Path::new(path).file_name() != Some(std::ffi::OsStr::new("rustc"))
+            }) || !arguments
+                .windows(2)
+                .any(|pair| pair[0] == "-o" && Path::new(pair[1]).starts_with(directory))
+            {
+                continue;
+            }
+            if let Some(identity) = fixtures::rustc_process_identity(pid) {
+                self.track(pid, identity.2);
+            }
+        }
+    }
+}
+
+impl Drop for RustcChildGuard {
+    fn drop(&mut self) {
+        for (pid, start_time) in &self.0 {
+            if fixtures::rustc_process_identity(*pid)
+                .is_some_and(|identity| identity.2 == *start_time)
+            {
+                let _ = std::process::Command::new("/bin/kill")
+                    .args(["-KILL".to_owned(), pid.to_string()])
+                    .status();
+            }
+        }
+    }
+}
+
 #[test]
 fn fixed_policy_has_distinct_target_identity_and_no_capabilities() {
     let policy = policy();
@@ -584,14 +762,6 @@ fn stop_confirmation_timeout_retains_active_ownership() {
         .component(BrokerComponent::Synthetic)
         .expect("launch policy")
         .clone();
-    // The request budget is the same deadline `authenticate_peer` hashes the peer's
-    // `/proc/<pid>/exe` under and `handle` launches under, so a 30 ms budget made this
-    // case load-sensitive: on a saturated host the budget could expire before the broker
-    // ever reached `stop`, which is why the failure moved between the launch `expect` and
-    // the `stops == 1` assertion. The subject under test is that a stop whose effect is
-    // not confirmed retains ownership, so give the request a load-robust budget; the
-    // retained unit still forces the confirmation loop to exhaust its deadline and the
-    // broker still reports `Unavailable` with the unit held.
     launch.timeout = Duration::from_secs(2);
     policy = BrokerPolicy::new(
         policy.peer.clone(),
